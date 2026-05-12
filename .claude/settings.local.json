@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_execution_tools.py -v)",
+      "Bash(make test *)"
+    ]
+  }
+}

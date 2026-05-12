@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cerebro - Tool Confirmation</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@400;500;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-high": "#2a2932",
+                        "secondary-fixed-dim": "#c4c6d3",
+                        "outline": "#928ea0",
+                        "surface-container-lowest": "#0e0d15",
+                        "on-secondary": "#2d303b",
+                        "on-background": "#e5e0ed",
+                        "inverse-surface": "#e5e0ed",
+                        "on-error-container": "#ffdad6",
+                        "surface-variant": "#35343d",
+                        "primary-fixed": "#e4deff",
+                        "secondary": "#c4c6d3",
+                        "on-primary-fixed-variant": "#4228bb",
+                        "inverse-on-surface": "#312f38",
+                        "on-surface-variant": "#c9c4d7",
+                        "error-container": "#93000a",
+                        "on-secondary-fixed": "#181b25",
+                        "surface-container-low": "#1c1b23",
+                        "secondary-container": "#444652",
+                        "inverse-primary": "#5a46d3",
+                        "tertiary-fixed-dim": "#ffb86d",
+                        "surface-container-highest": "#35343d",
+                        "secondary-fixed": "#e0e2f0",
+                        "on-tertiary": "#492900",
+                        "primary": "#c7bfff",
+                        "on-tertiary-fixed-variant": "#683c00",
+                        "surface": "#13121b",
+                        "error": "#ffb4ab",
+                        "surface-bright": "#3a3841",
+                        "on-tertiary-fixed": "#2c1600",
+                        "outline-variant": "#474554",
+                        "on-tertiary-container": "#402300",
+                        "tertiary-fixed": "#ffdcbd",
+                        "on-surface": "#e5e0ed",
+                        "surface-dim": "#13121b",
+                        "tertiary": "#ffb86d",
+                        "primary-fixed-dim": "#c7bfff",
+                        "primary-container": "#8e7fff",
+                        "on-error": "#690005",
+                        "on-secondary-fixed-variant": "#444652",
+                        "on-primary": "#2b009e",
+                        "on-primary-fixed": "#180065",
+                        "on-primary-container": "#25008c",
+                        "surface-container": "#201f27",
+                        "on-secondary-container": "#b2b4c2",
+                        "tertiary-container": "#cd7f1a",
+                        "background": "#13121b",
+                        "surface-tint": "#c7bfff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "lg": "16px",
+                        "xl": "24px",
+                        "sm": "8px",
+                        "gutter": "12px",
+                        "container-padding": "16px",
+                        "xs": "4px",
+                        "unit": "4px",
+                        "md": "12px"
+                    },
+                    "fontFamily": {
+                        "h1": ["Inter"],
+                        "h2": ["Inter"],
+                        "code": ["Space Grotesk"],
+                        "body": ["Inter"],
+                        "small-mono": ["Space Grotesk"],
+                        "label-caps": ["Inter"]
+                    },
+                    "fontSize": {
+                        "h1": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "h2": ["16px", {"lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "code": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "body": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "small-mono": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0e0d15;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #242736;
+        }
+    </style>
+</head>
+<body class="bg-[#0f1117] text-on-surface font-body min-h-screen flex items-center justify-center overflow-hidden">
+<!-- MAIN CHAT WINDOW (Underlay) -->
+<div class="relative w-[560px] h-[680px] bg-[#0f1117] border border-outline-variant flex flex-col shadow-2xl">
+<!-- TopAppBar (From JSON) -->
+<header class="bg-surface-container-low dark:bg-surface-container-low border-b border-outline-variant flex justify-between items-center w-full px-md h-[48px] sticky top-0 z-10">
+<div class="flex items-center gap-sm">
+<span class="font-h1 text-h1 font-bold text-on-surface dark:text-on-surface">Cerebro</span>
+</div>
+<div class="flex items-center gap-md">
+<span class="text-on-surface-variant font-body text-body cursor-pointer hover:bg-surface-container-highest transition-colors px-2 py-1 rounded">Model Select</span>
+<div class="flex items-center gap-xs">
+<span class="material-symbols-outlined text-primary dark:text-primary cursor-pointer active:opacity-80 p-1 rounded hover:bg-surface-container-highest transition-colors" data-icon="settings">settings</span>
+<span class="material-symbols-outlined text-primary dark:text-primary cursor-pointer active:opacity-80 p-1 rounded hover:bg-surface-container-highest transition-colors" data-icon="close">close</span>
+</div>
+</div>
+</header>
+<!-- Chat Content Area (Blurred) -->
+<main class="flex-grow overflow-y-auto p-lg space-y-lg">
+<div class="flex flex-col gap-xs">
+<div class="text-label-caps font-label-caps text-outline uppercase">User</div>
+<div class="bg-surface-container border border-outline-variant p-md rounded-lg max-w-[90%] font-body text-body">
+                    Generate a summary of the latest logs and save it to a file called summary.md.
+                </div>
+</div>
+<div class="flex flex-col gap-xs items-end">
+<div class="text-label-caps font-label-caps text-tertiary uppercase">Assistant</div>
+<div class="bg-surface-container-high border border-outline-variant p-md rounded-lg max-w-[90%] font-body text-body">
+                    Processing requirements... I will use the tool `write_file` to create the summary.
+                </div>
+</div>
+</main>
+<!-- Message Input (Bottom) -->
+<div class="p-md border-t border-outline-variant bg-surface-container-low">
+<div class="bg-[#1a1d27] border border-[#242736] p-sm flex items-center gap-sm rounded">
+<span class="material-symbols-outlined text-outline" data-icon="terminal">terminal</span>
+<div class="text-outline font-body text-body">Awaiting confirmation...</div>
+</div>
+</div>
+<!-- Footer (From JSON) -->
+<footer class="bg-surface-container-lowest dark:bg-surface-container-lowest border-t border-outline-variant flex justify-between items-center w-full px-md uppercase tracking-wider h-[28px] shrink-0">
+<span class="text-tertiary dark:text-tertiary font-small-mono text-small-mono">System: Active</span>
+<div class="flex items-center gap-lg">
+<span class="text-on-surface-variant font-small-mono text-small-mono">Ollama: Ready</span>
+<span class="text-on-surface-variant font-small-mono text-small-mono">RAM: 4.2GB</span>
+<span class="text-on-surface-variant font-small-mono text-small-mono">Queries: 12</span>
+</div>
+</footer>
+<!-- BACKDROP OVERLAY -->
+<div class="absolute inset-0 bg-[#000000]/60 backdrop-blur-[4px] z-20 flex items-center justify-center p-xl">
+<!-- MODAL CARD -->
+<div class="w-[380px] bg-[#1a1d27] rounded-[12px] border border-[#242736] p-[28px_24px] shadow-2xl flex flex-col gap-lg">
+<!-- TOP ROW -->
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-[#fbbf24] text-[20px]" data-icon="warning" data-weight="fill" style="font-variation-settings: 'FILL' 1;">warning</span>
+<span class="text-[#e8eaf0] text-[15px] font-semibold">Tool requires your approval</span>
+</div>
+<!-- TOOL INFO BLOCK -->
+<div class="bg-[#0f1117] rounded p-md border border-[#242736] space-y-sm">
+<div class="flex items-baseline justify-between">
+<span class="text-label-caps font-label-caps text-outline uppercase">Tool</span>
+<span class="font-small-mono text-small-mono text-primary">write_file</span>
+</div>
+<div class="flex items-baseline justify-between">
+<span class="text-label-caps font-label-caps text-outline uppercase">Path</span>
+<span class="font-small-mono text-small-mono text-[#e8eaf0]">~/Documents/summary.md</span>
+</div>
+<div class="flex items-baseline justify-between">
+<span class="text-label-caps font-label-caps text-outline uppercase">Action</span>
+<div class="text-right">
+<span class="font-small-mono text-small-mono text-[#e8eaf0]">Create new file</span>
+<span class="font-small-mono text-small-mono text-outline block">(2.3 KB)</span>
+</div>
+</div>
+</div>
+<!-- WARNING TEXT -->
+<p class="text-[#8b8fa8] font-body text-body">
+                    This action will create or modify a file on your filesystem. It cannot be automatically undone.
+                </p>
+<!-- BUTTON ROW -->
+<div class="flex gap-md pt-xs">
+<button class="flex-1 h-10 bg-transparent border border-[#242736] text-[#8b8fa8] font-h2 text-h2 rounded transition-colors hover:bg-surface-container-high active:opacity-80">
+                        Deny
+                    </button>
+<button class="flex-1 h-10 bg-[#7c6af7] text-[#0f1117] font-h2 text-h2 font-bold rounded flex items-center justify-center gap-xs transition-colors hover:brightness-110 active:opacity-80">
+<span class="material-symbols-outlined text-[18px]" data-icon="check">check</span>
+                        Approve
+                    </button>
+</div>
+</div>
+</div>
+</div>
+</body></html>

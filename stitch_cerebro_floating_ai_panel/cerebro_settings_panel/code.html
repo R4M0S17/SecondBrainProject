@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cerebro AI Assistant - Settings</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-surface": "#e5e0ed",
+                        "on-primary-container": "#25008c",
+                        "surface-variant": "#35343d",
+                        "tertiary-fixed-dim": "#ffb86d",
+                        "outline-variant": "#474554",
+                        "secondary-fixed": "#e0e2f0",
+                        "on-primary-fixed": "#180065",
+                        "on-primary-fixed-variant": "#4228bb",
+                        "surface-container-low": "#1c1b23",
+                        "surface-container": "#201f27",
+                        "primary-container": "#8e7fff",
+                        "secondary-container": "#444652",
+                        "secondary": "#c4c6d3",
+                        "on-primary": "#2b009e",
+                        "on-tertiary": "#492900",
+                        "tertiary-fixed": "#ffdcbd",
+                        "tertiary-container": "#cd7f1a",
+                        "on-error": "#690005",
+                        "primary-fixed-dim": "#c7bfff",
+                        "primary": "#c7bfff",
+                        "tertiary": "#ffb86d",
+                        "on-surface-variant": "#c9c4d7",
+                        "surface-tint": "#c7bfff",
+                        "inverse-primary": "#5a46d3",
+                        "on-secondary-container": "#b2b4c2",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-lowest": "#0e0d15",
+                        "on-secondary": "#2d303b",
+                        "on-secondary-fixed-variant": "#444652",
+                        "surface": "#13121b",
+                        "background": "#13121b",
+                        "on-tertiary-fixed": "#2c1600",
+                        "error": "#ffb4ab",
+                        "on-tertiary-container": "#402300",
+                        "secondary-fixed-dim": "#c4c6d3",
+                        "surface-bright": "#3a3841",
+                        "primary-fixed": "#e4deff",
+                        "on-tertiary-fixed-variant": "#683c00",
+                        "surface-dim": "#13121b",
+                        "surface-container-high": "#2a2932",
+                        "inverse-surface": "#e5e0ed",
+                        "on-secondary-fixed": "#181b25",
+                        "on-background": "#e5e0ed",
+                        "surface-container-highest": "#35343d",
+                        "inverse-on-surface": "#312f38",
+                        "error-container": "#93000a",
+                        "outline": "#928ea0"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "xl": "24px",
+                        "md": "12px",
+                        "lg": "16px",
+                        "xs": "4px",
+                        "unit": "4px",
+                        "sm": "8px",
+                        "gutter": "12px",
+                        "container-padding": "16px"
+                    },
+                    "fontFamily": {
+                        "small-mono": ["Space Grotesk"],
+                        "h2": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "body": ["Inter"],
+                        "h1": ["Inter"],
+                        "code": ["Space Grotesk"]
+                    },
+                    "fontSize": {
+                        "small-mono": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "h2": ["16px", {"lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "body": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "h1": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "code": ["13px", {"lineHeight": "18px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            font-size: 18px;
+        }
+        body {
+            background-color: #0f1117;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #13121b;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #35343d;
+        }
+    </style>
+</head>
+<body class="font-body text-on-surface">
+<!-- Main Container (560x680px) -->
+<div class="relative w-[560px] h-[680px] bg-background overflow-hidden flex shadow-2xl border border-outline-variant">
+<!-- Left Side: Previous Chat Interface (Dimmed/Blurred) -->
+<div class="w-[240px] h-full relative opacity-40 blur-[2px] pointer-events-none select-none overflow-hidden">
+<!-- Header Placeholder -->
+<div class="h-[48px] bg-surface-container-low border-b border-outline-variant flex items-center px-md justify-between">
+<span class="font-h2 text-h2 text-primary">Cerebro</span>
+<span class="material-symbols-outlined text-on-surface-variant">settings</span>
+</div>
+<!-- Chat Content Placeholder -->
+<div class="p-md space-y-lg">
+<div class="flex gap-sm">
+<div class="w-6 h-6 bg-primary-container rounded-sm"></div>
+<div class="flex-1 space-y-xs">
+<div class="h-3 bg-surface-container-highest w-3/4 rounded-sm"></div>
+<div class="h-3 bg-surface-container-highest w-1/2 rounded-sm"></div>
+</div>
+</div>
+<div class="flex gap-sm justify-end">
+<div class="bg-secondary-container p-sm rounded-sm max-w-[80%]">
+<div class="h-3 bg-on-secondary-container w-20 rounded-sm"></div>
+</div>
+</div>
+<div class="flex gap-sm">
+<div class="w-6 h-6 bg-primary-container rounded-sm"></div>
+<div class="flex-1 space-y-xs">
+<div class="h-3 bg-surface-container-highest w-full rounded-sm"></div>
+<div class="h-3 bg-surface-container-highest w-[90%] rounded-sm"></div>
+<div class="h-3 bg-surface-container-highest w-[40%] rounded-sm"></div>
+</div>
+</div>
+</div>
+<!-- Semi-transparent Dark Overlay -->
+<div class="absolute inset-0 bg-[#00000080]"></div>
+</div>
+<!-- Right Side: Settings Slide-over Panel (320px) -->
+<div class="w-[320px] h-full bg-[#1a1d27] border-l border-[#242736] flex flex-col z-10">
+<!-- Settings Header -->
+<header class="h-[48px] flex items-center justify-between px-lg bg-[#1a1d27] border-b border-[#242736] flex-shrink-0">
+<h2 class="text-[15px] font-semibold text-on-surface">Settings</h2>
+<button class="hover:bg-surface-container-highest p-1 rounded-sm transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-on-surface-variant" data-icon="close">close</span>
+</button>
+</header>
+<!-- Settings Content -->
+<div class="flex-1 overflow-y-auto p-lg space-y-[24px] custom-scrollbar">
+<!-- Section 1: Watched Folders -->
+<section>
+<label class="font-label-caps text-label-caps text-[#8b8fa8] mb-sm block">WATCHED FOLDERS</label>
+<div class="space-y-xs">
+<div class="flex items-center justify-between bg-[#242736] p-sm rounded-[6px] group">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-outline" data-icon="folder">folder</span>
+<span class="font-code text-code text-on-surface">~/Documents</span>
+</div>
+<button class="text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+<div class="flex items-center justify-between bg-[#242736] p-sm rounded-[6px] group">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-outline" data-icon="folder">folder</span>
+<span class="font-code text-code text-on-surface">~/Projects/thesis</span>
+</div>
+<button class="text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+</div>
+<button class="w-full mt-sm py-sm border border-dashed border-[#242736] rounded-[6px] text-small-mono text-[#8b8fa8] hover:bg-surface-container-highest transition-colors flex items-center justify-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="add">add</span>
+                        Add Folder
+                    </button>
+</section>
+<!-- Section 2: Model -->
+<section>
+<label class="font-label-caps text-label-caps text-[#8b8fa8] mb-sm block">MODEL</label>
+<div class="space-y-xs">
+<!-- Active Row -->
+<div class="flex items-center justify-between bg-[#242736] p-sm rounded-[6px] border-l-2 border-[#7c6af7]">
+<div class="flex items-center gap-sm">
+<div class="w-3.5 h-3.5 rounded-full border-2 border-[#7c6af7] flex items-center justify-center">
+<div class="w-1.5 h-1.5 bg-[#7c6af7] rounded-full"></div>
+</div>
+<div class="flex flex-col">
+<span class="font-h2 text-[13px] leading-none mb-0.5">phi3:mini</span>
+<span class="font-small-mono text-[10px] text-[#4ade80]">Ollama · available</span>
+</div>
+</div>
+<span class="bg-[#1a1d27] px-1.5 py-0.5 rounded-sm font-small-mono text-[10px] text-on-surface-variant">~3.8 GB RAM</span>
+</div>
+<!-- Inactive Row -->
+<div class="flex items-center justify-between p-sm rounded-[6px] hover:bg-[#242736] transition-colors cursor-pointer group">
+<div class="flex items-center gap-sm">
+<div class="w-3.5 h-3.5 rounded-full border-2 border-outline-variant"></div>
+<div class="flex flex-col">
+<span class="font-h2 text-[13px] leading-none mb-0.5">qwen2:1.5b</span>
+<span class="font-small-mono text-[10px] text-on-surface-variant">Not pulled</span>
+</div>
+</div>
+</div>
+</div>
+<div class="mt-md flex items-center gap-sm px-sm py-xs bg-surface-container-lowest border border-outline-variant rounded-sm">
+<span class="material-symbols-outlined text-outline text-[14px]" data-icon="lock" data-weight="fill" style="font-variation-settings: 'FILL' 1;">lock</span>
+<span class="font-small-mono text-[11px] text-[#8b8fa8]">Embedding: nomic-embed-text (fixed)</span>
+</div>
+</section>
+<!-- Section 3: Tool Permissions -->
+<section>
+<label class="font-label-caps text-label-caps text-[#8b8fa8] mb-sm block">TOOL PERMISSIONS</label>
+<div class="space-y-xs">
+<div class="h-[44px] flex items-center justify-between px-sm rounded-sm hover:bg-surface-container-low transition-colors">
+<span class="font-body text-on-surface">Execute Python</span>
+<div class="w-8 h-4 bg-[#7c6af7] rounded-full relative cursor-pointer">
+<div class="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full"></div>
+</div>
+</div>
+<div class="h-[44px] flex items-center justify-between px-sm rounded-sm hover:bg-surface-container-low transition-colors">
+<span class="font-body text-on-surface">Write File</span>
+<div class="w-8 h-4 bg-[#7c6af7] rounded-full relative cursor-pointer">
+<div class="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full"></div>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 4: Notifications -->
+<section>
+<label class="font-label-caps text-label-caps text-[#8b8fa8] mb-sm block">NOTIFICATIONS</label>
+<div class="h-[44px] flex items-center justify-between px-sm rounded-sm bg-[#242736]">
+<span class="font-body text-on-surface">Do Not Disturb</span>
+<div class="w-8 h-4 bg-[#13121b] rounded-full relative cursor-pointer">
+<div class="absolute left-0.5 top-0.5 w-3 h-3 bg-outline rounded-full"></div>
+</div>
+</div>
+</section>
+</div>
+<!-- Status Bar (Fixed at bottom) -->
+<footer class="h-[28px] bg-[#1a1d27] border-t border-[#242736] flex items-center justify-between px-md flex-shrink-0">
+<div class="flex items-center gap-lg">
+<div class="flex items-center gap-xs">
+<div class="w-1.5 h-1.5 bg-[#4ade80] rounded-full"></div>
+<span class="font-small-mono text-[10px] uppercase tracking-wider text-[#4ade80]">Ollama OK</span>
+</div>
+<span class="font-small-mono text-[10px] uppercase tracking-wider text-tertiary">phi3:mini</span>
+<span class="font-small-mono text-[10px] uppercase tracking-wider text-on-surface-variant">142 files</span>
+</div>
+<div class="flex items-center gap-lg text-[#8b8fa8]">
+<span class="font-small-mono text-[10px] uppercase tracking-wider">RAM 3.8 / 8 GB</span>
+<span class="font-small-mono text-[10px] uppercase tracking-wider">p95 8.4s</span>
+<span class="font-small-mono text-[10px] uppercase tracking-wider">47 queries</span>
+</div>
+</footer>
+</div>
+</div>
+</body></html>

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cerebro AI Panel</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "background": "#13121b",
+                        "inverse-primary": "#5a46d3",
+                        "on-secondary-fixed": "#181b25",
+                        "on-tertiary-fixed-variant": "#683c00",
+                        "secondary": "#c4c6d3",
+                        "outline": "#928ea0",
+                        "on-primary-container": "#25008c",
+                        "tertiary-container": "#cd7f1a",
+                        "inverse-surface": "#e5e0ed",
+                        "on-background": "#e5e0ed",
+                        "on-primary-fixed-variant": "#4228bb",
+                        "surface-dim": "#13121b",
+                        "on-error-container": "#ffdad6",
+                        "secondary-fixed": "#e0e2f0",
+                        "primary": "#c7bfff",
+                        "on-secondary-fixed-variant": "#444652",
+                        "on-primary": "#2b009e",
+                        "on-secondary": "#2d303b",
+                        "primary-fixed-dim": "#c7bfff",
+                        "inverse-on-surface": "#312f38",
+                        "outline-variant": "#474554",
+                        "secondary-fixed-dim": "#c4c6d3",
+                        "on-surface-variant": "#c9c4d7",
+                        "surface-container-highest": "#35343d",
+                        "tertiary": "#ffb86d",
+                        "on-surface": "#e5e0ed",
+                        "surface-bright": "#3a3841",
+                        "tertiary-fixed": "#ffdcbd",
+                        "on-tertiary-fixed": "#2c1600",
+                        "surface-container-high": "#2a2932",
+                        "on-secondary-container": "#b2b4c2",
+                        "surface-container": "#201f27",
+                        "on-primary-fixed": "#180065",
+                        "error": "#ffb4ab",
+                        "secondary-container": "#444652",
+                        "primary-container": "#8e7fff",
+                        "surface-tint": "#c7bfff",
+                        "primary-fixed": "#e4deff",
+                        "on-tertiary-container": "#402300",
+                        "surface": "#13121b",
+                        "tertiary-fixed-dim": "#ffb86d",
+                        "on-error": "#690005",
+                        "surface-container-lowest": "#0e0d15",
+                        "error-container": "#93000a",
+                        "surface-variant": "#35343d",
+                        "surface-container-low": "#1c1b23",
+                        "on-tertiary": "#492900"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "container-padding": "16px",
+                        "xs": "4px",
+                        "unit": "4px",
+                        "md": "12px",
+                        "xl": "24px",
+                        "sm": "8px",
+                        "lg": "16px",
+                        "gutter": "12px"
+                    },
+                    "fontFamily": {
+                        "label-caps": ["Inter"],
+                        "h2": ["Inter"],
+                        "code": ["Space Grotesk"],
+                        "h1": ["Inter"],
+                        "small-mono": ["Space Grotesk"],
+                        "body": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-caps": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "h2": ["16px", {"lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "code": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "h1": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "small-mono": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "body": ["14px", {"lineHeight": "20px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #242736; border-radius: 2px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #474554; }
+        .typing-dot { animation: bounce 1.4s infinite ease-in-out both; }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+    </style>
+</head>
+<body class="bg-surface-container-lowest text-on-surface font-body selection:bg-primary-container selection:text-on-primary-container overflow-hidden">
+<!-- Desktop Panel Wrapper -->
+<div class="w-[560px] h-[680px] flex flex-col bg-background border border-outline-variant shadow-2xl overflow-hidden">
+<!-- TOP APP BAR (Shared Component Context) -->
+<header class="flex justify-between items-center w-full px-md bg-surface-container-low border-b border-outline-variant h-[48px] shrink-0">
+<div class="flex items-center gap-sm">
+<div class="flex items-center gap-xs cursor-pointer hover:bg-surface-container-highest transition-colors px-xs py-[2px] rounded">
+<span class="material-symbols-outlined text-primary text-[18px]">smart_toy</span>
+<span class="font-h2 text-[13px] text-[#e8eaf0]">General</span>
+<span class="material-symbols-outlined text-on-surface-variant text-[16px]">expand_more</span>
+</div>
+<div class="bg-secondary-container text-on-surface-variant font-label-caps text-[11px] px-sm py-[1px] rounded-full flex items-center gap-xs">
+                    phi3:mini · ollama
+                </div>
+</div>
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:bg-surface-container-highest p-xs rounded text-[20px]">settings</span>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:bg-surface-container-highest p-xs rounded text-[20px]">close</span>
+</div>
+</header>
+<!-- MAIN CONVERSATION CANVAS -->
+<main class="flex-1 overflow-y-auto custom-scrollbar p-lg space-y-xl bg-surface-container-lowest">
+<!-- User Message 1 -->
+<div class="flex justify-end">
+<div class="bg-secondary-container text-[#e8eaf0] px-lg py-sm rounded-full max-w-[85%] text-body">
+                    Summarize my thesis notes on graph theory
+                </div>
+</div>
+<!-- Assistant Message 1 -->
+<div class="space-y-md">
+<div class="flex items-start gap-md">
+<div class="flex-1 space-y-sm">
+<p class="text-body text-on-surface leading-relaxed">
+                            Based on your thesis repository, I've synthesized the core findings on spectral graph theory and laplacian dynamics. Your notes focus heavily on the relationship between node connectivity and eigenvalue distribution.
+                        </p>
+<!-- Metadata & Badges -->
+<div class="flex items-center gap-sm mt-md">
+<span class="font-small-mono text-on-surface-variant opacity-60">phi3:mini · 3.8s</span>
+<div class="flex gap-xs">
+<span class="bg-surface-container text-on-surface-variant font-label-caps px-sm py-[2px] border border-outline-variant rounded-sm text-[10px]">2 SOURCES</span>
+<span class="bg-surface-container text-on-surface-variant font-label-caps px-sm py-[2px] border border-outline-variant rounded-sm text-[10px]">1 TOOL</span>
+<span class="bg-surface-container text-on-surface-variant font-label-caps px-sm py-[2px] border border-outline-variant rounded-sm text-[10px]">3 MEMORY</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Sources Panel -->
+<div class="bg-surface-container-low border-l-2 border-inverse-primary p-md space-y-sm">
+<div class="flex items-center justify-between">
+<span class="font-label-caps text-on-surface-variant">SOURCES</span>
+<span class="material-symbols-outlined text-on-surface-variant text-[14px]">unfold_less</span>
+</div>
+<div class="space-y-xs">
+<div class="flex items-center justify-between group cursor-pointer">
+<span class="font-small-mono text-[11px] text-primary">/docs/thesis/spectral_analysis.md</span>
+<div class="flex items-center gap-sm">
+<div class="w-16 h-[2px] bg-outline-variant overflow-hidden">
+<div class="h-full bg-primary" style="width: 91%"></div>
+</div>
+<span class="font-small-mono text-[10px] text-on-surface-variant">0.91</span>
+</div>
+</div>
+<div class="flex items-center justify-between group cursor-pointer">
+<span class="font-small-mono text-[11px] text-on-surface-variant">/notes/graph_theory_v2.txt</span>
+<div class="flex items-center gap-sm">
+<div class="w-16 h-[2px] bg-outline-variant overflow-hidden">
+<div class="h-full bg-primary opacity-60" style="width: 84%"></div>
+</div>
+<span class="font-small-mono text-[10px] text-on-surface-variant">0.84</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- User Message 2 -->
+<div class="flex justify-end">
+<div class="bg-secondary-container text-[#e8eaf0] px-lg py-sm rounded-full max-w-[85%] text-body">
+                    What tools did it use to answer that?
+                </div>
+</div>
+<!-- Assistant Message 2 -->
+<div class="space-y-md">
+<div class="flex-1 space-y-sm">
+<p class="text-body text-on-surface">
+                        I used the <code class="font-code text-primary bg-surface-container px-xs rounded">search_documents</code> tool to find relevant context in your local directory and <code class="font-code text-primary bg-surface-container px-xs rounded">read_file</code> to extract content from the most high-scoring matches.
+                    </p>
+</div>
+<!-- Tools Panel -->
+<div class="bg-surface-container-low border border-outline-variant rounded-sm overflow-hidden">
+<div class="bg-surface-container-highest px-md py-xs border-b border-outline-variant flex items-center justify-between">
+<span class="font-label-caps text-on-surface-variant text-[10px]">TOOLS CALLED</span>
+<span class="material-symbols-outlined text-on-surface-variant text-[14px]">expand_less</span>
+</div>
+<div class="p-xs space-y-[1px]">
+<div class="flex items-center justify-between px-sm py-sm bg-surface-container-low hover:bg-surface-container transition-colors">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-[#4ade80] text-[16px]">check_circle</span>
+<span class="font-small-mono text-on-surface">search_documents</span>
+</div>
+<span class="font-small-mono text-[10px] text-on-surface-variant opacity-60">2.1s</span>
+</div>
+<div class="flex items-center justify-between px-sm py-sm bg-surface-container-low hover:bg-surface-container transition-colors">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-[#4ade80] text-[16px]">check_circle</span>
+<span class="font-small-mono text-on-surface">read_file</span>
+</div>
+<span class="font-small-mono text-[10px] text-on-surface-variant opacity-60">0.8s</span>
+</div>
+</div>
+</div>
+</div>
+<!-- User Message 3 -->
+<div class="flex justify-end">
+<div class="bg-secondary-container text-[#e8eaf0] px-lg py-sm rounded-full max-w-[85%] text-body">
+                    Create a summary note...
+                </div>
+</div>
+<!-- Assistant Message 3 (Thinking) -->
+<div class="flex flex-col gap-sm">
+<div class="flex items-center gap-md">
+<div class="flex items-center gap-[2px]">
+<div class="w-[4px] h-[4px] bg-[#7c6af7] rounded-full typing-dot"></div>
+<div class="w-[4px] h-[4px] bg-[#7c6af7] rounded-full typing-dot"></div>
+<div class="w-[4px] h-[4px] bg-[#7c6af7] rounded-full typing-dot"></div>
+</div>
+<span class="italic text-on-surface-variant text-body">Thinking with phi3:mini...</span>
+</div>
+</div>
+</main>
+<!-- INPUT AREA -->
+<div class="bg-surface-container-low border-t border-outline-variant p-md shrink-0">
+<div class="relative flex items-end gap-sm bg-surface-container border border-outline-variant rounded p-xs focus-within:border-primary transition-colors">
+<textarea class="flex-1 bg-transparent border-none focus:ring-0 text-body text-on-surface resize-none h-[44px] custom-scrollbar py-sm px-sm" placeholder="Ask anything..."></textarea>
+<button class="w-[44px] h-[44px] bg-[#7c6af7] hover:bg-inverse-primary text-background rounded flex items-center justify-center transition-colors active:opacity-80">
+<span class="material-symbols-outlined text-[24px]">arrow_upward</span>
+</button>
+</div>
+</div>
+<!-- FOOTER / STATUS BAR -->
+<footer class="flex justify-between items-center w-full px-md bg-surface-container-low border-t border-outline-variant h-[28px] shrink-0 font-small-mono text-[10px] text-on-surface-variant uppercase tracking-wider">
+<div class="flex items-center gap-md">
+<div class="flex items-center gap-xs">
+<div class="w-[6px] h-[6px] rounded-full bg-[#4ade80]"></div>
+<span>Ollama OK</span>
+</div>
+<span class="opacity-20">•</span>
+<span>phi3:mini</span>
+<span class="opacity-20">•</span>
+<span class="underline decoration-outline-variant underline-offset-2">142 files</span>
+</div>
+<div class="flex items-center gap-md">
+<span>RAM 3.8 / 8 GB</span>
+<span class="opacity-20">•</span>
+<span>p95 8.4s</span>
+<span class="opacity-20">•</span>
+<span>47 queries</span>
+</div>
+</footer>
+</div>
+</body></html>
