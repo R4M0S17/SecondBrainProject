@@ -1,2 +1,0 @@
-# SecondBrainProject
-experiment
