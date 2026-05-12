@@ -158,6 +158,11 @@ class StatusResponse(BaseModel):
     provider_fallbacks: int
     specialist_role: str | None = None
     specialist_loaded: bool = False
+    current_model_id: str | None = None
+    current_model_quant: str | None = None
+    current_model_params_b: float | None = None
+    hardware_snapshot: dict[str, Any] | None = None
+    selection_rationale: str | None = None
 
 
 class WizardStatusResponse(BaseModel):
@@ -165,6 +170,14 @@ class WizardStatusResponse(BaseModel):
     engine_running: bool
     model_pulled: bool
     folders_configured: bool
+
+
+class EmbeddingCacheStatsResponse(BaseModel):
+    hits: int
+    misses: int
+    hit_rate_percent: float
+    size: int
+    max_size: int
 
 
 class SetFoldersRequest(BaseModel):
@@ -182,6 +195,10 @@ class AppState:
         self.vector_store: Any = None  # VectorStore | None
         self.provider_registry: Any = None  # ProviderRegistry | None
         self.model_manager: Any = None  # ModelManager | None
+        self.planner: Any = None  # TaskPlanner | None
+        self.enricher: Any = None  # ContextEnricher | None
+        self.embedding_provider: Any = None  # CachedEmbeddingProvider | None
+        self.fleet_orchestrator: Any = None  # FleetOrchestrator | None
         self.router: SpecializedAgentRouter = SpecializedAgentRouter()
         self.active_agent_id: str = GENERAL_AGENT_ID
         self.metrics: MetricsCollector = MetricsCollector()
@@ -588,6 +605,94 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@api.post("/query/plan")
+async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
+    """Execute a complex multi-step query using task decomposition.
+
+    For complex queries, decomposes the task into steps and executes each
+    sequentially, streaming progress. Falls back to regular run() for simple queries.
+    """
+    if app_state.runtime is None or app_state.planner is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Runtime or planner not initialized.",
+        )
+
+    if req.agent == "auto":
+        route = await app_state.router.route_with_llm(req.question)
+        agent_id = route.agent_id
+        query_text = route.query
+    else:
+        agent_id = req.agent
+        query_text = req.question
+
+    app_state.active_agent_id = agent_id
+    app_state.metrics.set_active_agent(agent_id)
+
+    plan_conv_id = req.conversation_id
+    if plan_conv_id is None or app_state.conv_store.get(plan_conv_id) is None:
+        plan_conv_id = app_state.conv_store.create(agent_id)
+
+    start = time.perf_counter()
+
+    async def event_generator_plan():
+        """Decompose query, execute plan sequentially, stream step progress."""
+        try:
+            # Check if task is complex; if not, fall back to single-step run()
+            is_complex = app_state.planner.is_complex_task(query_text)
+            if not is_complex:
+                answer, final_state = await app_state.runtime.run(query_text, agent_id)
+                yield f"data: {json.dumps({'step': 0, 'description': query_text[:100], 'total': 1})}\n\n"
+                words = answer.split(" ")
+                for i, word in enumerate(words):
+                    token = word + (" " if i < len(words) - 1 else "")
+                    yield f"data: {json.dumps({'step': 0, 'token': token})}\n\n"
+            else:
+                # Decompose into steps
+                steps = await app_state.planner.decompose(query_text)
+                total_steps = len(steps)
+
+                # Execute each step sequentially
+                for step_idx, step_text in enumerate(steps):
+                    yield f"data: {json.dumps({'step': step_idx, 'description': step_text[:100], 'total': total_steps})}\n\n"
+
+                    answer, final_state = await app_state.runtime.run(step_text, agent_id)
+
+                    # Stream tokens for this step's answer
+                    words = answer.split(" ")
+                    for i, word in enumerate(words):
+                        token = word + (" " if i < len(words) - 1 else "")
+                        yield f"data: {json.dumps({'step': step_idx, 'token': token})}\n\n"
+
+            # Emit final metadata
+            total_latency_ms = (time.perf_counter() - start) * 1000
+            model_name = "unknown"
+            provider_name = "unknown"
+            warnings: list[str] = []
+
+            try:
+                if app_state.provider_registry is not None:
+                    chat = app_state.provider_registry.get_chat()
+                    model_name = chat.model_id()
+                    provider_name = app_state.provider_registry.primary_name
+            except Exception:
+                warnings.append("provider_fallback")
+
+            meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
+            app_state.metrics.record_query(meta)
+            meta_model = _meta_to_model(meta)
+
+            yield f"data: {json.dumps({'plan_complete': True, 'metadata': meta_model.model_dump(), 'conversation_id': plan_conv_id})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        except Exception as exc:
+            logger.exception("Error in /query/plan")
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator_plan(), media_type="text/event-stream")
+
+
 @api.post("/tool-confirm", response_model=QueryResponse)
 async def tool_confirm_endpoint(req: ToolConfirmRequest) -> QueryResponse:
     """Resume a paused agent run by approving or denying its pending tool call."""
@@ -735,6 +840,31 @@ async def status_endpoint() -> StatusResponse:
         specialist_role = s["role"]
         specialist_loaded = s["loaded"]
 
+    current_model_id = None
+    current_model_quant = None
+    current_model_params_b = None
+    hardware_snapshot = None
+    selection_rationale = None
+    if app_state.fleet_orchestrator is not None:
+        sel = app_state.fleet_orchestrator.current_selection
+        if sel is not None:
+            current_model_id = sel.model.id
+            current_model_quant = sel.model.quant
+            current_model_params_b = sel.model.params_b
+            selection_rationale = sel.rationale
+            if app_state.fleet_orchestrator._hw_snapshot is not None:
+                hw = app_state.fleet_orchestrator._hw_snapshot
+                hardware_snapshot = {
+                    "ram_total_gb": round(hw.ram_total_gb, 2),
+                    "ram_available_gb": round(hw.ram_available_gb, 2),
+                    "cpu_count": hw.cpu_count,
+                    "cpu_percent": hw.cpu_percent,
+                    "gpu_backend": hw.gpu_backend,
+                    "gpu_vram_total_gb": round(hw.gpu_vram_total_gb, 2),
+                    "gpu_vram_available_gb": round(hw.gpu_vram_available_gb, 2),
+                    "unified_memory": hw.unified_memory,
+                }
+
     return StatusResponse(
         indexed_files=indexed_files,
         engine_ok=engine_ok,
@@ -751,7 +881,28 @@ async def status_endpoint() -> StatusResponse:
         provider_fallbacks=stats.provider_fallbacks,
         specialist_role=specialist_role,
         specialist_loaded=specialist_loaded,
+        current_model_id=current_model_id,
+        current_model_quant=current_model_quant,
+        current_model_params_b=current_model_params_b,
+        hardware_snapshot=hardware_snapshot,
+        selection_rationale=selection_rationale,
     )
+
+
+@api.get("/cache/embedding-stats", response_model=EmbeddingCacheStatsResponse)
+async def embedding_cache_stats() -> EmbeddingCacheStatsResponse:
+    if app_state.embedding_provider is None:
+        return EmbeddingCacheStatsResponse(
+            hits=0, misses=0, hit_rate_percent=0.0, size=0, max_size=0
+        )
+    try:
+        stats = app_state.embedding_provider.get_cache_stats()
+        return EmbeddingCacheStatsResponse(**stats)
+    except Exception as e:
+        logger.warning("Failed to get embedding cache stats: {}", e)
+        return EmbeddingCacheStatsResponse(
+            hits=0, misses=0, hit_rate_percent=0.0, size=0, max_size=0
+        )
 
 
 @api.get("/conversations", response_model=list[ConversationSummary])

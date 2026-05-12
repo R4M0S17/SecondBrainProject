@@ -26,7 +26,7 @@ class ShortTermMemory:
 
 
 class ShortTermStore:
-    def __init__(self, max_messages: int = 30) -> None:
+    def __init__(self, max_messages: int = 35) -> None:
         self._max_messages = max_messages
         self._messages: list[Message] = []
         self._tool_results: list[ToolResult] = []

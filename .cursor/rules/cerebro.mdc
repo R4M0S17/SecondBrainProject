@@ -1,0 +1,72 @@
+---
+description: Cerebro project architecture, conventions, and dev commands
+alwaysApply: true
+---
+
+# Cerebro — Agentic Personal OS
+
+Local AI desktop app. Python backend (FastAPI) + React/Tauri frontend communicating over HTTP on **port 7842**.
+
+## Entry Point
+`main.py` wires inference providers, memory stores, and agent runtime → injects into `app_state` in `ui/tray/server.py` → starts Uvicorn.
+
+## Backend (`cerebro/core/`)
+| Directory | Purpose |
+|---|---|
+| `agents/` | LangGraph agent execution; `llm_router.py` classifies query → picks general/academic/code agent |
+| `inference/` | `registry.py` holds primary+fallback providers; `model_manager.py` manages llama.cpp subprocesses |
+| `inference/providers/` | `llamacpp_provider.py`, `mlx_provider.py` |
+| `memory/` | `short_term.py` (in-session), `long_term.py` (LanceDB vector), `context_builder.py` |
+| `tools/` | Agent tools (calendar, filesystem, search, shell); `policy.py` controls which need confirmation |
+| `pipeline/stages/` | Per-request stages: intent → context → prompt → policy → audit |
+| `rag/` | `query_engine.py` — vector similarity search |
+| `ingestion/` | PDF/DOCX → chunk → embed → LanceDB |
+| `watcher/` | Watchdog FS monitor → triggers re-index |
+| `scheduler/` | APScheduler proactive tasks |
+
+## REST API (`ui/tray/server.py`) — all routes under `/api`
+- `POST /api/query` — sync query
+- `POST /api/query/stream` — SSE streaming (tokens → metadata → `[DONE]`)
+- `POST /api/tool-confirm` — approve/deny pending tool call
+- `POST /api/index` / `GET /api/index/status` — async indexing
+- `GET /api/status` — RAM, latency, model, provider
+- `GET/PATCH /api/config` — persistent config
+- `GET /api/conversations[/{id}]` — conversation history
+- `GET /api/models` — available GGUF + MLX models
+- `GET/POST /api/wizard/*` — first-launch onboarding
+
+**Tool confirmation flow**: agent pauses → returns `metadata.pending_tool` → frontend shows `ConfirmModal` → user sends decision to `POST /api/tool-confirm`.
+
+## Frontend (`ui/tray/src/`)
+React 18 + TypeScript + Zustand + Tauri.
+- `api/client.ts` — all fetch calls to backend
+- `api/types.ts` — TS types mirroring backend Pydantic models
+- `stores/` — `chat.ts`, `history.ts`, `settings.ts`, `system.ts`, `wizard.ts`
+- `components/chat/` — ChatWindow, InputArea, MessageBubble, HistoryPanel, ConfirmModal
+- `components/settings/` — SettingsPanel, ModelSelector, FolderManager
+- `components/status/` — StatusBar, RamGauge, LatencyBadge
+- `layouts/` — MainLayout.tsx, Header.tsx
+
+## Dev Commands
+```bash
+make run          # start backend on :7842
+make test         # pytest (all mocked, no live service needed)
+make lint         # black + ruff + mypy
+make engine       # start llama.cpp server on :8080
+cd ui/tray && npm run dev    # frontend dev server (Vite + Tauri)
+```
+
+## Code Style
+- Python: Black 100ch, py3.11; Ruff rules E,F,I,UP; Mypy `warn_return_any=true`
+- Tests: one file per module in `tests/`; mock via `AppState` injection; `asyncio_mode = auto`
+- Frontend: TypeScript strict; Zustand for state; no inline styles
+
+## Key Env Vars
+```
+CEREBRO_PORT=7842
+CEREBRO_INFERENCE_BACKEND=llamacpp   # or mlx
+CEREBRO_LLAMACPP_URL=http://127.0.0.1:8080
+CEREBRO_LLAMACPP_SIMPLE=false        # true = single server mode
+CEREBRO_DB=~/.cerebro/db
+CEREBRO_STATE=~/.cerebro/state
+```

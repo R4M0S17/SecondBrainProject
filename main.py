@@ -10,10 +10,13 @@ import os
 
 import uvicorn
 
+from core.agents.context_enricher import ContextEnricher
 from core.agents.llm_router import LLMRouter
+from core.agents.planner import TaskPlanner
 from core.agents.runtime import AgentRuntime
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
 from core.agents.state_store import AgentStateStore
+from core.cache.embedding_cache import CachedEmbeddingProvider, EmbeddingCache
 from core.inference.model_manager import ModelManager
 from core.inference.platform import mlx_available
 from core.inference.providers.llamacpp_embedding_provider import LlamaCppEmbeddingProvider
@@ -51,10 +54,21 @@ AUTHORIZED_READ_PATHS = [
     CEREBRO_FILES_PATH,
 ]
 AUTHORIZED_WRITE_PATHS = [CEREBRO_FILES_PATH]
+PROACTIVE_CONTEXT = os.getenv("CEREBRO_PROACTIVE_CONTEXT", "true").lower() == "true"
 
 
 def _build_app_state() -> None:
     from loguru import logger
+
+    from core.inference.fleet.orchestrator import FleetOrchestrator
+
+    # Fleet orchestration for intelligent startup model selection
+    fleet = FleetOrchestrator()
+    fleet_selection = fleet.select_on_startup()
+    app_state.fleet_orchestrator = fleet
+
+    if fleet_selection:
+        logger.info("Fleet: {}", fleet_selection.rationale)
 
     registry = ProviderRegistry(
         ram_threshold_primary_gb=RAM_PRIMARY_GB,
@@ -67,7 +81,8 @@ def _build_app_state() -> None:
 
     if INFERENCE_BACKEND == "llamacpp":
         if LLAMACPP_SIMPLE:
-            embed = LlamaCppEmbeddingProvider(base_url=LLAMACPP_EMBED_URL)
+            embed_base = LlamaCppEmbeddingProvider(base_url=LLAMACPP_EMBED_URL)
+            embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
             llamacpp_chat = LlamaCppChatProvider(
                 model=LLAMACPP_MODEL,
                 base_url=LLAMACPP_URL,
@@ -92,7 +107,8 @@ def _build_app_state() -> None:
             llm_router = LLMRouter()
             app_state.model_manager = model_manager
 
-            embed = LlamaCppEmbeddingProvider(base_url=model_manager.embed_url)
+            embed_base = LlamaCppEmbeddingProvider(base_url=model_manager.embed_url)
+            embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
             llamacpp_chat = LlamaCppChatProvider(
                 model=LLAMACPP_MODEL,
                 base_url=model_manager.specialist_url,
@@ -128,7 +144,8 @@ def _build_app_state() -> None:
             )
         from core.inference.providers.mlx_provider import MlxChatProvider, MlxEmbeddingProviderStub
 
-        embed = LlamaCppEmbeddingProvider(base_url=LLAMACPP_EMBED_URL)
+        embed_base = LlamaCppEmbeddingProvider(base_url=LLAMACPP_EMBED_URL)
+        embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
         registry.register("mlx", MlxChatProvider(model_repo=MLX_MODEL), MlxEmbeddingProviderStub())
         logger.info("Inference: MLX only")
 
@@ -152,13 +169,24 @@ def _build_app_state() -> None:
     app_state.authorized_read_paths = AUTHORIZED_READ_PATHS
     app_state.authorized_write_paths = AUTHORIZED_WRITE_PATHS
 
+    # A8: Context enricher for proactive ambient context injection
+    enricher = ContextEnricher(
+        authorized_read_paths=AUTHORIZED_READ_PATHS,
+        cerebro_files_path=CEREBRO_FILES_PATH,
+        enabled=PROACTIVE_CONTEXT,
+    )
+
     runtime = AgentRuntime(
         registry=registry,
         state_store=state_store,
         context_builder=context_builder,
         tool_registry=cal_registry.handlers(),
         tool_definitions=cal_registry.definitions(),
+        enricher=enricher,
     )
+
+    # A7: Task planner for multi-step decomposition
+    planner = TaskPlanner(runtime)
 
     router = SpecializedAgentRouter(llm_router=llm_router)
     router.ensure_profiles(state_store)
@@ -167,6 +195,9 @@ def _build_app_state() -> None:
     app_state.vector_store = vector_store
     app_state.provider_registry = registry
     app_state.router = router
+    app_state.enricher = enricher
+    app_state.planner = planner
+    app_state.embedding_provider = embed
 
 
 if __name__ == "__main__":

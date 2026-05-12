@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 from loguru import logger
@@ -21,6 +21,9 @@ from core.agents.state_store import (
 from core.inference.registry import Message, ProviderRegistry
 from core.memory.context_builder import AssembledContext, ContextBuilder
 from core.tools.registry import ToolDefinition
+
+if TYPE_CHECKING:
+    from core.agents.context_enricher import ContextEnricher
 
 # --------------------------------------------------------------------------- #
 # Hard limits (from spec)
@@ -58,6 +61,7 @@ class _RunState(TypedDict):
     needs_confirmation: bool
     pending_tool_name: str | None
     pending_tool_args: dict | None
+    ambient_context: str  # A8 proactive context injection
 
 
 # --------------------------------------------------------------------------- #
@@ -75,6 +79,8 @@ HISTORIAL COMPRIMIDO DE SESIÓN:
 
 MEMORIA RECUPERADA:
 {memory_context}
+
+{ambient_context}
 
 INSTRUCCIONES DE RESPUESTA:
 Responde SIEMPRE en JSON válido con exactamente uno de estos formatos:
@@ -108,12 +114,17 @@ HISTORIAL COMPRIMIDO DE SESIÓN:
 MEMORIA RECUPERADA:
 {memory_context}
 
+{ambient_context}
+
 Responde de forma natural y directa en texto plano. No uses JSON ni ningún formato especial.\
 """
 
 
 def _build_system_prompt(
-    agent_state: AgentState, context: AssembledContext, tool_defs: list[ToolDefinition]
+    agent_state: AgentState,
+    context: AssembledContext,
+    tool_defs: list[ToolDefinition],
+    ambient_context: str = "",
 ) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
@@ -141,11 +152,14 @@ def _build_system_prompt(
         current_year=current_year,
         session_summary=agent_state.session_summary or "(sesión nueva)",
         memory_context=memory_context,
+        ambient_context=ambient_context,
         available_tools_detail=tools_detail,
     )
 
 
-def _build_stream_system_prompt(agent_state: AgentState, context: AssembledContext) -> str:
+def _build_stream_system_prompt(
+    agent_state: AgentState, context: AssembledContext, ambient_context: str = ""
+) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
     instructions = agent_state.profile.preferences.get("instructions", "")
@@ -160,6 +174,7 @@ def _build_stream_system_prompt(agent_state: AgentState, context: AssembledConte
         current_year=current_year,
         session_summary=agent_state.session_summary or "(sesión nueva)",
         memory_context=memory_context,
+        ambient_context=ambient_context,
     )
 
 
@@ -218,12 +233,14 @@ class AgentRuntime:
         context_builder: ContextBuilder,
         tool_registry: dict[str, Callable[..., Any]] | None = None,
         tool_definitions: dict[str, ToolDefinition] | None = None,
+        enricher: ContextEnricher | None = None,
     ) -> None:
         self._registry = registry
         self._state_store = state_store
         self._context_builder = context_builder
         self._tool_registry = tool_registry or {}
         self._tool_definitions = tool_definitions or {}
+        self._enricher = enricher
         self._graph = self._build_graph()
 
     # ---------------------------------------------------------------------- #
@@ -243,7 +260,8 @@ class AgentRuntime:
         agent_state.execution_count += 1
 
         assembled = await self._context_builder.build(query, agent_state)
-        system_prompt = _build_stream_system_prompt(agent_state, assembled)
+        ambient_context = await self._enricher.enrich(query) if self._enricher else ""
+        system_prompt = _build_stream_system_prompt(agent_state, assembled, ambient_context)
         messages: list[Message] = [
             {"role": "system", "content": system_prompt},
             *assembled.session_history,
@@ -286,6 +304,7 @@ class AgentRuntime:
             "needs_confirmation": False,
             "pending_tool_name": None,
             "pending_tool_args": None,
+            "ambient_context": "",
         }
 
         try:
@@ -344,6 +363,7 @@ class AgentRuntime:
     async def _context_assembly_node(self, state: _RunState) -> dict:
         agent_state = _state_from_dict(state["agent_state"])
         assembled = await self._context_builder.build(state["query"], agent_state)
+        ambient_context = await self._enricher.enrich(state["query"]) if self._enricher else ""
 
         tool_defs = [
             self._tool_definitions[t]
@@ -354,7 +374,7 @@ class AgentRuntime:
             )
             and t in self._tool_definitions
         ]
-        system_prompt = _build_system_prompt(agent_state, assembled, tool_defs)
+        system_prompt = _build_system_prompt(agent_state, assembled, tool_defs, ambient_context)
 
         messages: list[Message] = [
             {"role": "system", "content": system_prompt},
@@ -368,6 +388,7 @@ class AgentRuntime:
                 "total_tokens_estimated": assembled.total_tokens_estimated,
             },
             "messages": [dict(m) for m in messages],
+            "ambient_context": ambient_context,
         }
 
     async def _reason_node(self, state: _RunState) -> dict:
