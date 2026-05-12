@@ -1,6 +1,3 @@
-# Markdown files
-*.md
-
 # Python
 __pycache__/
 *.py[cod]
