@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+*.env
+
+# LanceDB / vector store
+*.lance
+.cerebro/
+
+# Models
+*.gguf
+*.bin
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.tmp
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Node / Tauri
+node_modules/
+target/
+src-tauri/target/
+
+# Logs
+*.log
+logs/

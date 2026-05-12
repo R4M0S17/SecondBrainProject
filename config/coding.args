@@ -1,0 +1,9 @@
+--model bin/models/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+--ctx-size 8192
+--cache-type-k q8_0
+--cache-type-v q8_0
+--n-gpu-layers 99
+--flash-attn on
+--mlock
+--temp 0.2
+--repeat-penalty 1.1
