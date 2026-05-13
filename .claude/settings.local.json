@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python -m pytest tests/test_execution_tools.py -v)",
-      "Bash(make test *)"
+      "Bash(make test *)",
+      "Bash(python3 -m pytest tests/test_embedding_cache.py -v)"
     ]
   }
 }

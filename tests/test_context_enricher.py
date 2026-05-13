@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from core.agents.context_enricher import ContextEnricher
+from core.agents.context_enricher import LOCALE_TEMPLATES, ContextEnricher
 
 
-def _make_enricher(enabled: bool = True) -> ContextEnricher:
+def _make_enricher(enabled: bool = True, language: str = "en") -> ContextEnricher:
     return ContextEnricher(
         authorized_read_paths=["/tmp/test"],
         cerebro_files_path="/tmp/test",
         enabled=enabled,
+        language=language,
     )
 
 
@@ -29,7 +31,7 @@ async def test_enrich_returns_string():
         ]
         result = await enricher.enrich("qué tengo que hacer hoy")
         assert isinstance(result, str)
-        assert ("Reunión" in result or "archivo" in result)
+        assert "Reunión" in result or "archivo" in result
 
 
 @pytest.mark.asyncio
@@ -76,7 +78,79 @@ async def test_enrich_formats_both_sources():
             "archivo.txt (5.2 KB)",
         ]
         result = await enricher.enrich("qué tengo que hacer")
-        assert "PRÓXIMOS EVENTOS" in result
-        assert "ARCHIVOS RECIENTES" in result
+        assert LOCALE_TEMPLATES["en"]["events_heading"].format(hours=48) in result
+        assert LOCALE_TEMPLATES["en"]["files_heading"] in result
         assert "Reunión" in result
         assert "archivo.txt" in result
+
+
+@pytest.mark.asyncio
+async def test_enrich_supports_spanish_locale():
+    """Spanish labels remain available via the language setting."""
+    enricher = _make_enricher(enabled=True, language="es")
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        mock_to_thread.side_effect = [
+            "Próximo evento: Reunión a las 14:00",
+            "archivo.txt (5.2 KB)",
+        ]
+        result = await enricher.enrich("qué tengo que hacer")
+        assert LOCALE_TEMPLATES["es"]["events_heading"].format(hours=48) in result
+        assert LOCALE_TEMPLATES["es"]["files_heading"] in result
+
+
+@pytest.mark.asyncio
+async def test_enrich_unsupported_locale_falls_back_to_english():
+    """Unknown languages use English defaults instead of hard-coded labels."""
+    enricher = _make_enricher(enabled=True, language="unknown")
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        mock_to_thread.side_effect = [
+            "Next event: Standup at 14:00",
+            "",
+        ]
+        result = await enricher.enrich("what is next")
+        assert LOCALE_TEMPLATES["en"]["events_heading"].format(hours=48) in result
+
+
+@pytest.mark.asyncio
+async def test_enrich_timeout_returns_empty():
+    """enrich() should return empty string on timeout."""
+    enricher = _make_enricher(enabled=True)
+
+    async def mock_to_thread_timeout(*args, **kwargs):
+        await asyncio.sleep(10)  # Longer than ENRICH_TIMEOUT_SEC
+
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        mock_to_thread.side_effect = mock_to_thread_timeout
+        result = await enricher.enrich("what is next")
+        assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_enrich_partial_results_on_exception():
+    """enrich() should return partial results if one handler raises exception."""
+    enricher = _make_enricher(enabled=True)
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        # First call raises RuntimeError, second returns files
+        mock_to_thread.side_effect = [
+            RuntimeError("Calendar unavailable"),
+            "file1.txt\nfile2.txt",
+        ]
+        result = await enricher.enrich("what files do I have")
+        # Should return files section (not empty)
+        assert isinstance(result, str)
+        assert LOCALE_TEMPLATES["en"]["files_heading"] in result
+        assert "file1.txt" in result
+
+
+@pytest.mark.asyncio
+async def test_enrich_both_exceptions_returns_empty():
+    """enrich() should return empty if both handlers raise exceptions."""
+    enricher = _make_enricher(enabled=True)
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        # Both calls raise exceptions
+        mock_to_thread.side_effect = [
+            RuntimeError("Calendar error"),
+            RuntimeError("Filesystem error"),
+        ]
+        result = await enricher.enrich("what is next")
+        assert result == ""

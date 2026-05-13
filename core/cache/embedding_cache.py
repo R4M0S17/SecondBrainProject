@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from functools import lru_cache
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -13,34 +14,34 @@ if TYPE_CHECKING:
 class EmbeddingCache:
     def __init__(self, max_size: int = 200) -> None:
         self._max_size = max_size
-        self._cache: dict[str, list[float]] = {}
-        self._access_order: list[str] = []
+        self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._hits = 0
         self._misses = 0
+        self._lock = asyncio.Lock()
 
     def _hash_text(self, text: str) -> str:
         return hashlib.sha256(text.encode()).hexdigest()
 
-    def get(self, text: str) -> list[float] | None:
+    async def get(self, text: str) -> list[float] | None:
         key = self._hash_text(text)
-        if key in self._cache:
-            self._hits += 1
-            self._access_order.remove(key)
-            self._access_order.append(key)
-            return self._cache[key]
-        self._misses += 1
-        return None
+        async with self._lock:
+            if key in self._cache:
+                self._hits += 1
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            self._misses += 1
+            return None
 
-    def put(self, text: str, embedding: list[float]) -> None:
+    async def put(self, text: str, embedding: list[float]) -> None:
         key = self._hash_text(text)
-        if key in self._cache:
-            self._access_order.remove(key)
-        self._cache[key] = embedding
-        self._access_order.append(key)
+        async with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = embedding
 
-        if len(self._cache) > self._max_size:
-            lru_key = self._access_order.pop(0)
-            del self._cache[lru_key]
+            if len(self._cache) > self._max_size:
+                lru_key = next(iter(self._cache))
+                del self._cache[lru_key]
 
     def hit_rate(self) -> float:
         total = self._hits + self._misses
@@ -55,11 +56,11 @@ class EmbeddingCache:
             "max_size": self._max_size,
         }
 
-    def clear(self) -> None:
-        self._cache.clear()
-        self._access_order.clear()
-        self._hits = 0
-        self._misses = 0
+    async def clear(self) -> None:
+        async with self._lock:
+            self._cache.clear()
+            self._hits = 0
+            self._misses = 0
 
 
 class CachedEmbeddingProvider:
@@ -68,13 +69,13 @@ class CachedEmbeddingProvider:
         self._cache = cache or EmbeddingCache(max_size=200)
 
     async def embed(self, text: str) -> list[float]:
-        cached = self._cache.get(text)
+        cached = await self._cache.get(text)
         if cached is not None:
             logger.debug("Embedding cache hit for text: {}", text[:50])
             return cached
 
         embedding = await self._provider.embed(text)
-        self._cache.put(text, embedding)
+        await self._cache.put(text, embedding)
         return embedding
 
     def model_id(self) -> str:

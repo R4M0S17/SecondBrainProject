@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.agents.planner import TaskPlanner
-from core.agents.state_store import AgentProfile, AgentState, ToolCall
+from core.agents.planner import (
+    MAX_FAILURES_ALLOWED,
+    MAX_STEPS_PER_TASK,
+    STEP_TIMEOUT_SEC,
+    TaskPlanner,
+)
+from core.agents.state_store import AgentProfile, AgentState
 
 
 def _make_profile(agent_id: str = "test-agent") -> AgentProfile:
@@ -67,9 +73,7 @@ async def test_decompose_returns_list():
     )
 
     with patch.object(runtime._registry, "select_for_task", return_value="test-provider"):
-        with patch.object(
-            runtime._registry, "get_chat", return_value=AsyncMock()
-        ) as mock_get_chat:
+        with patch.object(runtime._registry, "get_chat", return_value=AsyncMock()) as mock_get_chat:
             mock_chat = AsyncMock()
             mock_chat.complete = AsyncMock(return_value=json_response)
             mock_get_chat.return_value = mock_chat
@@ -89,9 +93,7 @@ async def test_decompose_fallback_on_non_json():
     planner = TaskPlanner(runtime)
 
     with patch.object(runtime._registry, "select_for_task", return_value="test-provider"):
-        with patch.object(
-            runtime._registry, "get_chat", return_value=AsyncMock()
-        ) as mock_get_chat:
+        with patch.object(runtime._registry, "get_chat", return_value=AsyncMock()) as mock_get_chat:
             mock_chat = AsyncMock()
             mock_chat.complete = AsyncMock(return_value="This is not JSON")
             mock_get_chat.return_value = mock_chat
@@ -117,9 +119,7 @@ Here's your plan:
 """
 
     with patch.object(runtime._registry, "select_for_task", return_value="test-provider"):
-        with patch.object(
-            runtime._registry, "get_chat", return_value=AsyncMock()
-        ) as mock_get_chat:
+        with patch.object(runtime._registry, "get_chat", return_value=AsyncMock()) as mock_get_chat:
             mock_chat = AsyncMock()
             mock_chat.complete = AsyncMock(return_value=json_response)
             mock_get_chat.return_value = mock_chat
@@ -185,3 +185,189 @@ async def test_execute_plan_continues_on_error():
     assert "failed" in results[1][1].lower()  # Step 1 error message
     assert results[1][2] is False  # Step 1 state is None
     assert results[2][2] is True  # Step 2 succeeded
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_enforces_max_steps():
+    """execute_plan() should truncate steps exceeding MAX_STEPS_PER_TASK."""
+    runtime = MagicMock()
+    agent_id = "test-agent"
+
+    planner = TaskPlanner(runtime)
+
+    async def mock_run(step, aid):
+        state = _make_state(aid)
+        return f"Answer: {step}", state
+
+    runtime.run = AsyncMock(side_effect=mock_run)
+
+    # Create more steps than MAX_STEPS_PER_TASK
+    steps = [f"Step {i}" for i in range(MAX_STEPS_PER_TASK + 5)]
+    results = []
+
+    async for step_idx, answer, state in planner.execute_plan(steps, agent_id):
+        results.append(step_idx)
+
+    assert len(results) == MAX_STEPS_PER_TASK
+    assert runtime.run.call_count == MAX_STEPS_PER_TASK
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_step_timeout():
+    """execute_plan() should catch timeout errors and continue execution."""
+    runtime = MagicMock()
+    agent_id = "test-agent"
+
+    planner = TaskPlanner(runtime)
+
+    call_count = [0]
+
+    async def mock_run_with_timeout(step, aid):
+        call_count[0] += 1
+        if call_count[0] == 2:
+            # Simulate timeout by sleeping longer than STEP_TIMEOUT_SEC
+            await asyncio.sleep(STEP_TIMEOUT_SEC + 1)
+        state = _make_state(aid)
+        return f"Answer: {step}", state
+
+    runtime.run = AsyncMock(side_effect=mock_run_with_timeout)
+
+    steps = ["Step 1", "Step 2 (timeout)", "Step 3"]
+    results = []
+
+    async for step_idx, answer, state in planner.execute_plan(steps, agent_id):
+        results.append((step_idx, answer, state))
+
+    assert len(results) == 3
+    assert "timed out" in results[1][1].lower()
+    assert results[1][2] is None  # state should be None for timeout
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_circuit_breaker_on_failures():
+    """execute_plan() should stop after MAX_FAILURES_ALLOWED consecutive failures."""
+    runtime = MagicMock()
+    agent_id = "test-agent"
+
+    planner = TaskPlanner(runtime)
+
+    call_count = [0]
+
+    async def mock_run_all_fail(step, aid):
+        call_count[0] += 1
+        raise RuntimeError(f"Step {step} failed")
+
+    runtime.run = AsyncMock(side_effect=mock_run_all_fail)
+
+    # Create enough steps to exceed MAX_FAILURES_ALLOWED
+    steps = [f"Step {i}" for i in range(MAX_FAILURES_ALLOWED + 5)]
+    results = []
+
+    async for step_idx, answer, state in planner.execute_plan(steps, agent_id):
+        results.append((step_idx, answer))
+
+    # Should stop after MAX_FAILURES_ALLOWED failures
+    assert len(results) == MAX_FAILURES_ALLOWED
+    assert runtime.run.call_count == MAX_FAILURES_ALLOWED
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_failure_counter_resets_on_success():
+    """execute_plan() should continue past MAX_FAILURES_ALLOWED if there are successes."""
+    runtime = MagicMock()
+    agent_id = "test-agent"
+
+    planner = TaskPlanner(runtime)
+
+    call_count = [0]
+
+    async def mock_run_alternating(step, aid):
+        call_count[0] += 1
+        state = _make_state(aid)
+        # Fail on odd calls, succeed on even
+        if call_count[0] % 2 == 1:
+            raise RuntimeError("Step failed")
+        return f"Answer: {step}", state
+
+    runtime.run = AsyncMock(side_effect=mock_run_alternating)
+
+    steps = [f"Step {i}" for i in range(10)]
+    results = []
+
+    async for step_idx, answer, state in planner.execute_plan(steps, agent_id):
+        results.append((step_idx, answer, state is not None))
+
+    # All steps should execute since failures and successes alternate
+    assert len(results) == 10
+    assert runtime.run.call_count == 10
+
+
+def test_parse_step_response_direct_json():
+    """_parse_step_response() should parse valid JSON directly."""
+    response = '["Step 1", "Step 2", "Step 3"]'
+    steps = TaskPlanner._parse_step_response(response)
+    assert steps == ["Step 1", "Step 2", "Step 3"]
+
+
+def test_parse_step_response_markdown_fences():
+    """_parse_step_response() should extract JSON from markdown fences."""
+    response = """Here's your plan:
+```json
+["Step 1", "Step 2"]
+```
+Done."""
+    steps = TaskPlanner._parse_step_response(response)
+    assert steps == ["Step 1", "Step 2"]
+
+
+def test_parse_step_response_greedy_brackets():
+    """_parse_step_response() should extract JSON from multiple bracket sets."""
+    response = 'Some text ["Step A"] more text ["Step 1", "Step 2"] end'
+    steps = TaskPlanner._parse_step_response(response)
+    # Should find the first valid JSON array with multiple items
+    assert steps == ["Step 1", "Step 2"]
+
+
+def test_parse_step_response_numbered_lines():
+    """_parse_step_response() should fall back to numbered lines."""
+    response = """1. Create a file
+2. Edit the file
+3. Save the file"""
+    steps = TaskPlanner._parse_step_response(response)
+    assert len(steps) == 3
+    assert steps[0] == "Create a file"
+    assert steps[1] == "Edit the file"
+    assert steps[2] == "Save the file"
+
+
+def test_parse_step_response_bullet_points():
+    """_parse_step_response() should handle bullet points."""
+    response = """- First task
+- Second task
+* Third task"""
+    steps = TaskPlanner._parse_step_response(response)
+    assert len(steps) == 3
+    assert "First task" in steps[0]
+    assert "Second task" in steps[1]
+    assert "Third task" in steps[2]
+
+
+def test_parse_step_response_invalid_json_fallback():
+    """_parse_step_response() should return None if all strategies fail."""
+    response = "This is just plain text with no structured data"
+    steps = TaskPlanner._parse_step_response(response)
+    assert steps is None
+
+
+def test_parse_step_response_empty_array():
+    """_parse_step_response() should reject empty arrays."""
+    response = "[]"
+    steps = TaskPlanner._parse_step_response(response)
+    assert steps is None
+
+
+def test_parse_step_response_non_string_items():
+    """_parse_step_response() should reject arrays with non-string items."""
+    response = '["Step 1", 2, "Step 3"]'
+    steps = TaskPlanner._parse_step_response(response)
+    assert steps is None

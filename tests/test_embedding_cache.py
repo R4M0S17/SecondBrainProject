@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from core.cache.embedding_cache import CachedEmbeddingProvider, EmbeddingCache
@@ -88,3 +90,55 @@ async def test_cached_embedding_provider_delegates_model_id() -> None:
     cached_provider = CachedEmbeddingProvider(mock_provider)
 
     assert cached_provider.model_id() == "mock-embed-model"
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_concurrent_access() -> None:
+    cache = EmbeddingCache(max_size=100)
+    mock_provider = MockEmbeddingProvider()
+    cached_provider = CachedEmbeddingProvider(mock_provider, cache)
+
+    async def access_cache(query: str) -> list[float]:
+        return await cached_provider.embed(query)
+
+    tasks = [access_cache(f"query {i % 10}") for i in range(50)]
+    results = await asyncio.gather(*tasks)
+
+    assert all(isinstance(r, list) for r in results)
+    assert len(results) == 50
+    assert mock_provider.embed_calls == 10
+    stats = cache.stats()
+    assert stats["hits"] == 40
+    assert stats["misses"] == 10
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_concurrent_put_and_get() -> None:
+    cache = EmbeddingCache(max_size=50)
+
+    async def concurrent_ops(idx: int) -> None:
+        for i in range(10):
+            text = f"query {(idx + i) % 20}"
+            await cache.put(text, [float(i)] * 768)
+            await cache.get(text)
+
+    tasks = [concurrent_ops(i) for i in range(5)]
+    await asyncio.gather(*tasks)
+
+    stats = cache.stats()
+    assert stats["size"] <= 50
+    assert stats["hits"] + stats["misses"] > 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_clear() -> None:
+    cache = EmbeddingCache(max_size=10)
+    await cache.put("query 1", [1.0] * 768)
+    await cache.put("query 2", [2.0] * 768)
+
+    assert len(cache._cache) == 2
+
+    await cache.clear()
+
+    assert len(cache._cache) == 0
+    assert cache.hit_rate() == 0.0
