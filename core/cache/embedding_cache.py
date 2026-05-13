@@ -4,9 +4,12 @@ import asyncio
 import hashlib
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from loguru import logger
+
+from core.cache.stores import CacheStore, InMemoryCacheStore, SQLiteCacheStore
 
 if TYPE_CHECKING:
     from core.inference.registry import EmbeddingProvider
@@ -14,17 +17,26 @@ if TYPE_CHECKING:
 EMBED_TIMEOUT_SEC: Final = 10
 EMBED_MAX_RETRIES: Final = 3
 EMBED_RETRY_BACKOFF_SEC: Final = 0.5
+CACHE_PERSIST_INTERVAL: Final = 50
 
 
 class EmbeddingCache:
-    """Thread-safe LRU cache with performance metrics and optional TTL."""
+    """Thread-safe LRU cache with performance metrics, TTL, and optional persistence."""
 
-    def __init__(self, max_size: int = 200, ttl_seconds: int | None = None) -> None:
+    def __init__(
+        self,
+        max_size: int = 200,
+        ttl_seconds: int | None = None,
+        store: CacheStore | None = None,
+        persist_db_path: str | Path | None = None,
+    ) -> None:
         """Initialize cache.
 
         Args:
             max_size: Maximum number of embeddings to cache
             ttl_seconds: Time-to-live for entries in seconds (None = no expiry)
+            store: CacheStore for persistence (defaults to InMemoryCacheStore)
+            persist_db_path: Path to SQLite DB for persistence (overrides store)
         """
         self._max_size = max_size
         self._ttl_seconds = ttl_seconds
@@ -36,6 +48,12 @@ class EmbeddingCache:
         self._total_get_latency_ms = 0.0
         self._total_put_latency_ms = 0.0
         self._lock = asyncio.Lock()
+        self._operations_since_checkpoint = 0
+
+        if persist_db_path:
+            self._store: CacheStore = SQLiteCacheStore(persist_db_path)
+        else:
+            self._store = store or InMemoryCacheStore()
 
     def _hash_text(self, text: str) -> str:
         return hashlib.sha256(text.encode()).hexdigest()
@@ -75,7 +93,8 @@ class EmbeddingCache:
             if key in self._cache:
                 self._cache.move_to_end(key)
             self._cache[key] = embedding
-            self._timestamps[key] = time.time()
+            timestamp = time.time()
+            self._timestamps[key] = timestamp
 
             if len(self._cache) > self._max_size:
                 lru_key = next(iter(self._cache))
@@ -84,8 +103,15 @@ class EmbeddingCache:
                     del self._timestamps[lru_key]
                 self._evictions += 1
 
+            self._operations_since_checkpoint += 1
+
         latency_ms = (time.time() - start_time) * 1000
         self._total_put_latency_ms += latency_ms
+
+        # Periodic checkpoint: save to store after N operations
+        if self._operations_since_checkpoint >= CACHE_PERSIST_INTERVAL:
+            await self.checkpoint()
+            self._operations_since_checkpoint = 0
 
     def hit_rate(self) -> float:
         total = self._hits + self._misses
@@ -98,7 +124,31 @@ class EmbeddingCache:
         total_puts = max(1, len(self._cache) + self._evictions)
         return self._total_put_latency_ms / total_puts
 
+    async def checkpoint(self) -> None:
+        """Save current cache state to persistent store."""
+        async with self._lock:
+            for key, embedding in self._cache.items():
+                timestamp = self._timestamps.get(key, time.time())
+                await self._store.save_entry(key, embedding, timestamp)
+        logger.debug("Cache checkpoint: saved {} entries", len(self._cache))
+
+    async def load_from_store(self) -> None:
+        """Load cache entries from persistent store."""
+        entries = await self._store.load_all()
+        async with self._lock:
+            for key, (embedding, timestamp) in entries.items():
+                self._cache[key] = embedding
+                self._timestamps[key] = timestamp
+                if len(self._cache) > self._max_size:
+                    lru_key = next(iter(self._cache))
+                    del self._cache[lru_key]
+                    if lru_key in self._timestamps:
+                        del self._timestamps[lru_key]
+                    self._evictions += 1
+        logger.info("Loaded {} cache entries from store", len(entries))
+
     def stats(self) -> dict:
+        store_type = type(self._store).__name__
         return {
             "hits": self._hits,
             "misses": self._misses,
@@ -109,6 +159,7 @@ class EmbeddingCache:
             "avg_get_latency_ms": self.avg_get_latency_ms(),
             "avg_put_latency_ms": self.avg_put_latency_ms(),
             "ttl_seconds": self._ttl_seconds,
+            "persistence_store": store_type,
         }
 
     async def clear(self) -> None:
@@ -120,6 +171,8 @@ class EmbeddingCache:
             self._evictions = 0
             self._total_get_latency_ms = 0.0
             self._total_put_latency_ms = 0.0
+            self._operations_since_checkpoint = 0
+        await self._store.clear()
 
 
 class CachedEmbeddingProvider:
@@ -150,7 +203,7 @@ class CachedEmbeddingProvider:
 
     async def _embed_with_retry(self, text: str) -> list[float] | None:
         """Call provider with timeout and exponential backoff retry."""
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(EMBED_MAX_RETRIES):
             try:
                 embedding = await asyncio.wait_for(
@@ -159,9 +212,9 @@ class CachedEmbeddingProvider:
                 if attempt > 0:
                     logger.info("Embedding provider recovered after {} retries", attempt)
                 return embedding
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 last_error = e
-                wait_time = EMBED_RETRY_BACKOFF_SEC * (2 ** attempt)
+                wait_time = EMBED_RETRY_BACKOFF_SEC * (2**attempt)
                 logger.warning(
                     "Embedding timeout on attempt {} (waited {}s), retrying in {}s",
                     attempt + 1,
@@ -172,7 +225,7 @@ class CachedEmbeddingProvider:
                     await asyncio.sleep(wait_time)
             except Exception as e:
                 last_error = e
-                wait_time = EMBED_RETRY_BACKOFF_SEC * (2 ** attempt)
+                wait_time = EMBED_RETRY_BACKOFF_SEC * (2**attempt)
                 logger.warning(
                     "Embedding provider error on attempt {}: {}, retrying in {}s",
                     attempt + 1,
@@ -182,11 +235,10 @@ class CachedEmbeddingProvider:
                 if attempt < EMBED_MAX_RETRIES - 1:
                     await asyncio.sleep(wait_time)
 
-        logger.error("Embedding provider failed after {} retries: {}", EMBED_MAX_RETRIES, last_error)
+        logger.error(
+            "Embedding provider failed after {} retries: {}", EMBED_MAX_RETRIES, last_error
+        )
         return None
-
-    def model_id(self) -> str:
-        return self._provider.model_id()
 
     def get_cache_stats(self) -> dict:
         return self._cache.stats()

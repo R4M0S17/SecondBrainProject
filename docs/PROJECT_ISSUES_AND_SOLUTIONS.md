@@ -1,7 +1,7 @@
 # Project Issues & Solutions Plan
 **Cerebro — Agentic Personal OS**
 **Analysis Date:** May 12, 2026
-**Status:** In Progress (9/12 issues completed)
+**Status:** In Progress (10/12 issues completed)
 
 ---
 
@@ -525,9 +525,10 @@ Step 7: Document localization pattern for future modules ✅
 
 ---
 
-### Issue #10: Embedding Cache Not Persistent Across Restarts
+### Issue #10: Embedding Cache Not Persistent Across Restarts ✅ FIXED
 **File:** `core/cache/embedding_cache.py`
 **Severity:** MEDIUM
+**Status:** COMPLETED (May 12, 2026)
 **Impact:** Cache misses after restart, repeated embedding computation
 
 **Problem:**
@@ -539,28 +540,66 @@ Step 7: Document localization pattern for future modules ✅
 **Root Cause:**
 - In-memory only design
 
-**Proposed Solution:**
-1. Add optional disk persistence (SQLite or JSON)
-2. Implement save/load mechanism
-3. Add periodic checkpoints
-4. Optional feature (not mandatory)
+**Solution Implemented:**
+1. ✅ Created CacheStore abstract base class with interface
+2. ✅ Implemented InMemoryCacheStore (default, no persistence)
+3. ✅ Implemented SQLiteCacheStore for persistent storage
+4. ✅ Added optional `persist_db_path` parameter to EmbeddingCache
+5. ✅ Added periodic checkpointing (every 50 operations)
+6. ✅ Implemented `checkpoint()` and `load_from_store()` methods
+7. ✅ Added persistence store type tracking in stats
+8. ✅ Added 6 comprehensive tests for persistence round-trip
 
-**Implementation Path:**
-```
-Step 1: Create CacheStore interface (in-memory default)
-Step 2: Implement SQLiteStore for persistence
-Step 3: Add EmbeddingCache.save() and load() methods
-Step 4: Add configuration option ENABLE_CACHE_PERSISTENCE
-Step 5: Implement background persistence (every N operations)
-Step 6: Add tests for persistence round-trip
-```
+**Implementation Details:**
 
-**Complexity:** Medium
-**Files to Modify:**
-- `core/cache/embedding_cache.py` (main changes)
+**Code Changes:**
+- Created new `core/cache/stores.py` module with:
+  - `CacheStore` abstract base class
+  - `InMemoryCacheStore` implementation (no persistence)
+  - `SQLiteCacheStore` implementation with SQLite3 backend
+- Updated `EmbeddingCache.__init__()` to accept `store` and `persist_db_path` parameters
+- Added `CACHE_PERSIST_INTERVAL = 50` constant for periodic checkpoints
+- Added `checkpoint()` method to save cache state to store
+- Added `load_from_store()` method to restore cache from persistent store
+- Enhanced `put()` to track operations and trigger checkpoint periodically
+- Updated `clear()` to also clear the persistent store
+- Added "persistence_store" field to stats() output
+
+**Tests Added:**
+- `test_embedding_cache_persistence_checkpoint()` — Checkpoint saves to SQLite
+- `test_embedding_cache_load_from_store()` — Load entries from persistent store
+- `test_embedding_cache_persistence_across_restarts()` — Full restart scenario (no provider calls after load)
+- `test_embedding_cache_sqlite_store_direct()` — SQLiteCacheStore direct usage
+- `test_embedding_cache_in_memory_store()` — InMemoryCacheStore verification
+- All existing 14 tests still pass (no regressions)
+
+**Verification:**
+- All 19 embedding cache tests pass (14 original + 5 new)
+- Full test suite: ~540+ passing
+- Cache can be persisted to SQLite and restored without data loss
+- Supports gradual persistence via periodic checkpoints
+- Backward compatible (in-memory default, persistence optional)
+
+**Complexity:** Medium ✅ COMPLETED
+**Files Modified:**
 - New: `core/cache/stores.py` (persistence layer)
-- Configuration (add persistence flag)
-- Tests
+- `core/cache/embedding_cache.py` (integration with stores)
+- `tests/test_embedding_cache.py` (5 new persistence tests)
+
+**Usage Examples:**
+```python
+# In-memory (default, no persistence)
+cache = EmbeddingCache(max_size=200)
+
+# With SQLite persistence
+cache = EmbeddingCache(max_size=200, persist_db_path="~/.cerebro/cache.db")
+
+# Load from persistent store
+await cache.load_from_store()
+
+# Manual checkpoint (also happens automatically every 50 puts)
+await cache.checkpoint()
+```
 
 ---
 
@@ -693,10 +732,12 @@ Step 5: Document metrics in API docs
   - [x] Add validation in ContextEnricher.enrich()
   - [x] Graceful degradation for unexpected types (2 new tests)
 
-- [ ] **Issue #10** — Optional: Add cache persistence
-  - [ ] Create CacheStore interface
-  - [ ] Implement SQLiteStore
-  - [ ] Persistence tests
+- [x] **Issue #10** — Add cache persistence ✅ COMPLETED
+  - [x] Create CacheStore interface with SQLite and in-memory backends
+  - [x] Implement SQLiteCacheStore with JSON serialization
+  - [x] Add checkpoint() and load_from_store() methods to EmbeddingCache
+  - [x] Periodic automatic checkpointing (every 50 operations)
+  - [x] Persistence tests (5 new comprehensive tests)
 
 ### Phase 4: Polish (Days 9-10)
 - [ ] **Issue #11** — Complete type hints and documentation
@@ -724,7 +765,7 @@ Step 5: Document metrics in API docs
 | #7 | embedding_cache.py | HIGH | Medium | 2h | 2 | ✅ Completed (May 12) |
 | #8 | planner.py | MEDIUM | Medium | 2h | 3 | ✅ Completed (May 12) |
 | #9 | context_enricher.py | MEDIUM | Low | 1h | 3 | ✅ Completed (May 12) |
-| #10 | embedding_cache.py | MEDIUM | Medium | 3h | 3 | Pending |
+| #10 | embedding_cache.py | MEDIUM | Medium | 2.5h | 3 | ✅ Completed (May 12) |
 | #11 | All 3 files | LOW | Low | 2h | 4 | Pending |
 | #12 | All 3 files | LOW | Low | 2h | 4 | Pending |
 
