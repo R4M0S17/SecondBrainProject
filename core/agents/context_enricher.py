@@ -10,8 +10,35 @@ import asyncio
 from typing import Final, TypedDict
 
 from loguru import logger
+from pydantic import BaseModel, field_validator
 
 ENRICH_TIMEOUT_SEC: Final = 3
+
+
+class EventsHandlerResult(BaseModel):
+    """Contract for get_upcoming_events() handler return value."""
+
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def content_is_string(cls, v: str) -> str:
+        if not isinstance(v, str):
+            raise ValueError("Events content must be a string")
+        return v
+
+
+class FilesHandlerResult(BaseModel):
+    """Contract for search_files() handler return value."""
+
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def content_is_string(cls, v: str) -> str:
+        if not isinstance(v, str):
+            raise ValueError("Files content must be a string")
+        return v
 
 
 class LocaleTemplate(TypedDict):
@@ -63,6 +90,7 @@ class ContextEnricher:
         """Return a formatted AMBIENT_CONTEXT string for injection into system prompt.
 
         Calls get_upcoming_events() and search_files() in parallel with timeout.
+        Validates handler return types against schema contracts.
         Returns partial results if one source fails; empty string if disabled.
         """
         if not self.enabled:
@@ -93,19 +121,39 @@ class ContextEnricher:
             files_str = ""
             template = LOCALE_TEMPLATES[self.language]
 
-            # Handle results with type checking and error classification
-            if isinstance(results[0], str):
-                events_str = results[0]
-            elif isinstance(results[0], Exception):
+            # Handle results with type validation and error classification
+            if isinstance(results[0], Exception):
                 logger.debug(
                     "ContextEnricher: Calendar handler failed: {}", type(results[0]).__name__
                 )
+            elif isinstance(results[0], str):
+                try:
+                    # Validate against handler contract
+                    validated = EventsHandlerResult(content=results[0])
+                    events_str = validated.content
+                except Exception as e:
+                    logger.debug("ContextEnricher: Events result validation failed: {}", e)
+            else:
+                logger.debug(
+                    "ContextEnricher: Calendar handler returned unexpected type: {}",
+                    type(results[0]).__name__,
+                )
 
-            if isinstance(results[1], str):
-                files_str = results[1]
-            elif isinstance(results[1], Exception):
+            if isinstance(results[1], Exception):
                 logger.debug(
                     "ContextEnricher: Filesystem handler failed: {}", type(results[1]).__name__
+                )
+            elif isinstance(results[1], str):
+                try:
+                    # Validate against handler contract
+                    validated = FilesHandlerResult(content=results[1])
+                    files_str = validated.content
+                except Exception as e:
+                    logger.debug("ContextEnricher: Files result validation failed: {}", e)
+            else:
+                logger.debug(
+                    "ContextEnricher: Filesystem handler returned unexpected type: {}",
+                    type(results[1]).__name__,
                 )
 
             # Format into ambient context section

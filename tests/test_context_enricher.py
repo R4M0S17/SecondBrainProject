@@ -154,3 +154,38 @@ async def test_enrich_both_exceptions_returns_empty():
         ]
         result = await enricher.enrich("what is next")
         assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_enrich_validates_handler_return_types():
+    """enrich() should validate handler return types against schema."""
+    enricher = _make_enricher(enabled=True)
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        # Both handlers return valid strings
+        mock_to_thread.side_effect = [
+            "Próximo evento: Reunión a las 14:00",
+            "archivo.txt (5.2 KB)",
+        ]
+        result = await enricher.enrich("qué tengo que hacer")
+        # Both handlers pass validation and return results
+        assert isinstance(result, str)
+        assert "Reunión" in result
+        assert "archivo.txt" in result
+
+
+@pytest.mark.asyncio
+async def test_enrich_handles_unexpected_handler_return_type():
+    """enrich() should gracefully handle non-string handler returns."""
+    enricher = _make_enricher(enabled=True)
+    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        # Calendar returns dict (unexpected type), files return valid string
+        mock_to_thread.side_effect = [
+            {"unexpected": "dict"},  # Wrong type
+            "archivo.txt",  # Valid string
+        ]
+        result = await enricher.enrich("what do I need to do")
+        # Should skip calendar and return only files
+        assert isinstance(result, str)
+        assert "archivo.txt" in result
+        # Calendar events should not appear
+        assert "unexpected" not in result

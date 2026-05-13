@@ -11,7 +11,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from loguru import logger
 from pydantic import BaseModel, field_validator
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 MAX_STEPS_PER_TASK = 20
 STEP_TIMEOUT_SEC = 300
 MAX_FAILURES_ALLOWED = 5
+COMPLEXITY_SCORE_THRESHOLD: Final = 2
 
 
 class Step(BaseModel):
@@ -46,23 +47,43 @@ class TaskPlanner:
 
     @staticmethod
     def is_complex_task(query: str) -> bool:
-        """Heuristic to detect if a task is multi-step and should be decomposed."""
+        """Heuristic to detect if a task is multi-step and should be decomposed.
+
+        Uses weighted keyword scoring to reduce false positives/negatives.
+        Strong keywords (weight=2): clear multi-step intent
+        Weak keywords (weight=1): potential multi-step intent
+        Threshold: score >= 2 indicates complex task
+        """
         q_lower = query.lower()
-        keywords = [
+
+        # Strong indicators of multi-step tasks (weight=2 each)
+        strong_keywords = [
             "organize",
             "plan",
             "create and then",
             "for each",
             "step by step",
-            "first",
-            "then",
             "one by one",
             "in order",
             "sequentially",
             "list of steps",
-            "how to",
         ]
-        return any(kw in q_lower for kw in keywords)
+
+        # Weak indicators - context-dependent (weight=1 each)
+        weak_keywords = [
+            "then",
+            "first",
+            "how to",
+            "build",
+            "set up",
+            "configure",
+        ]
+
+        # Calculate weighted score
+        score = sum(2 for kw in strong_keywords if kw in q_lower)
+        score += sum(1 for kw in weak_keywords if kw in q_lower)
+
+        return score >= COMPLEXITY_SCORE_THRESHOLD
 
     @staticmethod
     def _parse_step_response(response: str) -> list[str] | None:

@@ -371,3 +371,42 @@ def test_parse_step_response_non_string_items():
     response = '["Step 1", 2, "Step 3"]'
     steps = TaskPlanner._parse_step_response(response)
     assert steps is None
+
+
+def test_is_complex_task_strong_keywords():
+    """Strong keywords (weight=2) alone should trigger decomposition."""
+    assert TaskPlanner.is_complex_task("organize my files")
+    assert TaskPlanner.is_complex_task("step by step guide")
+    assert TaskPlanner.is_complex_task("for each item do something")
+
+
+def test_is_complex_task_weak_keywords_need_multiple():
+    """Weak keywords (weight=1) need multiple to trigger decomposition."""
+    # Single weak keyword should NOT trigger
+    assert not TaskPlanner.is_complex_task("tell me how to bake a cake")
+    assert not TaskPlanner.is_complex_task("what happens then?")
+
+    # Multiple weak keywords should trigger (score >= 2)
+    assert TaskPlanner.is_complex_task("first do this, then do that")
+    assert TaskPlanner.is_complex_task("how to build and configure this")
+
+
+def test_is_complex_task_mixed_keywords():
+    """Mix of strong and weak keywords should trigger."""
+    assert TaskPlanner.is_complex_task("plan and then execute")
+    assert TaskPlanner.is_complex_task("organize files, first sort them")
+
+
+def test_is_complex_task_reduces_false_positives():
+    """Improved heuristic should avoid false positives."""
+    # These should NOT be decomposed (no strong keywords, insufficient weak)
+    assert not TaskPlanner.is_complex_task("what is the weather today?")
+    assert not TaskPlanner.is_complex_task("tell me a joke")
+    assert not TaskPlanner.is_complex_task("who won the game yesterday?")
+
+
+def test_is_complex_task_catches_real_multistep():
+    """Should catch clear multi-step tasks."""
+    assert TaskPlanner.is_complex_task("build a website and then deploy it")
+    assert TaskPlanner.is_complex_task("organize files into folders, then archive them")
+    assert TaskPlanner.is_complex_task("create project structure step by step")
