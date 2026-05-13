@@ -1,4 +1,22 @@
-"""Cache persistence layer with in-memory and SQLite backends."""
+"""Cache persistence layer with in-memory and SQLite backends.
+
+This module provides pluggable storage backends for embedding cache persistence.
+The interface is abstract to allow multiple implementations:
+
+- InMemoryCacheStore: Default, no persistence (embeddings lost on restart)
+- SQLiteCacheStore: Persistent storage using SQLite3 with JSON serialization
+
+Embeddings are stored as JSON-serialized lists of floats with timestamps for TTL support.
+
+Example usage:
+    # In-memory (default)
+    store = InMemoryCacheStore()
+
+    # With SQLite persistence
+    store = SQLiteCacheStore("~/.cerebro/cache.db")
+    await store.save_entry("key1", [1.0, 2.0], 123.456)
+    entry = await store.load_entry("key1")  # (embedding, timestamp)
+"""
 
 from __future__ import annotations
 

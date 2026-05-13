@@ -35,6 +35,26 @@ class MemoryRef:
 
 @dataclass
 class ResponseMetadata:
+    """Metadata attached to every query response.
+
+    Attributes:
+        sources_used: RAG sources retrieved via vector search
+        tools_called: Tools invoked by the agent
+        memory_retrieved: Long-term memory episodes retrieved
+        inference_latency_ms: Time spent in LLM inference
+        total_latency_ms: End-to-end query latency
+        iterations: Number of agent reasoning steps
+        model_used: LLM model identifier
+        provider_used: Inference provider (llamacpp, mlx, etc.)
+        warnings: Operational warnings (e.g., provider_fallback)
+        pipeline_stages_ms: Per-stage timing dict. Common keys:
+            - cache_hit_rate: Cache hit rate percentage
+            - embedding_cache_latency_ms: Average embedding lookup time
+            - task_decomposition_ms: Time to decompose multi-step task
+            - context_enrichment_ms: Time to fetch ambient context
+        pending_tool: Tool awaiting user approval (pause state)
+    """
+
     sources_used: list[SourceRef] = field(default_factory=list)
     tools_called: list[ToolCallRecord] = field(default_factory=list)
     memory_retrieved: list[MemoryRef] = field(default_factory=list)

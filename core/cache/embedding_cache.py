@@ -1,3 +1,39 @@
+"""Embedding cache with thread-safe LRU eviction, metrics, and optional persistence.
+
+This module provides an efficient embedding cache with:
+
+- Thread-safe async operations with asyncio.Lock
+- LRU eviction using OrderedDict (O(1) operations)
+- Performance metrics (hit rate, latency, evictions)
+- Optional TTL (time-to-live) for entries
+- Optional persistent storage via SQLite
+- Periodic checkpointing (every N operations)
+- Provider timeout and retry logic with exponential backoff
+
+The cache is used by CachedEmbeddingProvider to avoid redundant embedding
+computations for duplicate queries. Failed embeddings are never cached.
+
+Configuration constants:
+- EMBED_TIMEOUT_SEC: Provider call timeout (10s)
+- EMBED_MAX_RETRIES: Retry attempts on failure (3)
+- EMBED_RETRY_BACKOFF_SEC: Initial retry delay (0.5s, exponential)
+- CACHE_PERSIST_INTERVAL: Checkpoints after N puts (50)
+
+Example usage:
+    # In-memory cache
+    cache = EmbeddingCache(max_size=200)
+
+    # With SQLite persistence
+    cache = EmbeddingCache(max_size=200, persist_db_path="~/.cerebro/cache.db")
+    await cache.load_from_store()  # Restore on startup
+    await cache.checkpoint()        # Manual checkpoint
+
+    # Use with provider
+    provider = create_provider()
+    cached = CachedEmbeddingProvider(provider, cache)
+    embedding = await cached.embed("query text")
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -66,6 +102,17 @@ class EmbeddingCache:
         return (time.time() - timestamp) > self._ttl_seconds
 
     async def get(self, text: str) -> list[float] | None:
+        """Retrieve embedding from cache by text (SHA256 key).
+
+        Checks expiry and returns None if not found or TTL expired.
+        Records hit/miss metrics. Thread-safe via asyncio.Lock.
+
+        Args:
+            text: Text to retrieve embedding for
+
+        Returns:
+            Cached embedding vector or None if not found/expired
+        """
         key = self._hash_text(text)
         start_time = time.time()
         async with self._lock:
@@ -87,6 +134,16 @@ class EmbeddingCache:
         return embedding
 
     async def put(self, text: str, embedding: list[float]) -> None:
+        """Store embedding in cache with LRU eviction.
+
+        Stores embedding with current timestamp. If cache exceeds max_size,
+        evicts least-recently-used entry. Triggers periodic checkpoint to
+        persistent store after CACHE_PERSIST_INTERVAL operations.
+
+        Args:
+            text: Text to cache embedding for
+            embedding: Embedding vector to cache
+        """
         key = self._hash_text(text)
         start_time = time.time()
         async with self._lock:
@@ -125,7 +182,14 @@ class EmbeddingCache:
         return self._total_put_latency_ms / total_puts
 
     async def checkpoint(self) -> None:
-        """Save current cache state to persistent store."""
+        """Save current cache state to persistent store.
+
+        Saves all cache entries to the configured store (SQLite if persisting,
+        or in-memory store otherwise). Called automatically after CACHE_PERSIST_INTERVAL
+        operations, but can be called manually to ensure persistence.
+
+        Thread-safe: holds lock during save to ensure consistency.
+        """
         async with self._lock:
             for key, embedding in self._cache.items():
                 timestamp = self._timestamps.get(key, time.time())
@@ -133,7 +197,18 @@ class EmbeddingCache:
         logger.debug("Cache checkpoint: saved {} entries", len(self._cache))
 
     async def load_from_store(self) -> None:
-        """Load cache entries from persistent store."""
+        """Load cache entries from persistent store on startup.
+
+        Restores embeddings from SQLite (or in-memory store). If cache exceeds
+        max_size during loading, evicts LRU entries to maintain size invariant.
+
+        Should be called on application startup to restore cached embeddings
+        from a previous session. Call after creating cache but before use.
+
+        Example:
+            cache = EmbeddingCache(..., persist_db_path="~/.cerebro/cache.db")
+            await cache.load_from_store()  # Restore saved embeddings
+        """
         entries = await self._store.load_all()
         async with self._lock:
             for key, (embedding, timestamp) in entries.items():
@@ -147,7 +222,19 @@ class EmbeddingCache:
                     self._evictions += 1
         logger.info("Loaded {} cache entries from store", len(entries))
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, float | str | int | None]:
+        """Return cache statistics and metrics.
+
+        Returns dictionary with:
+        - hits/misses: Count of cache hits and misses
+        - hit_rate_percent: Hit rate as percentage (0-100)
+        - size/max_size: Current and maximum cache size
+        - evictions: Total evictions due to LRU
+        - avg_get_latency_ms: Average get() operation time
+        - avg_put_latency_ms: Average put() operation time
+        - ttl_seconds: TTL setting (None if no expiry)
+        - persistence_store: Store backend name (InMemoryCacheStore, SQLiteCacheStore)
+        """
         store_type = type(self._store).__name__
         return {
             "hits": self._hits,
@@ -163,6 +250,11 @@ class EmbeddingCache:
         }
 
     async def clear(self) -> None:
+        """Clear cache and all persistent storage.
+
+        Removes all entries from in-memory cache and persistent store.
+        Resets metrics (hits, misses, evictions, latency). Thread-safe.
+        """
         async with self._lock:
             self._cache.clear()
             self._timestamps.clear()
@@ -176,9 +268,30 @@ class EmbeddingCache:
 
 
 class CachedEmbeddingProvider:
-    """Embedding provider with caching, timeout, and retry logic."""
+    """Embedding provider wrapper with caching, timeout, and retry logic.
+
+    Wraps an EmbeddingProvider to add:
+    - Cache-first lookup (avoids redundant provider calls)
+    - Per-attempt timeout protection (10s default)
+    - Automatic exponential backoff retry (3 attempts)
+    - Error classification and logging
+    - Failure isolation (failed embeddings not cached)
+
+    Failed embeddings are never cached and return RuntimeError after retries
+    exhausted. This prevents caching corrupted or transient failures.
+
+    Attributes:
+        _provider: Underlying embedding provider
+        _cache: EmbeddingCache instance (in-memory or persistent)
+    """
 
     def __init__(self, provider: EmbeddingProvider, cache: EmbeddingCache | None = None) -> None:
+        """Initialize cached provider.
+
+        Args:
+            provider: EmbeddingProvider to wrap
+            cache: Optional EmbeddingCache instance (creates new if None)
+        """
         self._provider = provider
         self._cache = cache or EmbeddingCache(max_size=200)
 
@@ -186,7 +299,16 @@ class CachedEmbeddingProvider:
         """Get embedding with cache-first approach and error handling.
 
         Tries cache first, then calls provider with timeout and retry logic.
-        Does not cache failed embeddings.
+        Does not cache failed embeddings - only successful embeddings are stored.
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            Embedding vector from cache or provider
+
+        Raises:
+            RuntimeError: If provider fails after all retry attempts
         """
         cached = await self._cache.get(text)
         if cached is not None:
@@ -202,7 +324,19 @@ class CachedEmbeddingProvider:
             raise RuntimeError(f"Failed to embed text after {EMBED_MAX_RETRIES} retries")
 
     async def _embed_with_retry(self, text: str) -> list[float] | None:
-        """Call provider with timeout and exponential backoff retry."""
+        """Call provider with timeout and exponential backoff retry.
+
+        Wraps provider.embed() with:
+        - Timeout protection (EMBED_TIMEOUT_SEC)
+        - Exponential backoff retry (EMBED_MAX_RETRIES attempts)
+        - Error classification and logging
+
+        Args:
+            text: Text to embed
+
+        Returns:
+            Embedding vector on success, None if all retries exhausted
+        """
         last_error: Exception | None = None
         for attempt in range(EMBED_MAX_RETRIES):
             try:
@@ -240,5 +374,10 @@ class CachedEmbeddingProvider:
         )
         return None
 
-    def get_cache_stats(self) -> dict:
+    def get_cache_stats(self) -> dict[str, float | str | int | None]:
+        """Return cache statistics from underlying cache instance.
+
+        Returns dictionary with hit rate, latency metrics, eviction count, etc.
+        See EmbeddingCache.stats() for full field documentation.
+        """
         return self._cache.stats()
