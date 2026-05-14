@@ -59,7 +59,7 @@ AUTHORIZED_READ_PATHS = [
     CEREBRO_FILES_PATH,
 ]
 AUTHORIZED_WRITE_PATHS = [CEREBRO_FILES_PATH]
-PROACTIVE_CONTEXT = os.getenv("CEREBRO_PROACTIVE_CONTEXT", "false").lower() == "true"
+PROACTIVE_CONTEXT = os.getenv("CEREBRO_PROACTIVE_CONTEXT", "true").lower() == "true"
 
 
 def _build_app_state() -> None:
@@ -210,6 +210,7 @@ def _build_app_state() -> None:
         authorized_read_paths=AUTHORIZED_READ_PATHS,
         cerebro_files_path=CEREBRO_FILES_PATH,
         enabled=PROACTIVE_CONTEXT,
+        macos_permissions=app_state.macos_permissions,
     )
 
     runtime = AgentRuntime(

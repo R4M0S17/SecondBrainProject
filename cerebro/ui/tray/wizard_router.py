@@ -10,6 +10,10 @@ Endpoints:
     POST /wizard/step/llamacpp    — check llama.cpp server reachability
     POST /wizard/step/model       — verify GGUF model files exist in bin/models/
     POST /wizard/step/folders     — save watched paths and complete setup
+
+The production tray app uses ``/api/wizard/*`` in ``ui/tray/server.py`` (including
+``POST /api/wizard/reprobe-calendar-permission`` after the user grants Calendar
+Automation). This legacy router is kept for packaging tests and alternate mounts.
 """
 
 from __future__ import annotations
@@ -49,12 +53,31 @@ def wizard_status() -> dict:
 
 @wizard_router.post("/step/llamacpp")
 def wizard_check_llamacpp() -> dict:
-    return {"ok": _session().check_llamacpp()}
+    s = _session()
+    if s.skip_llamacpp_check:
+        return {
+            "ok": True,
+            "status": "skipped",
+            "reason": "Claude API mode — llama.cpp not needed for inference",
+        }
+    return {"ok": s.check_llamacpp()}
 
 
 @wizard_router.post("/step/model")
 def wizard_check_models() -> dict:
-    return {"ok": _session().check_models()}
+    s = _session()
+    if s.skip_models_check:
+        has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        return {
+            "ok": has_key,
+            "status": "skipped",
+            "message": (
+                "ANTHROPIC_API_KEY is set — Claude API ready"
+                if has_key
+                else "Set ANTHROPIC_API_KEY for Claude API inference"
+            ),
+        }
+    return {"ok": s.check_models()}
 
 
 @wizard_router.post("/step/folders")

@@ -7,6 +7,9 @@ without the agent needing to ask.
 from __future__ import annotations
 
 import asyncio
+import os
+import platform
+from datetime import datetime
 from typing import Final, TypedDict
 
 from loguru import logger
@@ -73,10 +76,12 @@ class ContextEnricher:
         cerebro_files_path: str,
         enabled: bool = True,
         language: str = DEFAULT_LANGUAGE,
+        macos_permissions: dict[str, str] | None = None,
     ) -> None:
         self.authorized_read_paths = authorized_read_paths
         self.cerebro_files_path = cerebro_files_path
         self.enabled = enabled
+        self.macos_permissions = macos_permissions
         if language not in LOCALE_TEMPLATES:
             logger.warning(
                 "Unsupported ContextEnricher language '{}'; using '{}'",
@@ -89,22 +94,34 @@ class ContextEnricher:
     async def enrich(self, query: str) -> str:
         """Return a formatted AMBIENT_CONTEXT string for injection into system prompt.
 
-        Calls get_upcoming_events() and search_files() in parallel with timeout.
-        Validates handler return types against schema contracts.
-        Returns partial results if one source fails; empty string if disabled.
+        Calendar reads use asyncio subprocess (kill on timeout). Files use to_thread.
         """
         if not self.enabled:
             return ""
 
-        try:
-            # Import here to avoid circular dependencies
-            from core.tools.handlers.calendar import get_upcoming_events
-            from core.tools.handlers.filesystem import search_files
+        if (
+            self.macos_permissions is not None
+            and self.macos_permissions.get("calendar") == "denied"
+        ):
+            return ""
 
-            # Run both in parallel with timeout protection
+        try:
+            from core.tools.handlers.calendar import format_merged_calendar_result
+            from core.tools.handlers.filesystem import search_files
+            from integrations.calendar_reader import BackendResult, CalendarReader
+
+            ics_path = os.path.expanduser(os.getenv("CEREBRO_ICS", "~/.cerebro/calendar.ics"))
+            reader = CalendarReader(
+                ics_path=ics_path,
+                use_apple_calendar=platform.system() == "Darwin",
+            )
+
+            async def _calendar_branch() -> BackendResult:
+                return await reader.get_upcoming_events_async(48, apple_communicate_timeout=3.0)
+
             results = await asyncio.wait_for(
                 asyncio.gather(
-                    asyncio.to_thread(get_upcoming_events, hours_ahead=48),
+                    _calendar_branch(),
                     asyncio.to_thread(
                         search_files,
                         "*",
@@ -117,46 +134,47 @@ class ContextEnricher:
                 timeout=ENRICH_TIMEOUT_SEC,
             )
 
+            cal_raw = results[0]
+            files_raw = results[1]
+
             events_str = ""
             files_str = ""
             template = LOCALE_TEMPLATES[self.language]
+            now_str = datetime.now().astimezone().strftime("%A %d de %B de %Y, %H:%M %Z")
 
-            # Handle results with type validation and error classification
-            if isinstance(results[0], Exception):
-                logger.debug(
-                    "ContextEnricher: Calendar handler failed: {}", type(results[0]).__name__
-                )
-            elif isinstance(results[0], str):
-                try:
-                    # Validate against handler contract
-                    validated = EventsHandlerResult(content=results[0])
-                    events_str = validated.content
-                except Exception as e:
-                    logger.debug("ContextEnricher: Events result validation failed: {}", e)
+            if isinstance(cal_raw, Exception):
+                logger.debug("ContextEnricher: Calendar async failed: {}", type(cal_raw).__name__)
+            elif isinstance(cal_raw, BackendResult):
+                if cal_raw.status in ("permission_denied", "timeout", "error", "no_calendar") and (
+                    not cal_raw.events
+                ):
+                    events_str = ""
+                elif cal_raw.events:
+                    events_str = format_merged_calendar_result(cal_raw, 48, now_str)
+                else:
+                    events_str = ""
             else:
                 logger.debug(
-                    "ContextEnricher: Calendar handler returned unexpected type: {}",
-                    type(results[0]).__name__,
+                    "ContextEnricher: unexpected calendar result type: {}",
+                    type(cal_raw).__name__,
                 )
 
-            if isinstance(results[1], Exception):
+            if isinstance(files_raw, Exception):
                 logger.debug(
-                    "ContextEnricher: Filesystem handler failed: {}", type(results[1]).__name__
+                    "ContextEnricher: Filesystem handler failed: {}", type(files_raw).__name__
                 )
-            elif isinstance(results[1], str):
+            elif isinstance(files_raw, str):
                 try:
-                    # Validate against handler contract
-                    validated = FilesHandlerResult(content=results[1])
+                    validated = FilesHandlerResult(content=files_raw)
                     files_str = validated.content
                 except Exception as e:
                     logger.debug("ContextEnricher: Files result validation failed: {}", e)
             else:
                 logger.debug(
                     "ContextEnricher: Filesystem handler returned unexpected type: {}",
-                    type(results[1]).__name__,
+                    type(files_raw).__name__,
                 )
 
-            # Format into ambient context section
             parts = []
             has_events = events_str and not any(
                 marker in events_str for marker in template["no_events_markers"]

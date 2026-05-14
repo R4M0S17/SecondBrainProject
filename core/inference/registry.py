@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from enum import Enum
-from typing import TYPE_CHECKING, Protocol, TypedDict, runtime_checkable
+from enum import StrEnum
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast, runtime_checkable
 
 import psutil
 from loguru import logger
@@ -17,7 +17,7 @@ class Message(TypedDict):
     content: str
 
 
-class TaskHint(str, Enum):
+class TaskHint(StrEnum):
     CHAT = "chat"
     EMBEDDING = "embedding"
     CODE = "code"
@@ -128,18 +128,19 @@ class ProviderRegistry:
             f"(minimum {self._ram_threshold_fallback} GB required for inference)"
         )
 
-    async def get_chat_for_agent(
-        self, agent_id: str, model_manager: ModelManager
-    ) -> ChatProvider:
+    async def get_chat_for_agent(self, agent_id: str, model_manager: ModelManager) -> ChatProvider:
         from core.inference.providers.llamacpp_provider import LlamaCppChatProvider
 
         role = _AGENT_TO_ROLE.get(agent_id, "general")
         port = await model_manager.ensure_specialist(role)
         profile = "coding" if role == "code" else "chat"
-        return LlamaCppChatProvider(
-            model=agent_id,
-            base_url=f"http://127.0.0.1:{port}",
-            profile=profile,
+        return cast(
+            ChatProvider,
+            LlamaCppChatProvider(
+                model=agent_id,
+                base_url=f"http://127.0.0.1:{port}",
+                profile=profile,
+            ),
         )
 
     async def get_embedding_provider(

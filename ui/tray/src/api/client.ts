@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 export const AGENT_ID_MAP: Record<AgentId, string> = {
+  auto:     "auto",
   general:  "general-v1",
   thesis:   "academic-v1",
   code:     "code-v1",
@@ -200,12 +201,45 @@ export async function getWizardStatus(): Promise<WizardStatus> {
   return request<WizardStatus>("/api/wizard/status");
 }
 
-export async function wizardCheckLlamaCpp(): Promise<{ running: boolean }> {
-  return request<{ running: boolean }>("/api/wizard/check-llamacpp", { method: "POST" });
+export async function wizardCheckLlamaCpp(): Promise<{
+  running: boolean;
+  skipped?: boolean;
+  status?: string;
+  reason?: string;
+}> {
+  return request<{
+    running: boolean;
+    skipped?: boolean;
+    status?: string;
+    reason?: string;
+  }>("/api/wizard/check-llamacpp", { method: "POST" });
 }
 
-export async function wizardCheckModels(): Promise<{ ok: boolean; message: string }> {
-  return request<{ ok: boolean; message: string }>("/api/wizard/check-models", { method: "POST" });
+export async function wizardCheckModels(): Promise<{
+  ok: boolean;
+  message?: string;
+  detail?: string;
+  skipped?: boolean;
+  status?: string;
+  models?: string[];
+}> {
+  return request<{
+    ok: boolean;
+    message?: string;
+    detail?: string;
+    skipped?: boolean;
+    status?: string;
+    models?: string[];
+  }>("/api/wizard/check-models", { method: "POST" });
+}
+
+export async function wizardReprobeCalendarPermission(): Promise<{
+  calendar: string;
+}> {
+  return request<{ calendar: string }>(
+    "/api/wizard/reprobe-calendar-permission",
+    { method: "POST" },
+  );
 }
 
 export async function wizardSetFolders(

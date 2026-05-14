@@ -158,6 +158,7 @@ class StatusResponse(BaseModel):
     provider_fallbacks: int
     specialist_role: str | None = None
     specialist_loaded: bool = False
+    context_window: int = 0
 
 
 class WizardStatusResponse(BaseModel):
@@ -710,12 +711,14 @@ async def status_endpoint() -> StatusResponse:
     engine_ok = False
     model_name = "—"
     active_provider = "unknown"
+    context_window = 0
     if app_state.provider_registry is not None:
         try:
             chat = app_state.provider_registry.get_chat()
             engine_ok = chat.is_available()
             model_name = chat.model_id()
             active_provider = app_state.provider_registry.primary_name
+            context_window = chat.context_window()
         except Exception:
             pass
 
@@ -751,6 +754,7 @@ async def status_endpoint() -> StatusResponse:
         provider_fallbacks=stats.provider_fallbacks,
         specialist_role=specialist_role,
         specialist_loaded=specialist_loaded,
+        context_window=context_window,
     )
 
 
@@ -902,6 +906,10 @@ _LLAMA_CPP_MODELS_DIR = Path(
 wizard = APIRouter(prefix="/api/wizard")
 
 
+def _wizard_claude_mode() -> bool:
+    return os.getenv("CEREBRO_INFERENCE_BACKEND", "llamacpp").lower() == "claude"
+
+
 async def _llamacpp_running() -> bool:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -913,6 +921,14 @@ async def _llamacpp_running() -> bool:
 
 @wizard.get("/status", response_model=WizardStatusResponse)
 async def wizard_status() -> WizardStatusResponse:
+    if _wizard_claude_mode():
+        has_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+        return WizardStatusResponse(
+            is_first_launch=not app_state._wizard_done,
+            engine_running=True,
+            model_pulled=has_key,
+            folders_configured=bool(app_state._config.get("watched_folders")),
+        )
     running = await _llamacpp_running()
     models_ok = (
         any(_LLAMA_CPP_MODELS_DIR.glob("*.gguf")) if _LLAMA_CPP_MODELS_DIR.exists() else False
@@ -926,16 +942,47 @@ async def wizard_status() -> WizardStatusResponse:
 
 
 @wizard.post("/check-llamacpp")
-async def wizard_check_llamacpp() -> dict[str, bool]:
+async def wizard_check_llamacpp() -> dict[str, Any]:
+    if _wizard_claude_mode():
+        return {
+            "running": True,
+            "status": "skipped",
+            "reason": "Claude API mode — llama.cpp not needed for inference",
+        }
     return {"running": await _llamacpp_running()}
 
 
 @wizard.post("/check-models")
-async def wizard_check_models() -> dict:
+async def wizard_check_models() -> dict[str, Any]:
+    if _wizard_claude_mode():
+        has_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+        return {
+            "ok": has_key,
+            "status": "skipped",
+            "message": (
+                "ANTHROPIC_API_KEY is set — Claude API ready"
+                if has_key
+                else "Set ANTHROPIC_API_KEY for Claude API inference"
+            ),
+            "models": [],
+        }
     if not _LLAMA_CPP_MODELS_DIR.exists():
         return {"ok": False, "detail": f"Models directory not found: {_LLAMA_CPP_MODELS_DIR}"}
     found = list(_LLAMA_CPP_MODELS_DIR.glob("*.gguf"))
     return {"ok": bool(found), "models": [f.name for f in found]}
+
+
+@wizard.post("/reprobe-calendar-permission")
+async def wizard_reprobe_calendar_permission() -> dict[str, str]:
+    """Re-run the Calendar Automation probe (after user grants permission in Settings)."""
+    from core.observability.macos_perms import probe_calendar_permission
+
+    try:
+        state = await probe_calendar_permission()
+    except Exception:
+        state = "unknown"
+    app_state.macos_permissions["calendar"] = state
+    return {"calendar": state}
 
 
 @wizard.post("/set-folders")

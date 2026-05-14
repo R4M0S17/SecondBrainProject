@@ -65,3 +65,7 @@ sandbox_memory_mb = 64
 enabled = "auto"
 chat_model = "mlx-community/Phi-4-mini-instruct-3bit"
 max_tokens = 2048
+
+[claude]
+model = "claude-sonnet-4-6"
+max_tokens = 4096

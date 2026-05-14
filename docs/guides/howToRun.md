@@ -1,5 +1,7 @@
 # How to Run Cerebro (llama.cpp + Frontend)
 
+Spanish version: [`running-es.md`](running-es.md).
+
 You need **3 terminals**. Run them in this order.
 
 ---

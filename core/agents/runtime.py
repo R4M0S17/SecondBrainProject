@@ -4,9 +4,9 @@ import asyncio
 import inspect
 import json
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
 from loguru import logger
@@ -74,6 +74,10 @@ Eres {agent_name}, un agente de IA personal local.
 
 FECHA Y HORA ACTUAL: {current_date} — AÑO ACTUAL: {current_year}
 
+REGLA TEMPORAL: La línea FECHA Y HORA ACTUAL contiene la verdad del momento
+presente. Si el usuario pregunta por la fecha, hora, día o año, responde
+SIEMPRE con esos valores. NUNCA respondas con una fecha de tu entrenamiento.
+
 HISTORIAL COMPRIMIDO DE SESIÓN:
 {session_summary}
 
@@ -108,6 +112,10 @@ Eres {agent_name}, un agente de IA personal local.
 
 FECHA Y HORA ACTUAL: {current_date} — AÑO ACTUAL: {current_year}
 
+REGLA TEMPORAL: La línea FECHA Y HORA ACTUAL contiene la verdad del momento
+presente. Si el usuario pregunta por la fecha, hora, día o año, responde
+SIEMPRE con esos valores. NUNCA respondas con una fecha de tu entrenamiento.
+
 HISTORIAL COMPRIMIDO DE SESIÓN:
 {session_summary}
 
@@ -118,6 +126,12 @@ MEMORIA RECUPERADA:
 
 Responde de forma natural y directa en texto plano. No uses JSON ni ningún formato especial.\
 """
+
+
+def _date_preamble() -> str:
+    """One-line dateline for the LLM user turn only (not persisted in the UI log)."""
+    now = datetime.now().astimezone()
+    return f"[Contexto del sistema: hoy es {now.strftime('%A %d de %B de %Y, %H:%M %Z')}.] "
 
 
 def _build_system_prompt(
@@ -265,14 +279,15 @@ class AgentRuntime:
         messages: list[Message] = [
             {"role": "system", "content": system_prompt},
             *assembled.session_history,
-            {"role": "user", "content": query},
+            {"role": "user", "content": _date_preamble() + query},
         ]
 
         provider_name = self._registry.select_for_task(TaskHint.CHAT)
         chat = self._registry.get_chat(provider_name)
 
         full_tokens: list[str] = []
-        async for token in chat.stream(messages):
+        stream = cast(AsyncIterable[str], chat.stream(messages))
+        async for token in stream:
             full_tokens.append(token)
             yield token
 
@@ -379,7 +394,7 @@ class AgentRuntime:
         messages: list[Message] = [
             {"role": "system", "content": system_prompt},
             *assembled.session_history,
-            {"role": "user", "content": state["query"]},
+            {"role": "user", "content": _date_preamble() + state["query"]},
         ]
 
         return {
@@ -398,7 +413,7 @@ class AgentRuntime:
         )
         chat = self._registry.get_chat(provider_name)
 
-        messages: list[Message] = [Message(**m) for m in state["messages"]]
+        messages: list[Message] = [cast(Message, m) for m in state["messages"]]
         raw_response = await chat.complete(messages)
         logger.debug("Reason node raw response: {}", raw_response[:200])
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from core.tools.handlers.execution import execute_python
@@ -227,7 +229,8 @@ def _vevent_soon(
 
 
 def test_get_upcoming_events_no_ics_returns_no_events_message(tmp_path):
-    result = get_upcoming_events(ics_path=str(tmp_path / "nonexistent.ics"))
+    with patch("core.tools.handlers.calendar.platform.system", return_value="Linux"):
+        result = get_upcoming_events(ics_path=str(tmp_path / "nonexistent.ics"))
     assert "Sin eventos" in result
 
 
@@ -246,7 +249,8 @@ def test_get_upcoming_events_includes_description(tmp_path):
 
 def test_get_upcoming_events_empty_calendar_says_no_events(tmp_path):
     ics = _write_ics(tmp_path, "")
-    result = get_upcoming_events(ics_path=ics)
+    with patch("core.tools.handlers.calendar.platform.system", return_value="Linux"):
+        result = get_upcoming_events(ics_path=ics)
     assert "Sin eventos" in result
 
 

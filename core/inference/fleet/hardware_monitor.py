@@ -25,8 +25,14 @@ def snapshot() -> HardwareSnapshot:
     vm = psutil.virtual_memory()
     ram_total_gb = vm.total / (1024**3)
     ram_available_gb = vm.available / (1024**3)
-    cpu_count = psutil.cpu_count() or 1
-    cpu_percent = psutil.cpu_percent(interval=0.1)
+    try:
+        cpu_count = psutil.cpu_count() or 1
+    except (OSError, PermissionError, SystemError):
+        cpu_count = 1
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+    except (OSError, PermissionError, SystemError):
+        cpu_percent = 0.0
 
     gpu_backend = "none"
     gpu_vram_total_gb = 0.0

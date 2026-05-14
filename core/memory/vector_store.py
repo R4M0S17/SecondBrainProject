@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import Any, cast
 
 import lancedb
 import pyarrow as pa
@@ -116,7 +117,8 @@ class VectorStore:
         filter_expr = f"source_path = '{escaped}'"
         try:
             col = self._table.to_arrow().select(["source_path"])["source_path"]
-            count = int(pc.sum(pc.equal(col, source_path)).as_py() or 0)
+            pc_mod = cast(Any, pc)
+            count = int(pc_mod.sum(pc_mod.equal(col, source_path)).as_py() or 0)
             if count > 0:
                 self._table.delete(filter_expr)
             return count

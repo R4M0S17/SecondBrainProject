@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-import psutil
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -32,7 +31,9 @@ from pydantic import BaseModel, Field
 
 from core.agents.conversation_store import ConversationStore
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
+from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
+from ui.tray.wizard import recommend_lite_profile
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Pydantic models for request / response serialisation
@@ -148,6 +149,8 @@ class StatusResponse(BaseModel):
     model: str
     provider: str
     active_agent: str
+    ram_pressure: Literal["ok", "warn", "critical"] = "ok"
+    ram_total_gb: float = 0.0
     ram_used_gb: float
     ram_available_gb: float
     queries_total: int
@@ -164,6 +167,7 @@ class StatusResponse(BaseModel):
     hardware_snapshot: dict[str, Any] | None = None
     selection_rationale: str | None = None
     context_window: int = 0
+    macos_permissions: dict[str, str] | None = None
 
 
 class WizardStatusResponse(BaseModel):
@@ -171,6 +175,7 @@ class WizardStatusResponse(BaseModel):
     engine_running: bool
     model_pulled: bool
     folders_configured: bool
+    recommend_lite: bool = False
 
 
 class EmbeddingCacheStatsResponse(BaseModel):
@@ -237,6 +242,8 @@ class AppState:
         self._config_file: Path = _state_dir / "config.json"
         self._config: dict[str, Any] = self._load_config()
         self.conv_store: ConversationStore = ConversationStore(str(_state_dir))
+        self.macos_permissions: dict[str, str] = {"calendar": "unknown"}
+        self.ram_monitor: RamMonitor = RamMonitor()
         self._load_wizard_state()
 
     def _load_config(self) -> dict[str, Any]:
@@ -300,6 +307,14 @@ async def _verify_api_key(key: str | None = Security(_API_KEY_HEADER)) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        from core.observability.macos_perms import probe_calendar_permission
+
+        app_state.macos_permissions["calendar"] = await probe_calendar_permission()
+    except Exception:
+        logger.exception("macOS calendar permission probe failed")
+        app_state.macos_permissions["calendar"] = "unknown"
+
     if app_state.model_manager is not None:
         try:
             await app_state.model_manager.start()
@@ -377,6 +392,7 @@ def _meta_to_model(meta: ResponseMetadata) -> ResponseMetadataModel:
 
 @api.post("/query", response_model=QueryResponse)
 async def query_endpoint(req: QueryRequest) -> QueryResponse:
+    _ram_pressure_guard()
     if app_state.runtime is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -470,6 +486,7 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
 
 @api.post("/query/stream")
 async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
+    _ram_pressure_guard()
     if app_state.runtime is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -504,88 +521,18 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
     if stream_conv_id is None or app_state.conv_store.get(stream_conv_id) is None:
         stream_conv_id = app_state.conv_store.create(agent_id)
 
-    # Use runtime.run() (tool loop) for any agent with tools; stream() for tool-less agents.
-    # Checking confirmation-required tools only was a bug: calendar/academic/code agents
-    # need run() regardless of whether they have destructive tools.
+    # Phase 2: always use runtime.run() (tool loop) for /query/stream so live-data
+    # questions invoke tools; token streaming is simulated from the final answer.
     pre_trace_len = 0
-    uses_tools = False
     try:
         _pre = app_state.runtime._state_store.load(agent_id)
-        uses_tools = bool(_pre.profile.authorized_tools)
         pre_trace_len = len(_pre.tool_trace)
     except Exception:
         pass
 
     start = time.perf_counter()
 
-    if uses_tools:
-
-        async def event_generator_tools():
-            nonlocal model_name, provider_name, warnings
-            if app_state.model_manager is not None and app_state.provider_registry is not None:
-                yield f"data: {json.dumps({'event': 'specialist_loading'})}\n\n"
-                try:
-                    _chat = await app_state.provider_registry.get_chat_for_agent(
-                        agent_id, app_state.model_manager
-                    )
-                    model_name = _chat.model_id()
-                    provider_name = "llamacpp"
-                except Exception:
-                    warnings.append("provider_fallback")
-            try:
-                answer, final_state = await app_state.runtime.run(query_text, agent_id)
-            except Exception as exc:
-                logger.exception("Runtime error during /query/stream (tools path)")
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            # Simulate streaming word by word.
-            words = answer.split(" ")
-            for i, word in enumerate(words):
-                token = word + (" " if i < len(words) - 1 else "")
-                yield f"data: {json.dumps({'token': token})}\n\n"
-
-            total_latency_ms = (time.perf_counter() - start) * 1000
-            meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
-            for tc in final_state.tool_trace[pre_trace_len:]:
-                meta.tools_called.append(
-                    ToolCallRecord(
-                        name=tc.tool_name,
-                        args_summary=str(tc.args)[:100] if tc.args else "",
-                        result_summary=(tc.result or "")[:200],
-                        latency_ms=0.0,
-                        approved=True,
-                    )
-                )
-
-            if final_state.pending_tool_name:
-                app_state._pending_tools[stream_conv_id] = {
-                    "tool_name": final_state.pending_tool_name,
-                    "tool_args": final_state.pending_tool_args or {},
-                    "agent_id": agent_id,
-                }
-                meta.pending_tool = {
-                    "name": final_state.pending_tool_name,
-                    "args": final_state.pending_tool_args or {},
-                }
-
-            app_state.metrics.record_query(meta)
-            meta_model = _meta_to_model(meta)
-
-            try:
-                app_state.conv_store.append(
-                    stream_conv_id, query_text, answer, meta_model.model_dump()
-                )
-            except Exception:
-                logger.exception("Failed to persist streaming (tools) turn for {}", stream_conv_id)
-
-            yield f"data: {json.dumps({'metadata': meta_model.model_dump(), 'conversation_id': stream_conv_id})}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(event_generator_tools(), media_type="text/event-stream")
-
-    async def event_generator():
+    async def event_generator_tools():
         nonlocal model_name, provider_name, warnings
         if app_state.model_manager is not None and app_state.provider_registry is not None:
             yield f"data: {json.dumps({'event': 'specialist_loading'})}\n\n"
@@ -597,33 +544,56 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
                 provider_name = "llamacpp"
             except Exception:
                 warnings.append("provider_fallback")
-        tokens: list[str] = []
         try:
-            async for token in app_state.runtime.stream(query_text, agent_id):
-                tokens.append(token)
-                yield f"data: {json.dumps({'token': token})}\n\n"
+            answer, final_state = await app_state.runtime.run(query_text, agent_id)
         except Exception as exc:
-            logger.exception("Streaming error during /query/stream")
+            logger.exception("Runtime error during /query/stream (tools path)")
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             yield "data: [DONE]\n\n"
             return
 
+        # Simulate streaming word by word.
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            token = word + (" " if i < len(words) - 1 else "")
+            yield f"data: {json.dumps({'token': token})}\n\n"
+
         total_latency_ms = (time.perf_counter() - start) * 1000
         meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
+        for tc in final_state.tool_trace[pre_trace_len:]:
+            meta.tools_called.append(
+                ToolCallRecord(
+                    name=tc.tool_name,
+                    args_summary=str(tc.args)[:100] if tc.args else "",
+                    result_summary=(tc.result or "")[:200],
+                    latency_ms=0.0,
+                    approved=True,
+                )
+            )
+
+        if final_state.pending_tool_name:
+            app_state._pending_tools[stream_conv_id] = {
+                "tool_name": final_state.pending_tool_name,
+                "tool_args": final_state.pending_tool_args or {},
+                "agent_id": agent_id,
+            }
+            meta.pending_tool = {
+                "name": final_state.pending_tool_name,
+                "args": final_state.pending_tool_args or {},
+            }
+
         app_state.metrics.record_query(meta)
         meta_model = _meta_to_model(meta)
 
         try:
-            app_state.conv_store.append(
-                stream_conv_id, query_text, "".join(tokens), meta_model.model_dump()
-            )
+            app_state.conv_store.append(stream_conv_id, query_text, answer, meta_model.model_dump())
         except Exception:
-            logger.exception("Failed to persist streaming conversation turn for {}", stream_conv_id)
+            logger.exception("Failed to persist streaming (tools) turn for {}", stream_conv_id)
 
         yield f"data: {json.dumps({'metadata': meta_model.model_dump(), 'conversation_id': stream_conv_id})}\n\n"
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(event_generator_tools(), media_type="text/event-stream")
 
 
 @api.post("/query/plan")
@@ -826,12 +796,21 @@ async def index_status_endpoint(job_id: str) -> IndexStatusResponse:
     )
 
 
+def _ram_pressure_guard() -> None:
+    if app_state.ram_monitor.snapshot()["pressure"] == "critical":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Out of RAM. Lite profile recommended.",
+        )
+
+
 @api.get("/status", response_model=StatusResponse)
 async def status_endpoint() -> StatusResponse:
-    vm = psutil.virtual_memory()
-    ram_total_gb = vm.total / (1024**3)
-    ram_available_gb = vm.available / (1024**3)
-    ram_used_gb = ram_total_gb - ram_available_gb
+    ram_snap = app_state.ram_monitor.snapshot()
+    ram_total_gb = ram_snap["total_gb"]
+    ram_available_gb = ram_snap["available_gb"]
+    ram_used_gb = ram_snap["used_gb"]
+    ram_pressure = ram_snap["pressure"]
 
     engine_ok = False
     model_name = "—"
@@ -894,6 +873,8 @@ async def status_endpoint() -> StatusResponse:
         model=model_name,
         provider=active_provider,
         active_agent=app_state.active_agent_id,
+        ram_pressure=ram_pressure,
+        ram_total_gb=round(ram_total_gb, 2),
         ram_used_gb=round(ram_used_gb, 2),
         ram_available_gb=round(ram_available_gb, 2),
         queries_total=stats.queries_total,
@@ -910,6 +891,7 @@ async def status_endpoint() -> StatusResponse:
         hardware_snapshot=hardware_snapshot,
         selection_rationale=selection_rationale,
         context_window=context_window,
+        macos_permissions=dict(app_state.macos_permissions),
     )
 
 
@@ -1099,6 +1081,7 @@ async def wizard_status() -> WizardStatusResponse:
             engine_running=True,
             model_pulled=has_key,
             folders_configured=bool(app_state._config.get("watched_folders")),
+            recommend_lite=recommend_lite_profile(),
         )
     running = await _llamacpp_running()
     models_ok = (
@@ -1109,6 +1092,7 @@ async def wizard_status() -> WizardStatusResponse:
         engine_running=running,
         model_pulled=models_ok,
         folders_configured=bool(app_state._config.get("watched_folders")),
+        recommend_lite=recommend_lite_profile(),
     )
 
 
@@ -1141,6 +1125,19 @@ async def wizard_check_models() -> dict[str, Any]:
         return {"ok": False, "detail": f"Models directory not found: {_LLAMA_CPP_MODELS_DIR}"}
     found = list(_LLAMA_CPP_MODELS_DIR.glob("*.gguf"))
     return {"ok": bool(found), "models": [f.name for f in found]}
+
+
+@wizard.post("/reprobe-calendar-permission")
+async def wizard_reprobe_calendar_permission() -> dict[str, str]:
+    """Re-run the Calendar Automation probe (after user grants permission in Settings)."""
+    from core.observability.macos_perms import probe_calendar_permission
+
+    try:
+        state = await probe_calendar_permission()
+    except Exception:
+        state = "unknown"
+    app_state.macos_permissions["calendar"] = state
+    return {"calendar": state}
 
 
 @wizard.post("/set-folders")

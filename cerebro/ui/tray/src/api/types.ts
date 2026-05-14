@@ -105,6 +105,7 @@ export interface StatusResponse {
   tool_call_count: number;
   memory_hits: number;
   provider_fallbacks: number;
+  context_window?: number;
   // Fleet orchestrator extensions
   current_model_id?: string;
   quantization?: string;

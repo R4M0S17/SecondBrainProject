@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any, cast
 
 import httpx
 from loguru import logger
@@ -48,7 +49,8 @@ class LlamaCppChatProvider:
                 if response.status_code == 404:
                     raise ModelNotFoundError(f"Model '{self._model}' not found in llama-server")
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"].strip()
+                data = cast(dict[str, Any], response.json())
+                return str(data["choices"][0]["message"]["content"]).strip()
         except httpx.TimeoutException as e:
             raise InferenceTimeoutError("llama-server chat timed out") from e
         except httpx.ConnectError as e:
@@ -91,7 +93,7 @@ class LlamaCppChatProvider:
         try:
             with httpx.Client(timeout=httpx.Timeout(2.0)) as client:
                 response = client.get(f"{self._base_url}/health")
-                return response.status_code == 200
+                return int(response.status_code) == 200
         except Exception:
             logger.debug("llama-server unavailable at {}", self._base_url)
             return False

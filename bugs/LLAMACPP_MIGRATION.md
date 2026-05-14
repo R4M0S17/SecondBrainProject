@@ -175,8 +175,8 @@ Files: `tests/test_providers.py`, `tests/test_api.py`, `tests/test_llamacpp_prov
 - [x] `core/inference/providers/ollama_provider.py` — delete file (no longer imported anywhere after all above steps are done; verify with `grep -r "ollama_provider" .` returning zero results)
 - [x] `core/inference/engine.py` — rename `OllamaUnavailableError` → `LlamaCppUnavailableError`; update `InferenceEngine` class which is Ollama-specific (consider removing or repurposing)
 - [x] `CLAUDE.md` — remove the "Pending Ollama migration" section and update the Testing line
-- [x] `RUNNING.md` — verify no Ollama setup instructions remain
-- [x] `HowToRunIt.md` — N/A (file does not exist)
+- [x] `docs/guides/running-es.md` — verify no Ollama setup instructions remain
+- [x] `docs/guides/howToRun.md` — English runbook (replaces stray `HowToRunIt.md` fragment)
 - [x] Run `grep -rn "ollama\|Ollama\|OLLAMA" . --include="*.py" --include="*.ts" --include="*.tsx" --include="*.toml" --include="*.md"` — result is zero (excluding this migration doc and docs/ history files)
 
 ---

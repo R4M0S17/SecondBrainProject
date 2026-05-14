@@ -310,7 +310,7 @@ def test_reader_deduplicates_same_event_across_backends(tmp_path: Path):
 
     reader = CalendarReader(ics_path=str(p))
     # inject a second backend that returns an identical event
-    duplicate = MagicMock()
+    duplicate = MagicMock(spec=["get_upcoming_events"])
     ical_events = ICalBackend(str(p)).get_upcoming_events(hours_ahead=24)
     duplicate.get_upcoming_events.return_value = ical_events
     reader._backends.append(duplicate)
@@ -322,7 +322,7 @@ def test_reader_deduplicates_same_event_across_backends(tmp_path: Path):
 
 def test_reader_backend_exception_does_not_propagate():
     reader = CalendarReader()
-    bad_backend = MagicMock()
+    bad_backend = MagicMock(spec=["get_upcoming_events"])
     bad_backend.get_upcoming_events.side_effect = RuntimeError("boom")
     reader._backends.append(bad_backend)
 
@@ -336,7 +336,7 @@ def test_reader_includes_birthday_backend_on_macos():
         reader = CalendarReader(use_apple_calendar=True)
     backend_types = [type(b).__name__ for b in reader._backends]
     assert "AppleCalendarBackend" in backend_types
-    assert "BirthdayBackend" in backend_types
+    assert "BirthdayChainBackend" in backend_types
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -566,6 +566,8 @@ def test_birthday_template_includes_fallback_title_scan():
     assert "indexOf" in _JXA_BIRTHDAYS_TEMPLATE
     assert "birthday" in _JXA_BIRTHDAYS_TEMPLATE
     assert "cumpleaños" in _JXA_BIRTHDAYS_TEMPLATE
+    assert "geburtstage" in _JXA_BIRTHDAYS_TEMPLATE.lower()
+    assert "anniversaires" in _JXA_BIRTHDAYS_TEMPLATE.lower()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

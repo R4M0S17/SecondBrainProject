@@ -17,8 +17,29 @@ Respond with ONLY the category word.
 User: {query}
 Category:"""
 
-_VALID_CATEGORIES = {"code", "calendar", "academic", "general"}
 _CATEGORY_RE = re.compile(r"\b(code|calendar|academic|general)\b", re.IGNORECASE)
+
+_INTENT_RE: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(cumple|cumplea|birthday|anniversary)\w*", re.IGNORECASE), "calendar"),
+    (
+        re.compile(
+            r"\b(evento|reuni[oó]n|cita|calendar|hora|d[ií]a|fecha)\w*",
+            re.IGNORECASE,
+        ),
+        "calendar",
+    ),
+    (
+        re.compile(
+            r"\b(c[oó]digo|funci[oó]n|bug|stack ?trace|python|typescript)\w*",
+            re.IGNORECASE,
+        ),
+        "code",
+    ),
+    (
+        re.compile(r"\b(paper|pdf|art[ií]culo|res[uú]me|estudia)\w*", re.IGNORECASE),
+        "academic",
+    ),
+]
 
 
 class LLMRouter:
@@ -26,6 +47,10 @@ class LLMRouter:
         self._base_url = base_url.rstrip("/")
 
     async def classify(self, query: str) -> str:
+        q = query.lower()
+        for pat, cat in _INTENT_RE:
+            if pat.search(q):
+                return cat
         truncated = query[:300]
         payload = {
             "model": "router",

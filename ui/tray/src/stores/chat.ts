@@ -47,7 +47,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isLoading: false,
   abortController: null,
-  activeAgent: "general",
+  activeAgent: "auto",
   pendingConfirmation: null,
 
   addMessage: (msg) => {

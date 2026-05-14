@@ -44,7 +44,7 @@ def test_spotlight_search_no_results(mock_run):
 @patch("integrations.macos_apps.subprocess.run")
 def test_spotlight_search_kind_filter(mock_run):
     mock_run.return_value = MagicMock(returncode=0, stdout="/tmp/doc.pdf\n")
-    result = spotlight_search("report", kind="pdf")
+    spotlight_search("report", kind="pdf")
     args = mock_run.call_args[0][0]
     # kind filter passes a combined mdfind query with the kind predicate
     combined_query = " ".join(args)

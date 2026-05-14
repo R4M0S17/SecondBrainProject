@@ -1,4 +1,3 @@
-
 import pytest
 
 from core.inference.fleet.model_registry import ModelConfig

@@ -261,7 +261,6 @@ async def test_route_with_llm_maps_all_categories():
     """Each category returned by the LLM maps to the correct agent."""
     from unittest.mock import AsyncMock
 
-
     expected = {
         "code": CODE_AGENT_ID,
         "calendar": CALENDAR_AGENT_ID,

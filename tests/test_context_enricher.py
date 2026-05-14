@@ -3,19 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from core.agents.context_enricher import LOCALE_TEMPLATES, ContextEnricher
+from integrations.calendar_reader import BackendResult, CalendarEvent
 
 
-def _make_enricher(enabled: bool = True, language: str = "en") -> ContextEnricher:
+def _sample_event() -> CalendarEvent:
+    t0 = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    return CalendarEvent(title="Meet", start=t0, end=t0 + timedelta(hours=1))
+
+
+def _make_enricher(
+    enabled: bool = True,
+    language: str = "en",
+    macos_permissions: dict[str, str] | None = None,
+) -> ContextEnricher:
     return ContextEnricher(
         authorized_read_paths=["/tmp/test"],
         cerebro_files_path="/tmp/test",
         enabled=enabled,
         language=language,
+        macos_permissions=macos_permissions,
     )
 
 
@@ -23,15 +35,19 @@ def _make_enricher(enabled: bool = True, language: str = "en") -> ContextEnriche
 async def test_enrich_returns_string():
     """enrich() should return a non-empty string when enabled and sources available."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # First call returns events, second call returns files
-        mock_to_thread.side_effect = [
-            "Próximo evento: Reunión a las 14:00",
-            "archivo.txt (5.2 KB, modified 2026-05-12 10:30)",
-        ]
-        result = await enricher.enrich("qué tengo que hacer hoy")
+    br = BackendResult(events=[_sample_event()], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = "archivo.txt (5.2 KB, modified 2026-05-12 10:30)"
+            result = await enricher.enrich("qué tengo que hacer hoy")
         assert isinstance(result, str)
-        assert "Reunión" in result or "archivo" in result
+        assert "archivo" in result
+        assert "Meet" in result or "archivo" in result
 
 
 @pytest.mark.asyncio
@@ -44,43 +60,55 @@ async def test_enrich_disabled_returns_empty():
 
 @pytest.mark.asyncio
 async def test_enrich_empty_sources_returns_empty():
-    """enrich() returns empty if both get_upcoming_events and search_files return nothing."""
+    """enrich() returns empty if both calendar is empty and search_files returns nothing."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # Both calls return empty or "Sin eventos"
-        mock_to_thread.side_effect = ["Sin eventos", ""]
-        result = await enricher.enrich("qué tengo que hacer")
+    br = BackendResult(events=[], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = ""
+            result = await enricher.enrich("qué tengo que hacer")
         assert result == ""
 
 
 @pytest.mark.asyncio
 async def test_enrich_handles_errors_gracefully():
-    """enrich() should not crash if one or both handlers raise exceptions."""
+    """enrich() should not crash if calendar raises and files return."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # First call raises, second returns files
-        mock_to_thread.side_effect = [
-            RuntimeError("Calendar unavailable"),
-            "archivo.txt",
-        ]
-        result = await enricher.enrich("qué tengo que hacer")
-        # Should return a string (not raise)
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Calendar unavailable"),
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = "archivo.txt"
+            result = await enricher.enrich("qué tengo que hacer")
         assert isinstance(result, str)
+        assert "archivo" in result
 
 
 @pytest.mark.asyncio
 async def test_enrich_formats_both_sources():
     """When both sources return content, format them together."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        mock_to_thread.side_effect = [
-            "Próximo evento: Reunión a las 14:00",
-            "archivo.txt (5.2 KB)",
-        ]
-        result = await enricher.enrich("qué tengo que hacer")
+    br = BackendResult(events=[_sample_event()], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = "archivo.txt (5.2 KB)"
+            result = await enricher.enrich("qué tengo que hacer")
         assert LOCALE_TEMPLATES["en"]["events_heading"].format(hours=48) in result
         assert LOCALE_TEMPLATES["en"]["files_heading"] in result
-        assert "Reunión" in result
+        assert "Meet" in result
         assert "archivo.txt" in result
 
 
@@ -88,12 +116,16 @@ async def test_enrich_formats_both_sources():
 async def test_enrich_supports_spanish_locale():
     """Spanish labels remain available via the language setting."""
     enricher = _make_enricher(enabled=True, language="es")
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        mock_to_thread.side_effect = [
-            "Próximo evento: Reunión a las 14:00",
-            "archivo.txt (5.2 KB)",
-        ]
-        result = await enricher.enrich("qué tengo que hacer")
+    br = BackendResult(events=[_sample_event()], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = "archivo.txt (5.2 KB)"
+            result = await enricher.enrich("qué tengo que hacer")
         assert LOCALE_TEMPLATES["es"]["events_heading"].format(hours=48) in result
         assert LOCALE_TEMPLATES["es"]["files_heading"] in result
 
@@ -102,41 +134,56 @@ async def test_enrich_supports_spanish_locale():
 async def test_enrich_unsupported_locale_falls_back_to_english():
     """Unknown languages use English defaults instead of hard-coded labels."""
     enricher = _make_enricher(enabled=True, language="unknown")
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        mock_to_thread.side_effect = [
-            "Next event: Standup at 14:00",
-            "",
-        ]
-        result = await enricher.enrich("what is next")
+    t0 = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    ev = CalendarEvent(title="Standup", start=t0, end=t0 + timedelta(hours=1))
+    br = BackendResult(events=[ev], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = ""
+            result = await enricher.enrich("what is next")
         assert LOCALE_TEMPLATES["en"]["events_heading"].format(hours=48) in result
 
 
 @pytest.mark.asyncio
 async def test_enrich_timeout_returns_empty():
-    """enrich() should return empty string on timeout."""
+    """enrich() should return empty string on outer wait_for timeout."""
+
+    async def slow_cal(*_a, **_k):
+        await asyncio.sleep(10)
+
+    async def slow_files(*args, **kwargs):
+        await asyncio.sleep(10)
+
     enricher = _make_enricher(enabled=True)
 
-    async def mock_to_thread_timeout(*args, **kwargs):
-        await asyncio.sleep(10)  # Longer than ENRICH_TIMEOUT_SEC
-
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        mock_to_thread.side_effect = mock_to_thread_timeout
-        result = await enricher.enrich("what is next")
-        assert result == ""
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        side_effect=slow_cal,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.side_effect = slow_files
+            result = await enricher.enrich("what is next")
+    assert result == ""
 
 
 @pytest.mark.asyncio
 async def test_enrich_partial_results_on_exception():
-    """enrich() should return partial results if one handler raises exception."""
+    """enrich() should return partial results if calendar raises and files succeed."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # First call raises RuntimeError, second returns files
-        mock_to_thread.side_effect = [
-            RuntimeError("Calendar unavailable"),
-            "file1.txt\nfile2.txt",
-        ]
-        result = await enricher.enrich("what files do I have")
-        # Should return files section (not empty)
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Calendar unavailable"),
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = "file1.txt\nfile2.txt"
+            result = await enricher.enrich("what files do I have")
         assert isinstance(result, str)
         assert LOCALE_TEMPLATES["en"]["files_heading"] in result
         assert "file1.txt" in result
@@ -146,46 +193,67 @@ async def test_enrich_partial_results_on_exception():
 async def test_enrich_both_exceptions_returns_empty():
     """enrich() should return empty if both handlers raise exceptions."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # Both calls raise exceptions
-        mock_to_thread.side_effect = [
-            RuntimeError("Calendar error"),
-            RuntimeError("Filesystem error"),
-        ]
-        result = await enricher.enrich("what is next")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Calendar error"),
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.side_effect = RuntimeError("Filesystem error")
+            result = await enricher.enrich("what is next")
         assert result == ""
 
 
 @pytest.mark.asyncio
 async def test_enrich_validates_handler_return_types():
-    """enrich() should validate handler return types against schema."""
+    """enrich() should validate filesystem handler return types against schema."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # Both handlers return valid strings
-        mock_to_thread.side_effect = [
-            "Próximo evento: Reunión a las 14:00",
-            "archivo.txt (5.2 KB)",
-        ]
-        result = await enricher.enrich("qué tengo que hacer")
-        # Both handlers pass validation and return results
+    br = BackendResult(events=[_sample_event()], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = "archivo.txt (5.2 KB)"
+            result = await enricher.enrich("qué tengo que hacer")
         assert isinstance(result, str)
-        assert "Reunión" in result
+        assert "Meet" in result
         assert "archivo.txt" in result
 
 
 @pytest.mark.asyncio
 async def test_enrich_handles_unexpected_handler_return_type():
-    """enrich() should gracefully handle non-string handler returns."""
+    """enrich() should gracefully handle non-string filesystem returns."""
     enricher = _make_enricher(enabled=True)
-    with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-        # Calendar returns dict (unexpected type), files return valid string
-        mock_to_thread.side_effect = [
-            {"unexpected": "dict"},  # Wrong type
-            "archivo.txt",  # Valid string
-        ]
-        result = await enricher.enrich("what do I need to do")
-        # Should skip calendar and return only files
+    br = BackendResult(events=[_sample_event()], status="ok")
+
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+        return_value=br,
+    ):
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            mock_to_thread.return_value = {"unexpected": "dict"}
+            result = await enricher.enrich("what do I need to do")
         assert isinstance(result, str)
-        assert "archivo.txt" in result
-        # Calendar events should not appear
+        assert "Meet" in result
         assert "unexpected" not in result
+
+
+@pytest.mark.asyncio
+async def test_permission_gate_calendar_denied_skips_enricher():
+    """Phase 4.5 — calendar denied in macos_permissions must short-circuit enrich()."""
+    enricher = _make_enricher(
+        enabled=True,
+        macos_permissions={"calendar": "denied"},
+    )
+    with patch(
+        "integrations.calendar_reader.CalendarReader.get_upcoming_events_async",
+        new_callable=AsyncMock,
+    ) as mock_cal:
+        result = await enricher.enrich("hello")
+    assert result == ""
+    mock_cal.assert_not_called()

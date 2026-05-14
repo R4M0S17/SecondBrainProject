@@ -38,7 +38,8 @@ class InferenceEngine:
                 if response.status_code == 404:
                     raise ModelNotFoundError(f"Model '{self.model}' not found")
                 response.raise_for_status()
-                return response.json()["response"].strip()
+                data = response.json()
+                return str(data["response"]).strip()
         except httpx.TimeoutException as e:
             raise InferenceTimeoutError("llama.cpp timed out after 30s") from e
         except httpx.ConnectError as e:
@@ -53,7 +54,8 @@ class InferenceEngine:
                 if response.status_code == 404:
                     raise ModelNotFoundError(f"Embedding model '{self.EMBEDDING_MODEL}' not found")
                 response.raise_for_status()
-                return response.json()["embedding"]
+                raw_emb = response.json()["embedding"]
+                return [float(x) for x in raw_emb]
         except httpx.TimeoutException as e:
             raise InferenceTimeoutError("Embedding timed out after 30s") from e
         except httpx.ConnectError as e:
@@ -83,7 +85,7 @@ class InferenceEngine:
         try:
             with httpx.Client(timeout=httpx.Timeout(5.0)) as client:
                 response = client.get(f"{self.base_url}/health")
-                return response.status_code == 200
+                return int(response.status_code) == 200
         except Exception:
             logger.debug("llama.cpp unavailable at {}", self.base_url)
             return False

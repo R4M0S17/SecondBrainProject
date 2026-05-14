@@ -15,10 +15,11 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import httpx
+import psutil
 from loguru import logger
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ _MODELS_DIR = Path(__file__).parent.parent.parent / "bin" / "models"
 # ── public types ──────────────────────────────────────────────────────────────
 
 
-class WizardStep(str, Enum):
+class WizardStep(StrEnum):
     LLAMACPP = "llamacpp"
     MODEL = "model"
     FOLDERS = "folders"
@@ -38,6 +39,14 @@ class WizardStep(str, Enum):
 
 
 class WizardError(Exception): ...
+
+
+def recommend_lite_profile() -> bool:
+    """True when total system RAM is at most 10 GB (wizard may suggest lite profile)."""
+    try:
+        return psutil.virtual_memory().total <= 10 * 2**30
+    except Exception:
+        return False
 
 
 # ── session ───────────────────────────────────────────────────────────────────
@@ -65,6 +74,14 @@ class WizardSession:
 
     def current_step(self) -> WizardStep:
         return WizardStep.DONE if self._sentinel.exists() else WizardStep.LLAMACPP
+
+    @property
+    def skip_llamacpp_check(self) -> bool:
+        return os.environ.get("CEREBRO_INFERENCE_BACKEND", "").lower() == "claude"
+
+    @property
+    def skip_models_check(self) -> bool:
+        return os.environ.get("CEREBRO_INFERENCE_BACKEND", "").lower() == "claude"
 
     def mark_setup_complete(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

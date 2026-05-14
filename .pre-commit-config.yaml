@@ -15,5 +15,8 @@ repos:
     rev: v1.10.0
     hooks:
       - id: mypy
-        args: [--ignore-missing-imports]
-        additional_dependencies: []
+        args: [--ignore-missing-imports, core]
+        pass_filenames: false
+        exclude: ^cerebro/
+        additional_dependencies:
+          - types-dateparser

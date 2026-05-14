@@ -94,12 +94,13 @@ def test_code_profile_has_correct_id_and_tools():
     assert "create_note" not in profile.authorized_tools
 
 
-def test_general_profile_empty_tools_means_all_enabled():
+def test_general_profile_has_explicit_readonly_tools():
     profile = make_general_profile()
     assert profile.id == GENERAL_AGENT_ID
-    # Empty list = no restriction (all tools enabled) per AgentRuntime contract
-    assert profile.authorized_tools == GENERAL_TOOLS
-    assert profile.authorized_tools == []
+    assert set(profile.authorized_tools) == set(GENERAL_TOOLS)
+    assert "get_upcoming_events" in profile.authorized_tools
+    assert "execute_python" not in profile.authorized_tools
+    assert "write_file" not in profile.authorized_tools
 
 
 def test_profiles_have_non_empty_instructions():
@@ -260,7 +261,6 @@ async def test_route_with_llm_uses_llm_when_no_prefix():
 async def test_route_with_llm_maps_all_categories():
     """Each category returned by the LLM maps to the correct agent."""
     from unittest.mock import AsyncMock
-
 
     expected = {
         "code": CODE_AGENT_ID,

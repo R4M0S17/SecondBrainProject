@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from core.inference.registry import Message
 from core.pipeline.pipeline import Intent, PipelineContext
 
 if TYPE_CHECKING:
@@ -67,7 +68,7 @@ class ToolExecutionStage:
 
         elif self._chat is not None:
             prompt = ctx.prompt or query
-            messages = [{"role": "user", "content": prompt}]
+            messages: list[Message] = [{"role": "user", "content": prompt}]
             ctx.raw_response = await self._chat.complete(messages)
             logger.debug("ToolExecutionStage: direct chat path")
 

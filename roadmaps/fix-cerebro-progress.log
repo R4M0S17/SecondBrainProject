@@ -52,3 +52,18 @@ make lint: FAIL on repo (14 files would be reformatted outside Phase 0 scope); P
 Steps 1.1-1.5 implemented; 1.6 manual smoke deferred (engine+backend).
 post-change RAM check available=1.34GB
 ram_gate_exit=0
+
+=== Phase 2 complete @ 2026-05-14T18:30:00Z ===
+Steps 2.1-2.4: GENERAL_TOOLS allowlist + instructions; /api/query/stream always runtime.run(); UI default agent auto + AGENT_ID_MAP; LLMRouter _INTENT_RE prefilter; tests test_specialized (general tools), test_llm_router, test_api::test_query_stream_calls_runtime_run_not_stream
+pytest tests/: 552 passed (~349s)
+
+=== Phase 3 complete @ 2026-05-14T19:00:00Z ===
+Steps 3.1-3.3: _date_preamble() on LLM user messages (_context_assembly_node + stream); REGLA TEMPORAL in _SYSTEM_TEMPLATE and _STREAM_SYSTEM_TEMPLATE; tests/test_runtime_date_correctness.py
+grep REGLA TEMPORAL core/agents/runtime.py: ok
+.venv/bin/python _date_preamble check: ok
+pytest tests/test_runtime_date_correctness.py: 2 passed
+make test: 554 passed (~905s)
+
+=== Phase 4 complete @ 2026-05-14T19:30:00Z ===
+BackendResult + get_upcoming_events_v2/async; format_merged_calendar_result; macos_perms probe + AppState + lifespan + StatusResponse; ContextEnricher async calendar + denied gate; PROACTIVE_CONTEXT default true; tests test_calendar_reader test_macos_perms; grouped pytest calendar/context/tools: 91 passed
+grep Apple read timeout=60: absent (ok)

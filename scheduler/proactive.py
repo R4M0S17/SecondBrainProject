@@ -18,7 +18,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -29,7 +29,7 @@ from loguru import logger
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class TriggerKind(str, Enum):
+class TriggerKind(StrEnum):
     CALENDAR_REMINDER = "calendar_reminder"
     FILE_CHECKPOINT = "file_checkpoint"
     RESUME_CONTEXT = "resume_context"

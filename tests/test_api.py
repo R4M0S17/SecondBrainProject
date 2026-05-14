@@ -9,6 +9,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from core.agents.conversation_store import ConversationStore
+from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector
 from ui.tray.server import app, app_state
 
@@ -27,6 +28,7 @@ def reset_state(tmp_path):
     app_state.metrics = MetricsCollector()
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
+    app_state.ram_monitor = RamMonitor()
     yield
     app_state.runtime = None
     app_state.vector_store = None
@@ -35,6 +37,7 @@ def reset_state(tmp_path):
     app_state.metrics = MetricsCollector()
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
+    app_state.ram_monitor = RamMonitor()
 
 
 @pytest.fixture
@@ -94,6 +97,9 @@ async def test_status_has_required_fields(client):
         "tool_call_count",
         "memory_hits",
         "provider_fallbacks",
+        "context_window",
+        "ram_pressure",
+        "ram_total_gb",
     ]
     for field in required:
         assert field in data, f"Missing field: {field}"
@@ -113,6 +119,75 @@ async def test_status_ram_fields_are_positive_numbers(client):
     data = resp.json()
     assert data["ram_used_gb"] >= 0
     assert data["ram_available_gb"] > 0
+    assert data["ram_pressure"] in ("ok", "warn", "critical")
+    assert data["ram_total_gb"] > 0
+
+
+@pytest.mark.asyncio
+async def test_ram_pressure_503_on_query_when_critical(client, mock_runtime):
+    mon = MagicMock()
+    mon.snapshot.return_value = {
+        "pressure": "critical",
+        "used_gb": 14.0,
+        "available_gb": 0.5,
+        "total_gb": 16.0,
+    }
+    app_state.ram_monitor = mon
+    async with client as c:
+        resp = await c.post("/api/query", json={"question": "hi", "agent": "general-v1"})
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Out of RAM. Lite profile recommended."
+    mock_runtime.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ram_pressure_503_on_query_stream_when_critical(client, mock_runtime):
+    mon = MagicMock()
+    mon.snapshot.return_value = {
+        "pressure": "critical",
+        "used_gb": 14.0,
+        "available_gb": 0.5,
+        "total_gb": 16.0,
+    }
+    app_state.ram_monitor = mon
+    mock_runtime.stream = MagicMock()
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "hello", "agent": "general-v1"},
+        )
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "Out of RAM. Lite profile recommended."
+    mock_runtime.run.assert_not_called()
+    mock_runtime.stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wizard_check_llamacpp_skipped_when_claude_backend(client, monkeypatch):
+    monkeypatch.setenv("CEREBRO_INFERENCE_BACKEND", "claude")
+    async with client as c:
+        resp = await c.post("/api/wizard/check-llamacpp")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["running"] is True
+    assert data["status"] == "skipped"
+    assert "reason" in data
+
+
+@pytest.mark.asyncio
+async def test_wizard_check_models_skipped_reflects_api_key(client, monkeypatch):
+    monkeypatch.setenv("CEREBRO_INFERENCE_BACKEND", "claude")
+    async with client as c:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        resp = await c.post("/api/wizard/check-models")
+        assert resp.json()["ok"] is False
+        assert resp.json().get("status") == "skipped"
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        resp2 = await c.post("/api/wizard/check-models")
+    body = resp2.json()
+    assert body["ok"] is True
+    assert body.get("status") == "skipped"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -364,6 +439,21 @@ async def test_query_without_model_manager_uses_get_chat(client, mock_runtime):
     assert resp.status_code == 200
     registry.get_chat.assert_called_once()
     assert resp.json()["metadata"]["model_used"] == "phi3:mini"
+
+
+@pytest.mark.asyncio
+async def test_query_stream_calls_runtime_run_not_stream(client, mock_runtime):
+    """Phase 2: /api/query/stream always uses runtime.run(), not runtime.stream()."""
+    mock_runtime.stream = MagicMock()
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "hello", "agent": "general-v1"},
+        )
+        assert resp.status_code == 200
+        await resp.aread()
+    mock_runtime.run.assert_awaited_once()
+    mock_runtime.stream.assert_not_called()
 
 
 @pytest.mark.asyncio

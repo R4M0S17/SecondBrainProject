@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from loguru import logger
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 
 
-class Intent(str, Enum):
+class Intent(StrEnum):
     RAG_QUERY = "rag_query"
     AGENT_ACTION = "agent_action"
     DIRECT_ACTION = "direct_action"

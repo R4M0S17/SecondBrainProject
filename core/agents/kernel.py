@@ -12,7 +12,7 @@ import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, StateGraph
 from loguru import logger
@@ -160,7 +160,7 @@ class CerebroKernel:
 
     async def _reason_node(self, state: _GraphState) -> dict:
         iterations = state["iterations"] + 1
-        messages: list[Message] = [Message(**m) for m in state["messages"]]
+        messages: list[Message] = [cast(Message, m) for m in state["messages"]]
         raw = await self._provider.complete(messages)
         logger.debug("reason_node raw: {}", raw[:200])
 
@@ -224,8 +224,8 @@ class CerebroKernel:
         }
 
     async def _observe_node(self, state: _GraphState) -> dict:
-        result = state.get("_tool_result", "(sin resultado)")  # type: ignore[call-overload]
-        tool_name = state.get("next_tool", "herramienta")  # type: ignore[call-overload]
+        result = state.get("_tool_result", "(sin resultado)")
+        tool_name = state.get("next_tool", "herramienta")
         obs: dict = {"role": "user", "content": f"[Resultado de {tool_name}]: {result}"}
         return {
             "messages": list(state["messages"]) + [obs],

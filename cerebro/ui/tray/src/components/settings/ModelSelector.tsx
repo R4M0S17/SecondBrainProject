@@ -66,6 +66,9 @@ export default function ModelSelector() {
         <p className="text-[10px] font-mono uppercase tracking-widest text-[#928ea0] mb-1 px-1">
           Cloud · Claude API
         </p>
+        <p className="text-[11px] text-[#c9c4d7] px-1 mb-2">
+          Claude API — model managed by env var
+        </p>
         <div className="space-y-1">
           {CLAUDE_MODELS.map((m) => (
             <div

@@ -17,13 +17,28 @@ export default function StepModel({ onReady }: StepModelProps) {
     setState("checking");
     onReady(false);
     try {
-      const [{ ok, message: msg }, { models: found }] = await Promise.all([
+      const [modelRes, llamaModels] = await Promise.all([
         wizardCheckModels(),
         getLlamaCppModels(),
       ]);
-      setMessage(msg);
+      const { models: found } = llamaModels;
+
+      if (modelRes.status === "skipped") {
+        setMessage(modelRes.message ?? "");
+        setModels([]);
+        if (modelRes.ok) {
+          setState("ok");
+          onReady(true);
+        } else {
+          setState("missing");
+          onReady(false);
+        }
+        return;
+      }
+
+      setMessage(modelRes.message ?? modelRes.detail ?? "");
       setModels(found);
-      if (ok) {
+      if (modelRes.ok) {
         setState("ok");
         onReady(true);
       } else {

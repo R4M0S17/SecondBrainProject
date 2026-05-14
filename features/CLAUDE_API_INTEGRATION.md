@@ -45,7 +45,7 @@ Existing `llamacpp` vars are ignored when `CEREBRO_INFERENCE_BACKEND=claude`. Th
 
 ## Implementation Path (Ordered Modules)
 
-### Module C1 — Dependency
+### Module C1 — Dependency ✅ DONE
 
 **File:** `cerebro/pyproject.toml`
 
@@ -54,11 +54,11 @@ Add to `[project.dependencies]`:
 anthropic>=0.40.0
 ```
 
-Then run `make install` to update `.venv`.
+Added `anthropic>=0.40.0` to both tracked `pyproject.toml` copies. Then run `make install` to update `.venv`.
 
 ---
 
-### Module C2 — Claude API Chat Provider
+### Module C2 — Claude API Chat Provider ✅ DONE
 
 **New file:** `cerebro/core/inference/providers/claude_api_provider.py`
 
@@ -169,151 +169,61 @@ def _split_system(messages: list[Message]) -> tuple[str, list[dict]]:
 - `cache_control: ephemeral` on the system prompt activates prompt caching — Anthropic caches system prompt tokens across calls, reducing cost on repeated queries.
 - Embeddings are **not** implemented here. Claude API has no embeddings endpoint. The existing `LlamaCppEmbeddingProvider` handles all embedding calls in both modes.
 - `_split_system` converts Cerebro's flat `Message` list (which includes a `role=system` entry) into the format Anthropic's API expects (`system=` param + `messages=` list).
+- Provider implementation added in both tracked code trees: `core/inference/providers/claude_api_provider.py` and `cerebro/core/inference/providers/claude_api_provider.py`.
 
 ---
 
-### Module C3 — Wire Into main.py
+### Module C3 — Wire Into main.py ✅ DONE
 
-**File:** `cerebro/main.py`
+**Files:** `main.py` (repo root) and `cerebro/main.py`
 
-In the section that builds the `ProviderRegistry`, add a branch for the `claude` backend. The embedding provider registration stays unchanged.
-
-Locate the existing block that checks `CEREBRO_INFERENCE_BACKEND`:
-
-```python
-# EXISTING pattern (simplified):
-if backend == "llamacpp":
-    chat_provider = LlamaCppChatProvider(...)
-    registry.register("llamacpp", chat=chat_provider, embed=embed_provider)
-```
-
-Add after the existing `elif mlx` branch:
-
-```python
-elif backend == "claude":
-    from core.inference.providers.claude_api_provider import ClaudeApiChatProvider
-    claude_model = os.environ.get("CEREBRO_CLAUDE_MODEL", "claude-sonnet-4-6")
-    chat_provider = ClaudeApiChatProvider(model=claude_model)
-    # Embeddings stay local — LancDB needs them; Claude API has no embed endpoint
-    registry.register("claude", chat=chat_provider, embed=embed_provider)
-    logger.info("Inference: Claude API ({})", claude_model)
-```
-
-`embed_provider` is whatever was already constructed (the llamacpp embedding provider). This means **the embedding server must still be started** (`make engine-embed`) even in Claude mode.
+When `CEREBRO_INFERENCE_BACKEND=claude`, the app registers `ClaudeApiChatProvider` with the existing local `LlamaCppEmbeddingProvider` (from `CEREBRO_LLAMACPP_EMBED_URL`), calls `registry.set_primary("claude")`, and skips llama.cpp chat / MLX-only setup.
 
 ---
 
-### Module C4 — Config: settings.toml & CLAUDE.md
+### Module C4 — Config: settings.toml & CLAUDE.md ✅ DONE
 
-**File:** `cerebro/settings.toml`
+**Files:** `config/settings.toml`, `cerebro/config/settings.toml`, `CLAUDE.md`, `cerebro/CLAUDE.md`
 
-Add a `[claude]` section:
-
-```toml
-[claude]
-model = "claude-sonnet-4-6"   # override with CEREBRO_CLAUDE_MODEL or ANTHROPIC env var
-max_tokens = 4096
-```
-
-**File:** `cerebro/CLAUDE.md`
-
-In the **Config** table, add two new rows:
-
-```
-CEREBRO_INFERENCE_BACKEND   claude              # new: routes inference to Anthropic API
-CEREBRO_CLAUDE_MODEL        claude-sonnet-4-6   # which Claude model; default is sonnet-4-6
-ANTHROPIC_API_KEY           sk-ant-...          # required when backend=claude
-```
-
-Also update the **Inference backends** section to add:
-
-```
-- `claude` + `ANTHROPIC_API_KEY`: routes all chat inference to Anthropic API.
-  Embeddings still require the local llamacpp embed server (`make engine-embed`).
-  Set CEREBRO_CLAUDE_MODEL to override the model (default: claude-sonnet-4-6).
-```
+Added a `[claude]` table (`model`, `max_tokens`) to both settings files. Agent docs now list `CEREBRO_INFERENCE_BACKEND` values including `claude`, `CEREBRO_CLAUDE_MODEL`, `ANTHROPIC_API_KEY`, and an **Inference backends** bullet for Claude + local embeddings.
 
 ---
 
-### Module C5 — Surface Provider in /api/status
+### Module C5 — Surface Provider in /api/status ✅ DONE
 
-**File:** `cerebro/ui/tray/server.py`
+**Files:** `ui/tray/server.py`, `cerebro/ui/tray/server.py`
 
-The existing `/api/status` endpoint already returns `provider: str`. No structural change needed — when `claude` is registered as primary in `ProviderRegistry`, `registry.primary_name` already returns `"claude"`. The status response will automatically reflect `"provider": "claude"`.
-
-Verify the `model` field also works: `registry.get_chat().model_id()` returns `"claude-sonnet-4-6"` from the new provider.
-
-If the status response also returns `context_window`, it will correctly show `200000` from `ClaudeApiChatProvider.context_window()`.
+`/api/status` already exposed `provider` and `model` from the primary chat provider. Added **`context_window`** (from `chat.context_window()`) so Claude mode surfaces **200000** alongside `provider: "claude"` and the configured model id.
 
 ---
 
-### Module C6 — Frontend: Engine Indicator
+### Module C6 — Frontend: Engine Indicator ✅ DONE
 
-**File:** `cerebro/ui/tray/src/components/status/EngineIndicator.tsx`
+**Files:** `ui/tray/src/components/status/EngineIndicator.tsx`, `cerebro/ui/tray/src/components/status/EngineIndicator.tsx`, `ui/tray/src/components/settings/ModelSelector.tsx`, `cerebro/ui/tray/src/components/settings/ModelSelector.tsx`, `ui/tray/src/api/types.ts`, `cerebro/ui/tray/src/api/types.ts`
 
-The `EngineIndicator` component reads `provider` from the status store. Add a display branch for Claude:
-
-```tsx
-// In the provider label map or switch:
-case "claude":
-  return <span className="engine-badge engine-claude">Claude API</span>;
-```
-
-Add a CSS class `engine-claude` with a purple/violet color to visually distinguish it from the local (green) indicator.
-
-**File:** `cerebro/ui/tray/src/components/settings/ModelSelector.tsx`
-
-When the status store reports `provider === "claude"`, show a static label ("Claude API — model managed by env var") instead of the local model picker dropdown, since model selection happens via `CEREBRO_CLAUDE_MODEL`, not the UI.
+- **EngineIndicator:** `provider === "claude"` shows the purple “Claude API” badge; root container includes the **`engine-claude`** class for styling hooks.
+- **ModelSelector:** When `selectIsClaudeMode(status)` is true, shows the cloud panel plus the explicit line **“Claude API — model managed by env var”** (catalog rows remain informational only).
+- **Types:** `StatusResponse` includes optional **`context_window`**.
 
 ---
 
-### Module C7 — Wizard Skip Logic
+### Module C7 — Wizard Skip Logic ✅ DONE
 
-**File:** `cerebro/ui/tray/wizard.py` and `wizard_router.py`
+**Files:** `ui/tray/wizard.py`, `cerebro/ui/tray/wizard.py`, `ui/tray/wizard_router.py`, `cerebro/ui/tray/wizard_router.py`, `ui/tray/server.py`, `cerebro/ui/tray/server.py`, `ui/tray/src/api/client.ts`, `cerebro/ui/tray/src/api/client.ts`, `ui/tray/src/components/wizard/StepLlamaCpp.tsx`, `cerebro/ui/tray/src/components/wizard/StepLlamaCpp.tsx`, `ui/tray/src/components/wizard/StepModel.tsx`, `cerebro/ui/tray/src/components/wizard/StepModel.tsx`
 
-The wizard's `check-llamacpp` step verifies that llama.cpp is installed. When `CEREBRO_INFERENCE_BACKEND=claude`, this check should be skipped (or show a "Using Claude API — llama.cpp not required for inference" message).
-
-In `WizardSession`:
-
-```python
-@property
-def skip_llamacpp_check(self) -> bool:
-    return os.environ.get("CEREBRO_INFERENCE_BACKEND") == "claude"
-```
-
-In `wizard_router.py`, on the `check-llamacpp` route:
-
-```python
-if wizard.skip_llamacpp_check:
-    return {"status": "skipped", "reason": "Claude API mode — llama.cpp not needed for inference"}
-```
-
-The `check-models` step should similarly be skipped or report Claude model availability based on `ANTHROPIC_API_KEY` presence instead.
+- **`WizardSession`:** `skip_llamacpp_check` and `skip_models_check` when `CEREBRO_INFERENCE_BACKEND=claude` (case-insensitive).
+- **`wizard_router`:** `POST .../step/llamacpp` and `.../step/model` return skip payloads with `ok` / `message` as appropriate.
+- **`/api/wizard/*` in `server.py`:** `_wizard_claude_mode()` gates `GET /status`, `POST /check-llamacpp`, and `POST /check-models` so Claude mode skips llama health and uses `ANTHROPIC_API_KEY` for the models step.
+- **Frontend:** Wizard steps read `status: "skipped"` from the tray API and show Claude-specific copy; `wizardCheckModels` / `wizardCheckLlamaCpp` typings extended.
 
 ---
 
-### Module C8 — Tests
+### Module C8 — Tests ✅ DONE
 
-**New file:** `cerebro/tests/test_claude_api_provider.py`
+**Files:** `tests/test_claude_api_provider.py`, `tests/test_api.py` (wizard skip coverage)
 
-Mock the `anthropic.AsyncAnthropic` client at the constructor level (same pattern as existing provider tests).
-
-Tests to write:
-
-```python
-# test_complete_returns_text
-# test_stream_yields_tokens
-# test_is_available_false_when_no_api_key
-# test_is_available_true_when_key_set
-# test_complete_raises_on_auth_error
-# test_complete_raises_on_connection_error
-# test_split_system_separates_system_message
-# test_split_system_no_system_message
-# test_model_id_returns_configured_model
-# test_context_window_200k
-```
-
-All tests mock `anthropic.AsyncAnthropic` — no live API calls. Follow the existing pattern from `tests/test_llamacpp_provider.py` using `unittest.mock.AsyncMock`.
+- **`tests/test_claude_api_provider.py`:** Mocks `anthropic.AsyncAnthropic`; covers `complete`, `stream`, availability, auth/connection errors, `_split_system`, `model_id`, and `context_window`. Runs even when the `anthropic` package is not installed (minimal stub in the test module).
+- **`tests/test_api.py`:** `POST /api/wizard/check-llamacpp` and `check-models` behavior under `CEREBRO_INFERENCE_BACKEND=claude`.
 
 ---
 
@@ -371,14 +281,33 @@ No code changes are needed to switch — it's purely an environment variable.
 
 | File | Action |
 |---|---|
+| `pyproject.toml` | Add `anthropic>=0.40.0` dependency (root copy) |
 | `cerebro/pyproject.toml` | Add `anthropic>=0.40.0` dependency |
-| `cerebro/core/inference/providers/claude_api_provider.py` | **Create** — new provider |
-| `cerebro/main.py` | Add `elif backend == "claude"` branch |
-| `cerebro/settings.toml` | Add `[claude]` section |
+| `core/inference/providers/claude_api_provider.py` | **Create** — new provider |
+| `cerebro/core/inference/providers/claude_api_provider.py` | **Create** — mirrored provider copy |
+| `main.py` | Add `claude` inference branch |
+| `cerebro/main.py` | Add `claude` inference branch |
+| `config/settings.toml` | Add `[claude]` section |
+| `cerebro/config/settings.toml` | Add `[claude]` section |
+| `CLAUDE.md` | Document new env vars and backend option |
 | `cerebro/CLAUDE.md` | Document new env vars and backend option |
-| `cerebro/ui/tray/server.py` | Verify (likely no change needed) |
-| `cerebro/ui/tray/src/components/status/EngineIndicator.tsx` | Add Claude badge |
-| `cerebro/ui/tray/src/components/settings/ModelSelector.tsx` | Hide picker in Claude mode |
-| `cerebro/ui/tray/wizard.py` | Add `skip_llamacpp_check` property |
-| `cerebro/ui/tray/wizard_router.py` | Skip llama.cpp check when in Claude mode |
-| `cerebro/tests/test_claude_api_provider.py` | **Create** — 10 unit tests |
+| `ui/tray/server.py` | `/api/status` `context_window`; `/api/wizard/*` Claude mode (C5/C7) |
+| `cerebro/ui/tray/server.py` | Same as root `server.py` |
+| `ui/tray/src/api/types.ts` | `StatusResponse.context_window` |
+| `cerebro/ui/tray/src/api/types.ts` | Same |
+| `ui/tray/src/components/status/EngineIndicator.tsx` | Claude branch + `engine-claude` class |
+| `cerebro/ui/tray/src/components/status/EngineIndicator.tsx` | Same |
+| `ui/tray/src/components/settings/ModelSelector.tsx` | Cloud panel + env-var line |
+| `cerebro/ui/tray/src/components/settings/ModelSelector.tsx` | Same |
+| `tests/test_api.py` | `/api/status` + wizard Claude-mode API tests |
+| `tests/test_claude_api_provider.py` | **Create** — Claude provider unit tests (mocked SDK) |
+| `ui/tray/wizard.py` | `skip_llamacpp_check` / `skip_models_check` |
+| `cerebro/ui/tray/wizard.py` | Same |
+| `ui/tray/wizard_router.py` | Skip llama + model steps in Claude mode |
+| `cerebro/ui/tray/wizard_router.py` | Same |
+| `ui/tray/src/api/client.ts` | Wizard check response typings |
+| `cerebro/ui/tray/src/api/client.ts` | Same |
+| `ui/tray/src/components/wizard/StepLlamaCpp.tsx` | Skipped-check UI |
+| `cerebro/ui/tray/src/components/wizard/StepLlamaCpp.tsx` | Same |
+| `ui/tray/src/components/wizard/StepModel.tsx` | Skipped models check + `detail` fallback |
+| `cerebro/ui/tray/src/components/wizard/StepModel.tsx` | Same |

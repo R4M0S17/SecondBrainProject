@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from functools import partial
 
 from core.agents.state_store import AgentProfile
 
 
-class ToolScope(str, Enum):
+class ToolScope(StrEnum):
     LOCAL = "local"
     SANDBOXED = "sandboxed"
     RESTRICTED = "restricted"
 
 
-class AuditLevel(str, Enum):
+class AuditLevel(StrEnum):
     NONE = "none"
     METADATA = "metadata"
     FULL = "full"

@@ -1,4 +1,4 @@
-.PHONY: install test run lint engine engine-code engine-deep package-backend package-macos package-windows
+.PHONY: install test run lint lite engine engine-lite engine-code engine-deep package-backend package-macos package-windows
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -16,7 +16,15 @@ test:
 run:
 	$(PYTHON) main.py
 
+lite:
+	set -a; . config/profiles/lite-8gb.env; set +a; \
+	$(PYTHON) main.py
+
 engine:
+	./bin/start_engine.sh chat
+
+engine-lite:
+	set -a; . config/profiles/lite-8gb.env; set +a; \
 	./bin/start_engine.sh chat
 
 engine-code:

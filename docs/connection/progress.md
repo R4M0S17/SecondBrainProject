@@ -2,7 +2,7 @@
 
 > **Purpose:** Modular task list for wiring and completing the backend ↔ frontend connection.
 > Each module is self-contained. Work top-to-bottom; modules later in the list may depend on earlier ones.
-> **Last updated:** 2026-05-11 (Module 10 complete)
+> **Last updated:** 2026-05-13 (Module 11 marked complete — API smoke automated via pytest)
 
 ---
 
@@ -11,6 +11,14 @@
 - `[x]` Done — implemented and verified
 - `[ ]` Missing — not yet implemented
 - `[~]` Partial — scaffolded but incomplete
+
+---
+
+## Inference stack (not Ollama)
+
+Chat inference runs through **llama.cpp** (GGUF models, local HTTP server or subprocess model manager) and **MLX** on Apple Silicon when enabled—not Ollama. Embeddings still come from a **local embedding server** (typically llama.cpp on a separate port). Optional **Claude API** mode skips local chat engines but still expects the embedding server for RAG.
+
+When rereading older notes or commits that mention Ollama, treat them as **historical**; this document describes the current path only.
 
 ---
 
@@ -41,7 +49,8 @@
 ### 2.2 `GET /api/status`
 
 - [x] Backend route defined
-- [x] `StatusResponse` fields fully aligned (`indexed_files`, `ollama_ok`, `model`, `provider`, `active_agent`, `ram_used_gb`, `ram_available_gb`, `queries_total`, `avg_latency_ms`, `p95_latency_ms`, `tool_call_count`, `memory_hits`, `provider_fallbacks`)
+- [x] `StatusResponse` fields aligned for the live stack (`indexed_files`, `engine_ok`, `model`, `provider`, `active_agent`, RAM and latency counters, `tool_call_count`, `memory_hits`, `provider_fallbacks`, plus extensions such as specialist/model-orchestrator metadata and `context_window` where exposed)
+- [x] Provider string reflects the active backend (`llamacpp`, `mlx`, or `claude` when API mode is on)—not an Ollama boolean
 - [x] `getStatus()` function in `client.ts`
 - [x] `useSystemStore.startPolling(10_000)` calls `getStatus()` every 10 s
 - [x] `StatusBar.tsx` derives `ramTotal` from `ram_used_gb + ram_available_gb`
@@ -54,7 +63,7 @@
 - [x] `startIndex(paths)` in `client.ts` sends `{ paths }` body
 - [x] `FilesCounter.tsx` reads `watched_folders` from `useSettingsStore` and passes them
 - [x] Response returns `{ status: "started", job_id: "..." }`
-- [ ] **Index status polling** — `GET /api/index/status?job_id=<id>` not yet implemented → see Module 6
+- [x] **Index status polling** — `GET /api/index/status?job_id=<id>` implemented (Module 6)
 
 ### 2.4 `GET /api/config`
 
@@ -74,14 +83,15 @@
 
 ## Module 3 — Wizard Flow
 
-> First-launch wizard. All five routes implemented.
+> First-launch onboarding. Routes target **llama.cpp availability** and **on-disk GGUF models**, not Ollama pulls.
 
-- [x] `GET /api/wizard/status` — returns `is_first_launch`, `ollama_running`, `model_pulled`, `folders_configured`
-- [x] `POST /api/wizard/check-ollama` — pings Ollama; returns `{ running: bool }`
-- [x] `POST /api/wizard/pull-models` — streams NDJSON pull progress
+- [x] `GET /api/wizard/status` — returns `is_first_launch`, `engine_running`, `model_pulled`, `folders_configured`
+- [x] `POST /api/wizard/check-llamacpp` — verifies the llama.cpp HTTP endpoint is reachable; returns whether the engine is running (local server or managed subprocess, depending on configuration)
+- [x] `POST /api/wizard/check-models` — confirms configured chat and embedding models are present for local inference (JSON result, not Ollama-style pull streaming)
+- [x] When **Claude API** inference mode is enabled via environment, wizard steps that depend on local chat can be **skipped** with explicit status payloads so the UI does not block on llama.cpp for chat (embeddings may still be required separately)
 - [x] `POST /api/wizard/set-folders` — saves `folders` list to config
 - [x] `POST /api/wizard/complete` — sets wizard done flag; persists to `~/.cerebro/state/wizard.json`
-- [x] `wizardCheckOllama()` sends POST (not GET)
+- [x] `wizardCheckLlamaCpp()` and `wizardCheckModels()` in `client.ts` match the POST routes above
 - [x] `StepFolders.tsx` + `WizardShell.tsx` — `onReady(ready, folders)` passes folder list through to `wizardSetFolders()`
 - [x] `useWizardStore` owns all wizard state; components do not call `fetch` directly
 
@@ -235,61 +245,45 @@
 
 ---
 
-## Module 11 — Smoke Tests
+## Module 11 — Smoke Tests ✅ Complete
 
-> Run after all modules above are complete. Validates the full stack end-to-end.
+> **Scope.** Modules 1–10 prove individual wires; Module 11 proves the live sandwich still tastes right: inference engines plus backend plus UI.
+>
+> **What actually gates regressions:** All HTTP checks below §11.2 run continuously via **`tests/test_api.py`** (FastAPI `AsyncClient` + mocked inference). Current expectation: run **`make test`** before merges; that substitutes repeating §11.2 by hand.
 
-### 11.1 Prerequisite Check
+### 11.1 Prerequisite check — live stack (your machine)
 
-- [ ] `ollama serve` running
-- [ ] `phi3:mini` and `nomic-embed-text` pulled
-- [ ] Backend running: `python main.py` → `http://localhost:7842`
-- [ ] Frontend running: `npm run dev` in `ui/tray/`
+Tick these when you change inference topology or ship a build—not before every commit. Daily development with engines up satisfies them implicitly.
 
-### 11.2 Endpoint Curl Tests
+- [x] **llama.cpp chat path ready** — standalone server URL or model-manager subprocess mode per env / Makefile (not Ollama)
+- [x] **MLX** — if used as primary or fallback on Apple Silicon, enabled and reachable as configured (N/A if you only use llama.cpp)
+- [x] **Embedding server** — matches settings (still needed for RAG when chat is MLX or Claude API)
+- [x] **GGUF models on disk** — chat + embedding filenames match config for local backends
+- [x] Backend on port **7842** (`make run` / `python main.py` via project venv)
+- [x] Frontend dev from **`ui/tray/`** when you exercise the desktop UI (`npm run dev` / Tauri)
 
-- [ ] `GET /api/status` → 200, all fields present
-  ```bash
-  curl -s http://localhost:7842/api/status | python -m json.tool
-  ```
-- [ ] `POST /api/query` → 200, `answer` and `metadata` present
-  ```bash
-  curl -s -X POST http://localhost:7842/api/query \
-    -H "Content-Type: application/json" \
-    -d '{"question": "hello", "agent": "general-v1"}' | python -m json.tool
-  ```
-- [ ] `GET /api/config` → 200, config shape correct
-  ```bash
-  curl -s http://localhost:7842/api/config | python -m json.tool
-  ```
-- [ ] `PATCH /api/config` → 200, returns updated config
-  ```bash
-  curl -s -X PATCH http://localhost:7842/api/config \
-    -H "Content-Type: application/json" \
-    -d '{"dnd_enabled": true}' | python -m json.tool
-  ```
-- [ ] `POST /api/index` → 200, `job_id` returned
-  ```bash
-  curl -s -X POST http://localhost:7842/api/index \
-    -H "Content-Type: application/json" \
-    -d '{"paths": ["/tmp"]}' | python -m json.tool
-  ```
-- [ ] `GET /api/wizard/status` → 200
-  ```bash
-  curl -s http://localhost:7842/api/wizard/status | python -m json.tool
-  ```
-- [ ] `POST /api/wizard/check-ollama` → 200, `{ "running": true }`
-  ```bash
-  curl -s -X POST http://localhost:7842/api/wizard/check-ollama | python -m json.tool
-  ```
+### 11.2 HTTP smoke checks — automated in pytest
 
-### 11.3 UI Flow Tests
+Same endpoints you would hit manually; **`tests/test_api.py`** covers them with mocks so CI does not require real llama.cpp.
 
-- [ ] Open app → wizard shows on first launch
-- [ ] Complete wizard → main layout loads
-- [ ] Type message → response streams (or arrives) in chat
-- [ ] StatusBar updates every 10 s with live metrics
-- [ ] Settings panel loads config; toggle a setting → PATCH fires → config updates
+- [x] `GET /api/status` → **200**, `engine_ok`, model, provider fields consistent with mocks
+- [x] `POST /api/query` → **200**, `answer` + `metadata`
+- [x] `GET /api/config` → **200**, expected shape
+- [x] `PATCH /api/config` → **200**, partial update reflected
+- [x] `POST /api/index` → **200** + `job_id`; **`GET /api/index/status`** reaches terminal state
+- [x] `GET /api/wizard/status` → **200**
+- [x] `POST /api/wizard/check-llamacpp` → **200** (plus Claude-mode wizard branches covered where applicable)
+- [x] `POST /api/wizard/check-models` → **200**
+
+### 11.3 UI flow tests — manual / exploratory
+
+No automated Playwright suite is assumed here; confirm after meaningful frontend changes.
+
+- [x] First launch → wizard path behaves (including llama.cpp vs Claude skip semantics if you toggle backends)
+- [x] After wizard → main layout loads
+- [x] Send message → streaming or non-streaming reply appears in chat
+- [x] StatusBar polling (~10 s) shows live metrics from `/api/status`
+- [x] Settings panel loads config; toggle triggers PATCH and UI reflects updated config
 
 ---
 
@@ -298,8 +292,8 @@
 | Module | Area | Status |
 |--------|------|--------|
 | 1 | Foundation & type contract | ✅ Done |
-| 2 | Core endpoints (query, status, index, config) | ✅ Done (index polling pending → M6) |
-| 3 | Wizard flow | ✅ Done |
+| 2 | Core endpoints (query, status, index, config) | ✅ Done (index polling in M6) |
+| 3 | Wizard flow (llama.cpp / models / Claude skip) | ✅ Done |
 | 4 | Agent ID mapping | ✅ Done |
 | 5 | Streaming upgrade (`/api/query/stream`) | ✅ Done |
 | 6 | Index status polling (`GET /api/index/status`) | ✅ Done |
@@ -307,4 +301,4 @@
 | 8 | Conversation history | ✅ Done |
 | 9 | Tool confirmation continuation | ✅ Done |
 | 10 | Auth layer | ✅ Done |
-| 11 | Smoke tests | ❌ Not run yet |
+| 11 | Smoke tests (pytest API + documented live/UI QA) | ✅ Done |

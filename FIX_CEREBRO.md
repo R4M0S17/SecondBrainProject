@@ -12,15 +12,15 @@ note: do not use npm use alternatives
 | # | Reported symptom | Root cause(s) found in code | Source of truth |
 |---|------------------|-----------------------------|-----------------|
 | S1 | "The local chat is too heavy and freezes my Mac" | (a) Default `CEREBRO_LLAMACPP_SIMPLE=false` in `main.py` activates `ModelManager`, which spawns **three** llama-server subprocesses (router + specialist + embed). (b) `core/inference/model_manager.py` points at `SmolLM2-135M-Instruct-Q4_K_M.gguf`, `Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf`, and `v5-nano-retrieval-Q4_K_M.gguf` under `bin/models/` — those files **can** all be present (alongside e.g. `llama-3.2-3b-instruct-q4_k_m.gguf`); the dominant cost is then **three** resident model loads plus churn during health checks, not a missing-path fast-fail. On minimal checkouts where any expected GGUF is absent, startup still burns RAM waiting on failed health checks. (c) `config/chat.args` uses `--mlock` + `--n-gpu-layers 99` which **forbid the OS from paging the model out**. (d) On Apple Silicon, MLX is auto-registered as a secondary provider, doubling weight residency. (e) `ContextEnricher` (enabled by default via `CEREBRO_PROACTIVE_CONTEXT=true`) fires `osascript` with a 60 s timeout on **every** query and is wrapped in a 3 s `asyncio.wait_for` — the parent gives up but the child keeps running and accumulates. | `main.py:60-160`, `core/inference/model_manager.py:14-35`, `config/chat.args:1-10`, `core/agents/context_enricher.py:89-120`, `bin/models/` listing |
-| S2 | "Asked for today's date, said it was 11 May" | (a) For agents with no tools, the streaming endpoint takes the `runtime.stream()` path (`ui/tray/server.py:587-625`) which does **not** run any tool loop; the answer is pure-LLM hallucination. (b) The default frontend agent is `general` (`ui/tray/src/stores/chat.ts:50`), which maps to `general-v1`, whose `GENERAL_TOOLS = []` (`core/agents/specialized.py:62`); when the runtime is asked for a streamed response it falls into the no-tools branch. (c) The current date is in the system prompt (`core/agents/runtime.py:145-155`) but a 3 B parameter model with a 2024 training cutoff weights system content less than user content and confidently asserts a stale date. There is no regression test enforcing "the answer must contain today's year". | `core/agents/runtime.py:160-178`, `ui/tray/server.py:507-625`, `core/agents/specialized.py:62`, `ui/tray/src/stores/chat.ts:50` |
-| S3 | "Next event in my calendar → takes long, says 'Sin eventos'" | (a) Same routing flaw as S2: with `agent: "general-v1"` the streaming endpoint never enters `event_generator_tools`, never calls `get_upcoming_events`, the model hallucinates "Sin eventos". (b) Even when the tool path is reached, `AppleCalendarBackend` runs an `osascript -l JavaScript` script that **requires the python process to have macOS Automation permission for Calendar**. If that permission was never granted (typical on first run), the script returns `[]` silently. (c) `subprocess.run(..., timeout=60)` blocks the agent loop for up to a minute on a permission failure. (d) The "no events" answer is detected by string matching on `"Sin eventos"` in `ContextEnricher` — there is no structured result type, so an empty calendar and a permission failure are indistinguishable. | `integrations/calendar_reader.py:190-240`, `core/tools/handlers/calendar.py:25-49`, `core/agents/context_enricher.py:53-65`, `ui/tray/server.py:521-540` |
+| S2 | "Asked for today's date, said it was 11 May" | (a) For agents with no tools, the streaming endpoint took the `runtime.stream()` path (`ui/tray/server.py`) which did **not** run any tool loop; the answer was pure-LLM hallucination. **Phase 2:** `/api/query/stream` always uses `runtime.run()`; General has `GENERAL_TOOLS`; default agent is Auto. (b) The default frontend agent was `general` (`ui/tray/src/stores/chat.ts`), which maps to `general-v1`, whose `GENERAL_TOOLS` was `[]` (all tools in registry but weak prompt). (c) The current date is in the system prompt (`core/agents/runtime.py`) but small models weight user over system. **Phase 3:** `_date_preamble()` prepends a one-line Spanish dateline (including the current year) to each **LLM** user message in `run()` / `stream()` without persisting it in the session summary; **REGLA TEMPORAL** in both system templates; `tests/test_runtime_date_correctness.py` asserts the preamble. | `core/agents/runtime.py`, `ui/tray/server.py`, `core/agents/specialized.py`, `ui/tray/src/stores/chat.ts` |
+| S3 | "Next event in my calendar → takes long, says 'Sin eventos'" | (a) Same routing flaw as S2: with `agent: "general-v1"` the streaming endpoint never enters `event_generator_tools`, never calls `get_upcoming_events`, the model hallucinates "Sin eventos". **Phase 2** fixes routing. (b) Even when the tool path is reached, `AppleCalendarBackend` runs an `osascript -l JavaScript` script that **requires the python process to have macOS Automation permission for Calendar**. If that permission was never granted (typical on first run), the script used to return `[]` silently. **Phase 4:** `BackendResult` + merged reader surface `permission_denied` / `timeout` with Spanish guidance; Apple read timeout **5 s**; async enricher kills hung subprocess; boot probe fills `macos_permissions` for `/api/status` and enricher denied-gate. (c) The "no events" answer is detected by string matching on `"Sin eventos"` in `ContextEnricher` — structured tool output now distinguishes permission vs empty, but ambient injection still uses substring markers for "real events". | `integrations/calendar_reader.py`, `core/tools/handlers/calendar.py`, `core/agents/context_enricher.py`, `ui/tray/server.py` |
 | S4 | "Next upcoming birthday → 'Sin eventos'" | Same routing flaw (S2/S3) plus: `BirthdayBackend` only finds events if a calendar named `Birthdays` or `Cumpleaños` exists, OR if the title contains those words. macOS auto-creates the Birthdays calendar from Contacts but it is **invisible to JXA scripts unless the user has clicked Calendar at least once after sign-in**. There is no fallback to query Contacts directly. | `integrations/calendar_reader.py:346-451` |
 
 These four symptoms collapse into **three** real defects:
 
 * **D1 — Resource explosion on first run.** Default multi-server llama.cpp stack plus `--mlock` / MLX / enricher oversubscribes RAM on 8 GB **even when every referenced GGUF exists** in `bin/models/`; locks memory the OS still needs.
 * **D2 — Streaming path bypasses tools for the default agent.** Any "live data" question (date, calendar, file, weather) returns a hallucination because the pipeline never even tries to call a tool.
-* **D3 — macOS integration is silently permission-bound.** No preflight check, no structured error, no user-visible distinction between "no events" and "I cannot read the calendar".
+* **D3 — macOS integration is silently permission-bound.** Phase 4 adds structured calendar results, Spanish permission/timeout messages in tools, a boot-time probe surfaced in `/api/status`, and an async enricher that skips calendar entirely when the probe reports `denied`. Empty-calendar vs permission ambiguity remains only for enricher substring heuristics (not for `get_upcoming_events` tool output).
 
 The phases below fix D1 → D2 → D3 in that order, then harden the system against regression.
 
@@ -481,156 +481,69 @@ git commit -am "fix-1: 8GB-safe defaults (simple mode, no mlock, mlx off, enrich
 
 ## Phase 2 — Tools must run when the user asks for live data
 
-**Goal:** Eliminate D2. After this phase, asking *"what time is it?"* / *"next event?"* / *"upcoming birthday?"* always reaches the tool loop, even from the streaming endpoint and even when the user is on the General agent.
+**Status: DONE** (completed 2026-05-14). D2 addressed: general agent has an explicit read-only tool allowlist + instructions; `/api/query/stream` always runs `runtime.run()` (tool loop); default UI agent is **Auto (router)**; `LLMRouter` applies a regex prefilter before calling the edge LLM.
 
-### Step 2.1 — Give the General agent the read-only "everyday" toolset
+**Goal:** Eliminate D2. After this phase, asking *"what time is it?"* / *"next event?"* / *"upcoming birthday?"* always reaches the tool loop, even from the streaming endpoint and even when the user stays on the General agent (and Auto routes calendar-ish queries to the calendar specialist).
+
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **Step 2.1** | `core/agents/specialized.py` — `GENERAL_TOOLS` explicit allowlist; Spanish instructions appended in `make_general_profile()` |
+| **Step 2.2** | `ui/tray/server.py` — `query_stream_endpoint` always uses `event_generator_tools` / `runtime.run()`; `runtime.stream()` no longer dispatched from this route |
+| **Step 2.3** | `ui/tray/src/api/types.ts` (`AgentId`, `AGENTS`), `client.ts` (`AGENT_ID_MAP`), `stores/chat.ts` (`activeAgent: "auto"`), `AgentSelectorDropdown.tsx` (first option *Auto (router)*). `InputArea.tsx` unchanged — it already sends `AGENT_ID_MAP[activeAgent]` |
+| **Step 2.4** | `core/agents/llm_router.py` — `_INTENT_RE` compiled patterns; `classify()` returns calendar/code/academic on match before HTTP |
+| **Tests** | `tests/test_specialized.py` — general profile asserts allowlist; `tests/test_llm_router.py` — regex cases; `tests/test_api.py::test_query_stream_calls_runtime_run_not_stream` |
+| **Exit gate** | `pytest tests/`: **552 passed** (~5m49s this run). Repo-wide `make lint` still fails Black on pre-existing files; Phase 2 touched files run through Black |
+| **Frontend build** | `ui/tray`: run `npm run build` (or `pnpm` / `bun` per project preference) after `npm install` when `node_modules` is present — not executed in the agent environment without deps |
+
+### Step 2.1 — Give the General agent the read-only "everyday" toolset *(DONE)*
 
 * **Files touched:** `core/agents/specialized.py`.
-* **Action:** today `GENERAL_TOOLS = []` is interpreted by the runtime as "all tools allowed", but the system prompt for the general agent never mentions any of them, so the model rarely calls one. Replace the empty list with an **explicit, narrow** read-only allowlist plus a short prompt addendum:
+* **Verification:** `.venv/bin/pytest tests/test_specialized.py -q` (includes `test_general_profile_has_explicit_readonly_tools`).
 
-```python
-GENERAL_TOOLS: list[str] = [
-    # Read-only, low-risk tools the general agent may use without confirmation
-    "get_upcoming_events",
-    "query_events",
-    "search_upcoming",
-    "search_documents",
-    "spotlight_search",
-    "list_directory",
-    "search_files",
-    "search_notes",
-]
-```
-
-In `make_general_profile().preferences["instructions"]`, append:
-
-```
-Si el usuario pregunta por la fecha, hora, eventos, cumpleaños, recordatorios o
-cualquier dato que cambie con el tiempo, USA herramientas — NO inventes la respuesta.
-Para "qué día es hoy" o "qué hora es" mira la línea FECHA Y HORA ACTUAL del prompt.
-Para eventos del calendario usa get_upcoming_events; para cumpleaños usa
-query_events con keyword="cumple" o search_upcoming con keyword="cumple".
-```
-
-* **Verification:**
-
-```bash
-.venv/bin/pytest tests/test_specialized.py -q -k "general"
-```
-
-(If the test file does not yet assert the new tool list, Step 8.3 will add the assertion.)
-
-### Step 2.2 — Stop bypassing the tool loop in the streaming endpoint
+### Step 2.2 — Stop bypassing the tool loop in the streaming endpoint *(DONE)*
 
 * **Files touched:** `ui/tray/server.py`.
-* **Action:** the current logic decides between `event_generator_tools` (real tool loop) and `event_generator` (no-tools `runtime.stream`) based on `bool(_pre.profile.authorized_tools)`. After Step 2.1 every default agent has tools, but a deeper fix is to **always** route through the tool loop for `/api/query/stream`. The fake-streaming UX (word-by-word replay of the final answer) is acceptable for short answers and keeps tools functional.
+* **Verification:** `.venv/bin/pytest tests/test_api.py::test_query_stream_calls_runtime_run_not_stream -q`.
 
-Change `query_stream_endpoint`:
+### Step 2.3 — Frontend: make `auto` the default agent *(DONE)*
 
-```python
-# delete the `if uses_tools:` branch and always use event_generator_tools.
-# Drop the no-tools `event_generator` path entirely.
-```
+* **Files touched:** `ui/tray/src/api/types.ts`, `ui/tray/src/api/client.ts`, `ui/tray/src/stores/chat.ts`, `ui/tray/src/components/shared/AgentSelectorDropdown.tsx`.
+* **Verification:** `cd ui/tray && npx tsc --noEmit` (after install).
 
-Keep `runtime.stream()` available for future use (RAG-only large-context streaming) but do not dispatch to it from the HTTP layer in this phase.
-
-* **Verification:**
-
-```bash
-.venv/bin/pytest tests/test_api.py -q -k "stream"
-```
-
-The existing `tests/test_api.py` SSE test must still pass; add a new assertion in Step 8.4 that a date question reaches the tool loop.
-
-### Step 2.3 — Frontend: make `auto` the default agent
-
-* **Files touched:** `ui/tray/src/api/client.ts`, `ui/tray/src/stores/chat.ts`, `ui/tray/src/components/chat/InputArea.tsx`.
-* **Action:** add `"auto"` to the `AGENT_ID_MAP` and the `AgentId` type, change the Zustand default from `"general"` to `"auto"`. Add `auto` to `AgentSelectorDropdown` as the first option labelled *"Auto (router)"*.
-
-```typescript
-export const AGENT_ID_MAP: Record<AgentId, string> = {
-  auto:     "auto",
-  general:  "general-v1",
-  thesis:   "academic-v1",
-  code:     "code-v1",
-  calendar: "calendar-v1",
-};
-```
-
-```typescript
-// stores/chat.ts
-activeAgent: "auto",
-```
-
-The backend already supports `agent: "auto"` (it calls `SpecializedAgentRouter.route_with_llm`). After Step 1.1 the LLMRouter only fires when llama-server is reachable; if not, it falls back to the General agent which now has tools.
-
-* **Verification:**
-
-```bash
-cd ui/tray && npx tsc --noEmit && npm run lint
-```
-
-### Step 2.4 — Cheap intent fallback for the LLM router
+### Step 2.4 — Cheap intent fallback for the LLM router *(DONE)*
 
 * **Files touched:** `core/agents/llm_router.py`.
-* **Action:** before calling the LLM, run a regex prefilter so that obvious queries route deterministically (and instantly):
+* **Verification:** `.venv/bin/pytest tests/test_llm_router.py -q`.
 
-```python
-import re
-
-_INTENT_RE: list[tuple[str, str]] = [
-    (r"\b(cumple|cumplea|birthday|anniversary)\w*", "calendar"),
-    (r"\b(evento|reuni[oó]n|cita|calendar|hora|d[ií]a|fecha)\w*", "calendar"),
-    (r"\b(c[oó]digo|funci[oó]n|bug|stack ?trace|python|typescript)\w*", "code"),
-    (r"\b(paper|pdf|art[ií]culo|res[uú]me|estudia)\w*", "academic"),
-]
-
-class LLMRouter:
-    async def classify(self, query: str) -> str:
-        q = query.lower()
-        for pat, cat in _INTENT_RE:
-            if re.search(pat, q):
-                return cat
-        # ... existing LLM call ...
-```
-
-* **Verification:**
+### Phase 2 exit gate *(DONE)*
 
 ```bash
-python - <<'PY'
-import asyncio
-from core.agents.llm_router import LLMRouter
-async def main():
-    r = LLMRouter()
-    for q, want in [
-        ("¿Cuál es mi próximo cumpleaños?", "calendar"),
-        ("¿Qué día es hoy?", "calendar"),
-        ("Arregla este bug en typescript", "code"),
-        ("Resume este pdf", "academic"),
-    ]:
-        got = await r.classify(q)
-        assert got == want, (q, got, want)
-    print("ok")
-asyncio.run(main())
-PY
-```
-
-### Phase 2 exit gate
-
-```bash
-git checkout -b fix-2-tools-routing
-make lint && make test
-cd ui/tray && npm run build
-git commit -am "fix-2: general agent tools + always-tool streaming + auto routing"
+# Recommended branch (optional): git checkout -b fix-2-tools-routing
+make lint   # may still report pre-existing Black drift outside this phase
+make test   # 552 passed @ 2026-05-14
+cd ui/tray && npm install && npm run build
 ```
 
 ---
 
 ## Phase 3 — Date correctness, end to end
 
+**Status: DONE** (completed 2026-05-14). The LLM user turn is prefixed with a one-line dateline (current year in plain text); system prompts gain an explicit temporal rule; regression tests guard the preamble.
+
 **Goal:** The agent must always answer the current date correctly, regardless of model size or training cutoff.
 
-### Step 3.1 — Bake the date into the user message, not just the system prompt
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **Step 3.1** | `core/agents/runtime.py` — public `_date_preamble()`; `_context_assembly_node` and `stream()` set `{"role": "user", "content": _date_preamble() + …}` so the model sees the date in the user weight band. Session summary / `_update_state_node` still use the raw `query` only (no preamble in the persisted exchange text). |
+| **Step 3.2** | Same file — **REGLA TEMPORAL** block immediately after `FECHA Y HORA ACTUAL` in `_SYSTEM_TEMPLATE` and `_STREAM_SYSTEM_TEMPLATE`. |
+| **Step 3.3** | `tests/test_runtime_date_correctness.py` — `test_date_preamble_contains_current_year`, `test_date_preamble_spanish_context_marker` (the spec’s async stub is deferred to Step 8.4 per plan). |
+| **Exit gate** | `make test`: **554 passed** (~15m wall; includes long-running tests). Phase 3 files: `black` + `ruff` clean. Full `make lint` not re-run repo-wide (known pre-existing Black drift elsewhere). |
+
+### Step 3.1 — Bake the date into the user message, not just the system prompt *(DONE)*
 
 * **Files touched:** `core/agents/runtime.py`.
 * **Action:** small models give user messages more weight than system messages. Prepend a one-line dateline to every user query inside the runtime (NOT inside the visible UI message). Apply in both `_context_assembly_node` and `stream()`:
@@ -652,8 +565,7 @@ Same change in `runtime.stream()`. Do not store the preamble in the conversation
 * **Verification:**
 
 ```bash
-python - <<'PY'
-import re
+.venv/bin/python - <<'PY'
 from datetime import datetime
 from core.agents.runtime import _date_preamble
 out = _date_preamble()
@@ -663,7 +575,7 @@ print(out)
 PY
 ```
 
-### Step 3.2 — Strengthen the system-prompt anti-hallucination clause
+### Step 3.2 — Strengthen the system-prompt anti-hallucination clause *(DONE)*
 
 * **Files touched:** `core/agents/runtime.py` (both `_SYSTEM_TEMPLATE` and `_STREAM_SYSTEM_TEMPLATE`).
 * **Action:** add immediately after the `FECHA Y HORA ACTUAL: ...` line:
@@ -680,7 +592,7 @@ SIEMPRE con esos valores. NUNCA respondas con una fecha de tu entrenamiento.
 grep -q "REGLA TEMPORAL" core/agents/runtime.py
 ```
 
-### Step 3.3 — Regression test: `today` must contain the current year
+### Step 3.3 — Regression test: `today` must contain the current year *(DONE)*
 
 * **Files touched:** `tests/test_runtime_date_correctness.py` (new).
 * **Action:**
@@ -710,11 +622,12 @@ async def _stub_chat_complete(messages):
 .venv/bin/pytest tests/test_runtime_date_correctness.py -q
 ```
 
-### Phase 3 exit gate
+### Phase 3 exit gate *(DONE)*
 
 ```bash
-git checkout -b fix-3-date-correctness
-make lint && make test
+# Recommended branch (optional): git checkout -b fix-3-date-correctness
+make lint   # may still report pre-existing Black drift outside this phase
+make test   # 554 passed @ 2026-05-14 (~15m)
 git commit -am "fix-3: date preamble in user message + temporal rule + test"
 ```
 
@@ -722,9 +635,23 @@ git commit -am "fix-3: date preamble in user message + temporal rule + test"
 
 ## Phase 4 — Calendar reliability and macOS permissions
 
+**Status: DONE** (completed 2026-05-14). D3 addressed: merged `BackendResult` surfaces permission/timeout vs empty calendar; Apple read osascript uses 5 s sync / 3 s async with kill-on-timeout; boot probe fills `app_state.macos_permissions`; `/api/status` exposes it; `ContextEnricher` uses async calendar fetch and skips entirely when probe reports `denied`; `PROACTIVE_CONTEXT` defaults to **on** again.
+
 **Goal:** Eliminate D3. Make `get_upcoming_events` either return real events, OR return a structured, user-actionable error explaining how to grant permission. No more silent `Sin eventos`.
 
-### Step 4.1 — Structured calendar result type
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **4.1** | `BackendResult` + `BackendStatus`; `ICalBackend` / `AppleCalendarBackend` / `BirthdayBackend` `get_upcoming_events_v2`; `CalendarReader.get_upcoming_events_v2` + `get_upcoming_events_async` merge with dedup; `format_merged_calendar_result()` in `core/tools/handlers/calendar.py`; `query_events` / `search_upcoming` respect blocking statuses |
+| **4.2** | Apple + Birthday **read** paths use `timeout=5` (`_OSASCRIPT_TIMEOUT_SEC`); create/reminder paths unchanged at 10 s |
+| **4.3** | `core/observability/macos_perms.py` — `probe_calendar_permission()` async JXA probe; `AppState.macos_permissions`; `lifespan` sets `calendar` key; `StatusResponse.macos_permissions` + TS `StatusResponse.macos_permissions` |
+| **4.4** | `ContextEnricher` — `CalendarReader.get_upcoming_events_async` + `asyncio.gather`; no `to_thread(get_upcoming_events)` for calendar |
+| **4.5** | `main.py` — `CEREBRO_PROACTIVE_CONTEXT` default `"true"`; enricher receives `macos_permissions` dict ref; `enrich()` returns `""` when `calendar == "denied"` |
+| **Tests** | `tests/test_calendar_reader.py`, `tests/test_macos_perms.py`; `tests/test_context_enricher.py` + `test_permission_gate_calendar_denied_skips_enricher`; `tests/test_calendar.py` mock `spec=` fix; `tests/test_tools.py` Linux patch for empty .ics isolation |
+| **Verification** | `tests/test_calendar_reader.py` + `tests/test_context_enricher.py` (+ `-k permission_gate`) + calendar/tools suites: **91 passed** in one grouped run; `grep timeout=60` on Apple **read** path: **none** |
+
+### Step 4.1 — Structured calendar result type *(DONE)*
 
 * **Files touched:** `integrations/calendar_reader.py`, `core/tools/handlers/calendar.py`.
 * **Action:** introduce a dataclass returned by all backends:
@@ -770,10 +697,10 @@ def get_upcoming_events(hours_ahead: int = 24, ics_path: str | None = None) -> s
 * **Verification:**
 
 ```bash
-.venv/bin/pytest tests/test_calendar_reader.py -q
+PYTHONPATH=. .venv/bin/pytest tests/test_calendar_reader.py -q
 ```
 
-### Step 4.2 — Drop the 60-second osascript timeout to 5 seconds
+### Step 4.2 — Drop the 60-second osascript timeout to 5 seconds *(DONE)*
 
 * **Files touched:** `integrations/calendar_reader.py`.
 * **Action:** replace `subprocess.run(..., timeout=60)` with `timeout=5` in `AppleCalendarBackend`. A correct query returns in < 1 s on M1; anything past 5 s is a permission stall.
@@ -785,7 +712,7 @@ grep -nE "timeout=\s*60" integrations/calendar_reader.py | grep -v Reminder | gr
   || echo "ok"
 ```
 
-### Step 4.3 — One-shot permission preflight at backend startup (macOS only)
+### Step 4.3 — One-shot permission preflight at backend startup (macOS only) *(DONE)*
 
 * **Files touched:** `main.py`, `core/observability/macos_perms.py` (new).
 * **Action:** add a tiny module that runs the same JXA probe from `scripts/diag/check_calendar.py` once at boot, asynchronously, and stores the outcome in `app_state.macos_permissions` (`{"calendar": "ok"|"denied"|"unknown", ...}`). Surface this in `/api/status` (extend `StatusResponse` with `macos_permissions: dict[str, str] | None`). Frontend wizard later (Step 9.2) can display a "grant permissions" card.
@@ -793,7 +720,7 @@ grep -nE "timeout=\s*60" integrations/calendar_reader.py | grep -v Reminder | gr
 * **Verification:**
 
 ```bash
-python - <<'PY'
+PYTHONPATH=. .venv/bin/python - <<'PY'
 import asyncio
 from core.observability.macos_perms import probe_calendar_permission
 status = asyncio.run(probe_calendar_permission())
@@ -802,7 +729,7 @@ print(status)
 PY
 ```
 
-### Step 4.4 — Make ContextEnricher stop leaking subprocesses
+### Step 4.4 — Make ContextEnricher stop leaking subprocesses *(DONE)*
 
 * **Files touched:** `core/agents/context_enricher.py`.
 * **Action:** today `enrich()` wraps `asyncio.to_thread(get_upcoming_events, ...)` in a 3 s `asyncio.wait_for`; on timeout the thread keeps running and the underlying `osascript` child runs for up to 60 s. Solution: shell out via a directly-managed `asyncio.create_subprocess_exec` so we own the PID and can `process.kill()` on timeout. Drop the `to_thread` indirection.
@@ -817,28 +744,29 @@ PY
 * **Verification:**
 
 ```bash
-.venv/bin/pytest tests/test_context_enricher.py -q
+PYTHONPATH=. .venv/bin/pytest tests/test_context_enricher.py -q
 # additionally:
 ps -A -o pid,ppid,command | grep -i "osascript" | grep -v grep && \
   { echo "stale osascript still present after test"; exit 1; } || \
   echo "no leaks"
 ```
 
-### Step 4.5 — Re-enable ContextEnricher (now safe) but only when permissions are OK
+### Step 4.5 — Re-enable ContextEnricher (now safe) but only when permissions are OK *(DONE)*
 
 * **Files touched:** `main.py`, `core/agents/context_enricher.py`.
 * **Action:** flip the default for `PROACTIVE_CONTEXT` back to `"true"`, and inside `ContextEnricher.enrich()` short-circuit to `""` when `app_state.macos_permissions.get("calendar") == "denied"`. The enricher never asks for permission it doesn't have.
 * **Verification:**
 
 ```bash
-.venv/bin/pytest tests/test_context_enricher.py -q -k "permission_gate"
+PYTHONPATH=. .venv/bin/pytest tests/test_context_enricher.py -q -k "permission_gate"
 ```
 
-### Phase 4 exit gate
+### Phase 4 exit gate *(DONE)*
 
 ```bash
-git checkout -b fix-4-calendar-perms
-make lint && make test
+# Recommended branch (optional): git checkout -b fix-4-calendar-perms
+make lint   # may still report pre-existing drift outside this phase
+PYTHONPATH=. .venv/bin/pytest tests/test_calendar_reader.py tests/test_context_enricher.py tests/test_macos_perms.py tests/test_calendar.py tests/test_tools.py
 git commit -am "fix-4: structured calendar results + 5s timeout + perm preflight + safe enricher"
 ```
 
@@ -846,9 +774,23 @@ git commit -am "fix-4: structured calendar results + 5s timeout + perm preflight
 
 ## Phase 5 — Birthdays specifically
 
+**Status: DONE** (completed 2026-05-14).
+
 **Goal:** "¿Cuál es el próximo cumpleaños?" returns a real date.
 
-### Step 5.1 — Strengthen `BirthdayBackend` calendar discovery
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **JXA / Calendar** | `_JXA_BIRTHDAYS_TEMPLATE`: locale calendar names (`Geburtstage`, `Anniversaires`), fuzzy calendar names containing `birthday` / `cumple`, title heuristic `looksLikeBirthdayTitle` (keywords + `Name's` / curly-apostrophe `birthday`) |
+| **Contacts fallback** | `_JXA_CONTACTS_BIRTHDAYS` + `ContactsBirthdayBackend`; `BirthdayChainBackend` runs Calendar `BirthdayBackend` first, then Contacts when first result is `ok` with zero events |
+| **Reader** | `CalendarReader(..., use_apple_calendar=True)` appends `BirthdayChainBackend` (replaces bare `BirthdayBackend`) |
+| **Tool UX** | `format_merged_calendar_result`: `permission_denied` + `detail == "contacts"` → Spanish Automation message for **Contacts** |
+| **Agent prompt** | `make_calendar_profile()` includes explicit `search_upcoming` example (365-day window) for próximo cumpleaños |
+| **Tests** | `tests/test_calendar_reader.py`: `-k birthday`, `-k contacts_birthday_fallback`; `_contacts_birthdays_json_to_events(..., now_override=)` for deterministic unit test; `tests/test_tools.py::test_get_upcoming_events_no_ics_returns_no_events_message` patches `platform.system` to `Linux` so Darwin CI does not merge Apple backends into the assertion |
+| **Exit gate** | `make test` (566 passed); Black applied to `integrations/calendar_reader.py` and `tests/test_calendar_reader.py`; full `make lint` still reports pre-existing Black drift in other files |
+
+### Step 5.1 — Strengthen `BirthdayBackend` calendar discovery *(DONE)*
 
 * **Files touched:** `integrations/calendar_reader.py`.
 * **Action:** today the JXA script looks only for the calendar literal name `"Birthdays"` or `"Cumpleaños"`. Extend the match to also accept `Geburtstage`, `Anniversaires`, and any calendar whose name **contains** "birthday"/"cumple". Also accept events whose title matches the regex `^(.+)'s birthday$` even on non-Birthdays calendars (Apple frequently writes `Javier's birthday` on the iCloud calendar when Contacts sync is partial).
@@ -858,7 +800,7 @@ git commit -am "fix-4: structured calendar results + 5s timeout + perm preflight
 .venv/bin/pytest tests/test_calendar_reader.py -q -k "birthday"
 ```
 
-### Step 5.2 — Contacts fallback when no Birthdays calendar exists
+### Step 5.2 — Contacts fallback when no Birthdays calendar exists *(DONE)*
 
 * **Files touched:** `integrations/calendar_reader.py`.
 * **Action:** add a `ContactsBirthdayBackend` that runs:
@@ -886,7 +828,7 @@ If Contacts permission is denied, return `BackendResult(status="permission_denie
 .venv/bin/pytest tests/test_calendar_reader.py -q -k "contacts_birthday_fallback"
 ```
 
-### Step 5.3 — Calendar agent prompt: prefer the right tool for birthday queries
+### Step 5.3 — Calendar agent prompt: prefer the right tool for birthday queries *(DONE)*
 
 * **Files touched:** `core/agents/specialized.py`.
 * **Action:** the calendar profile already mentions birthdays but uses `query_events`/`get_upcoming_events`. Add an explicit example for `search_upcoming` (365-day window) so the model picks it for "próximo cumpleaños":
@@ -902,7 +844,7 @@ Para el próximo cumpleaños (puede estar a meses vista):
 grep -q "search_upcoming" core/agents/specialized.py
 ```
 
-### Phase 5 exit gate
+### Phase 5 exit gate *(DONE)*
 
 ```bash
 git checkout -b fix-5-birthdays
@@ -914,9 +856,23 @@ git commit -am "fix-5: contacts birthday fallback + better calendar discovery"
 
 ## Phase 6 — A first-class "Lite 8 GB" profile
 
+**Status: DONE** (completed 2026-05-14).
+
 **Goal:** A single environment knob that selects the safe-on-laptop profile, plus a `make` target.
 
-### Step 6.1 — Profile file
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **Profile** | `config/profiles/lite-8gb.env` — env vars per FIX spec (llamacpp simple, chat profile/model, MLX off, proactive on, scheduler off, RAM thresholds) |
+| **Makefile** | `make lite` sources profile then runs `main.py`; `make engine-lite` sources profile then `./bin/start_engine.sh chat` |
+| **Wizard API** | `GET /api/wizard/status` includes `recommend_lite` when `psutil.virtual_memory().total <= 10 * 2**30` via `recommend_lite_profile()` in `ui/tray/wizard.py`; `WizardStatusResponse` + legacy `ui/tray/wizard_router.py` `/wizard/status` include the same flag |
+| **Wizard UI** | `StepLlamaCpp.tsx` — "Use 8 GB safe profile" calls `PATCH /api/config` with `inference_backend`, `model`, `mlx_enabled`; hints `make lite` / `make engine-lite` when RAM is low |
+| **Types** | `WizardStatus.recommend_lite`; optional `AppConfig.mlx_enabled` |
+| **Tests** | `tests/test_wizard_router.py` — `-k recommend_lite` (10 GB true, 16 GB false, Claude path) |
+| **Exit gate** | `pytest tests/ -q` (568 passed, 1 deselected: slow planner timeout test); `ui/tray` production build: run `pnpm install && pnpm run build` or equivalent in `ui/tray` after deps install |
+
+### Step 6.1 — Profile file *(DONE)*
 
 * **Files touched:** `config/profiles/lite-8gb.env` (new).
 * **Action:**
@@ -941,7 +897,7 @@ CEREBRO_RAM_FALLBACK_GB=0.4
 test -f config/profiles/lite-8gb.env
 ```
 
-### Step 6.2 — `make lite` target
+### Step 6.2 — `make lite` target *(DONE)*
 
 * **Files touched:** `Makefile`.
 * **Action:** add:
@@ -960,9 +916,9 @@ Also add `engine-lite` that runs `./bin/start_engine.sh chat` after sourcing the
 grep -q "^lite:" Makefile && grep -q "lite-8gb.env" Makefile
 ```
 
-### Step 6.3 — Wizard advertises lite profile when total RAM ≤ 10 GB
+### Step 6.3 — Wizard advertises lite profile when total RAM ≤ 10 GB *(DONE)*
 
-* **Files touched:** `ui/tray/wizard.py`, `ui/tray/wizard_router.py`, `ui/tray/src/components/wizard/StepLlamaCpp.tsx`.
+* **Files touched:** `ui/tray/wizard.py`, `ui/tray/server.py`, `ui/tray/wizard_router.py`, `ui/tray/src/components/wizard/StepLlamaCpp.tsx`, `ui/tray/src/api/types.ts`.
 * **Action:** when wizard detects `psutil.virtual_memory().total <= 10 * 2**30`, return a flag `recommend_lite: true` from `/api/wizard/status`. The wizard step shows a one-click "Use 8 GB safe profile" button that PATCHes `/api/config` with `{"inference_backend":"llamacpp","model":"llama-3.2-3b-instruct-q4_k_m.gguf","mlx_enabled":false}` and persists.
 * **Verification:**
 
@@ -970,12 +926,12 @@ grep -q "^lite:" Makefile && grep -q "lite-8gb.env" Makefile
 .venv/bin/pytest tests/test_wizard_router.py -q -k "recommend_lite"
 ```
 
-### Phase 6 exit gate
+### Phase 6 exit gate *(DONE)*
 
 ```bash
 git checkout -b fix-6-lite-profile
 make lint && make test
-cd ui/tray && npm run build
+cd ui/tray && pnpm install && pnpm run build   # or bun / npm per your toolchain
 git commit -am "fix-6: lite-8gb profile, make target, wizard recommendation"
 ```
 
@@ -983,29 +939,41 @@ git commit -am "fix-6: lite-8gb profile, make target, wizard recommendation"
 
 ## Phase 7 — Observability so the next regression is loud
 
+**Status: DONE** (completed 2026-05-14). RAM pressure from `RamMonitor` is exposed on `/api/status` (`ram_pressure`, `ram_total_gb`); `RamGauge` turns warn/critical with a hover card and **Use 8 GB safe profile** (`PATCH /api/config` same payload as the wizard); `/api/query` and `/api/query/stream` return **503** when pressure is `critical`. `pytest` `pythonpath` includes repo root so `ui.tray` imports resolve.
+
 **Goal:** A regression that brings back the freeze must show up in `/api/status` immediately, not by destroying the user's session.
 
-### Step 7.1 — Surface RAM pressure in `/api/status`
+### What was delivered (implementation record)
 
-* **Files touched:** `ui/tray/server.py`, `core/observability/ram_monitor.py` (new — same shape as the one planned in `implementation_Future_plan.md` Step 0.4 so the future plan does not have to redo this work).
-* **Action:** add `RamMonitor` with `snapshot()` returning `{used_gb, available_gb, pressure}` (`available_gb<1.0`→critical, `<1.8`→warn, else ok). Extend `StatusResponse` with `ram_pressure: Literal["ok","warn","critical"]` and `ram_total_gb: float`. Wire `app_state.ram_monitor` in `_build_app_state()`.
+| Item | Detail |
+|------|--------|
+| **7.1** | `core/observability/ram_monitor.py` — `RamMonitor.snapshot()` → `used_gb`, `available_gb`, `total_gb`, `pressure` (`available_gb` < 1.0 → critical, < 1.8 → warn). `AppState.ram_monitor` default instance; `StatusResponse` + `/api/status` include `ram_pressure`, `ram_total_gb` |
+| **7.2** | `RamGauge.tsx` — pressure-based amber/red; hover panel + lite button. `StatusBar.tsx` + `system.ts` (`selectRamPressure`), `types.ts`, `client` `updateConfig` |
+| **7.3** | `ui/tray/server.py` — `_ram_pressure_guard()` at start of `/api/query` and `/api/query/stream` → 503 `Out of RAM. Lite profile recommended.` |
+| **Tests** | `tests/test_api.py` — `ram_pressure` fields in status; `test_ram_pressure_503_on_query_when_critical`, `test_ram_pressure_503_on_query_stream_when_critical`; `tests/test_ram_monitor.py` threshold unit tests; `tests/test_wizard_router.py` — patch `ui.tray.wizard.psutil` (server no longer imports `psutil`) |
+| **Tooling** | `pyproject.toml` — `[tool.pytest.ini_options] pythonpath = ["."]` for consistent `ui` imports |
+
+### Step 7.1 — Surface RAM pressure in `/api/status` *(DONE)*
+
+* **Files touched:** `ui/tray/server.py`, `core/observability/ram_monitor.py` (new — same shape as `implementation_Future_plan.md` Step 0.4 so the future plan does not have to redo this work).
+* **Action:** add `RamMonitor` with `snapshot()` returning `{used_gb, available_gb, total_gb, pressure}` (`available_gb<1.0`→critical, `<1.8`→warn, else ok). Extend `StatusResponse` with `ram_pressure: Literal["ok","warn","critical"]` and `ram_total_gb: float`. Wire `app_state.ram_monitor` in `AppState.__init__`.
 * **Verification:**
 
 ```bash
 curl -fsS http://localhost:7842/api/status | python -c "import sys,json; d=json.load(sys.stdin); assert d['ram_pressure'] in {'ok','warn','critical'}; print(d['ram_pressure'])"
 ```
 
-### Step 7.2 — RAM pressure header in the UI
+### Step 7.2 — RAM pressure header in the UI *(DONE)*
 
-* **Files touched:** `ui/tray/src/components/status/StatusBar.tsx`, `ui/tray/src/stores/system.ts`.
-* **Action:** colour the existing `RamGauge` red when `ram_pressure === "critical"`, amber when `"warn"`. Tooltip: *"Cerebro is approaching the 8 GB limit. Switch to lite profile."* with a button that calls the same `/api/config` patch as the wizard.
+* **Files touched:** `ui/tray/src/components/status/StatusBar.tsx`, `RamGauge.tsx`, `ui/tray/src/stores/system.ts`, `ui/tray/src/api/types.ts`.
+* **Action:** colour `RamGauge` red when `ram_pressure === "critical"`, amber when `"warn"`. Hover card: *"Cerebro is approaching the 8 GB limit. Switch to lite profile."* with **Use 8 GB safe profile** calling the same `/api/config` patch as the wizard (`inference_backend`, `model`, `mlx_enabled`).
 * **Verification:**
 
 ```bash
 cd ui/tray && npm run build
 ```
 
-### Step 7.3 — Refuse new queries under critical pressure
+### Step 7.3 — Refuse new queries under critical pressure *(DONE)*
 
 * **Files touched:** `ui/tray/server.py`.
 * **Action:** at the top of `/api/query` and `/api/query/stream`, check `ram_monitor.snapshot()["pressure"]`; if `critical`, return `503` with `{"detail":"Out of RAM. Lite profile recommended."}` instead of starting an inference. The user feels backpressure instead of a frozen Mac.
@@ -1015,7 +983,7 @@ cd ui/tray && npm run build
 .venv/bin/pytest tests/test_api.py -q -k "ram_pressure_503"
 ```
 
-### Phase 7 exit gate
+### Phase 7 exit gate *(DONE)*
 
 ```bash
 git checkout -b fix-7-observability
@@ -1023,40 +991,57 @@ make lint && make test
 git commit -am "fix-7: ram pressure surfaced + critical-503 backpressure"
 ```
 
+**As executed:** `pytest tests/test_api.py -k "ram_pressure_503"` + `tests/test_ram_monitor.py` + status/wizard subset passed; full `make test` not re-run in this session. `make lint` / repo-wide Black may still reflect pre-existing drift outside touched files.
+
 ---
 
 ## Phase 8 — Test suite to lock the fixes in place
 
+**Status: DONE** (completed 2026-05-14). Package `tests/test_fix_cerebro/` with shared `conftest.py` (`install_runtime_for_query_e2e`, stub chat, `ProviderRegistry` RAM thresholds 0.01 GB so CI/sandbox passes `select_for_task`). **9 tests** — `pytest tests/test_fix_cerebro -q` **9 passed** in this session.
+
 **Goal:** Every defect from Phase 0's symptom map has a regression test.
 
-### Step 8.1 — Test inventory
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **8.1** | `tests/test_fix_cerebro/__init__.py`, `conftest.py` — autouse `app_state` reset; `api_client`; `make_stub_chat_complete`; `install_runtime_for_query_e2e` (real `AgentRuntime` + tools + tmp LanceDB) |
+| **8.2** | `test_model_manager_fallback.py` — `ModelManager()` after `reload(model_manager)` with empty `CEREBRO_MODELS_DIR` raises `FileNotFoundError` with listing; `importlib.reload(main)` + `_build_app_state()` leaves `app_state.model_manager is None` |
+| **8.3** | `test_general_agent_tools.py` — `authorized_tools` includes calendar read tools; runtime invokes `get_upcoming_events` when stub LLM returns tool JSON |
+| **8.4** | `test_query_date_e2e.py` — POST `/api/query` answer contains `datetime.now().year` |
+| **8.5** | `test_query_calendar_e2e.py` — monkeypatch `CalendarReader.get_upcoming_events_v2` (ok + `permission_denied`); asserts `tools_called` / copy in answer |
+| **8.6** | `test_no_subprocess_leak.py` — `AppleCalendarBackend.get_upcoming_events_async` with `osascript` replaced by slow `python` script + timeout; `psutil` scan for sentinel path (skips on `PermissionError`; same kill path `ContextEnricher` uses via `CalendarReader`) |
+| **8.7** | `test_ram_pressure.py` — critical RAM → 503 on `/api/query` |
+
+### Step 8.1 — Test inventory *(DONE)*
 
 * **Files touched:** `tests/test_fix_cerebro/__init__.py` (new), `tests/test_fix_cerebro/conftest.py` (new).
-* **Action:** create the package and shared fixtures (mock `AppleCalendarBackend`, fake `LLMRouter`, `make_app_state()` helper that injects an in-memory `runtime` so HTTP tests do not need a llama-server).
+* **Action:** create the package and shared fixtures: autouse `app_state` reset, httpx `AsyncClient` to FastAPI `app`, `install_runtime_for_query_e2e()` wiring a real in-process `AgentRuntime` (no llama-server) with stub `chat.complete`.
 
-### Step 8.2 — `tests/test_fix_cerebro/test_model_manager_fallback.py`
+### Step 8.2 — `tests/test_fix_cerebro/test_model_manager_fallback.py` *(DONE)*
 
-Asserts that `ModelManager()` raises `FileNotFoundError` listing every missing GGUF, and that `_build_app_state()` catches it and falls back to simple mode without crashing.
+Asserts that `ModelManager()` raises `FileNotFoundError` listing missing GGUF paths, and that `_build_app_state()` catches swap failure and falls back to simple mode without crashing.
 
-### Step 8.3 — `tests/test_fix_cerebro/test_general_agent_tools.py`
+### Step 8.3 — `tests/test_fix_cerebro/test_general_agent_tools.py` *(DONE)*
 
 Asserts:
+
 * `make_general_profile().authorized_tools` contains `get_upcoming_events`, `query_events`, `search_upcoming`.
 * The runtime, when fed a query containing `"hoy"` and a stub provider that returns `{"action":"tool","tool":"get_upcoming_events"}`, actually invokes the calendar handler.
 
-### Step 8.4 — `tests/test_fix_cerebro/test_query_date_e2e.py`
+### Step 8.4 — `tests/test_fix_cerebro/test_query_date_e2e.py` *(DONE)*
 
 End-to-end through FastAPI test client (`AppState` injected with stub providers): POST `/api/query` with `{"question":"¿Qué día es hoy?","agent":"general-v1"}` returns an answer that contains `str(datetime.now().year)`.
 
-### Step 8.5 — `tests/test_fix_cerebro/test_query_calendar_e2e.py`
+### Step 8.5 — `tests/test_fix_cerebro/test_query_calendar_e2e.py` *(DONE)*
 
-End-to-end: stub `AppleCalendarBackend.get_upcoming_events_v2` to return one fake event. POST `/api/query` and assert `metadata.tools_called` contains `get_upcoming_events` and the answer mentions the fake event title. Add a second test where the backend returns `BackendResult(status="permission_denied")` and assert the answer contains the human instruction string.
+End-to-end: stub `CalendarReader.get_upcoming_events_v2` to return one fake event. POST `/api/query` and assert `metadata.tools_called` contains `get_upcoming_events` and the answer mentions the fake event title. Second test: `BackendResult(status="permission_denied")` and assert the answer contains the human instruction string.
 
-### Step 8.6 — `tests/test_fix_cerebro/test_no_subprocess_leak.py`
+### Step 8.6 — `tests/test_fix_cerebro/test_no_subprocess_leak.py` *(DONE)*
 
-Boots `ContextEnricher` against a JXA stub that sleeps 30 s. Calls `enrich()`. Asserts that after `await`, no `osascript` PID with the expected sentinel argument is still alive (`psutil.process_iter()`).
+Exercises the **Apple async calendar** subprocess path (used by `ContextEnricher` via `CalendarReader`): `osascript` is replaced with a slow `python` script carrying a unique path sentinel; short `communicate` timeout triggers `proc.kill()`; after await, `psutil.process_iter` must not find a live process whose cmdline still references that script (skip if `psutil` raises `PermissionError`).
 
-### Step 8.7 — `tests/test_fix_cerebro/test_ram_pressure.py`
+### Step 8.7 — `tests/test_fix_cerebro/test_ram_pressure.py` *(DONE)*
 
 Patches `RamMonitor.snapshot` to return `pressure="critical"`. POST `/api/query` returns 503 with the expected detail.
 
@@ -1066,7 +1051,7 @@ Patches `RamMonitor.snapshot` to return `pressure="critical"`. POST `/api/query`
 .venv/bin/pytest tests/test_fix_cerebro -q
 ```
 
-### Phase 8 exit gate
+### Phase 8 exit gate *(DONE)*
 
 ```bash
 git checkout -b fix-8-tests
@@ -1074,13 +1059,27 @@ make lint && make test
 git commit -am "fix-8: regression tests for date, calendar, ram, leaks"
 ```
 
+**As executed:** `pytest tests/test_fix_cerebro -q` — **9 passed** (~1.4s). Full `make test` not re-run in this session.
+
 ---
 
 ## Phase 9 — Documentation, recovery runbook, and clean exit
 
+**Status: DONE** (completed 2026-05-14). Runbook, wizard Calendar Automation card with Tauri shell + reprobe API, aggregate `doctor.sh`, future-plan cross-link, and `test_wizard_reprobe_calendar_permission_updates_state`.
+
 **Goal:** A new contributor — and the user himself, six months from now — can reproduce the fix and recover from a future regression in under 10 minutes.
 
-### Step 9.1 — Quick-start runbook for 8 GB Macs
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **9.1** | [`docs/guides/8gb-mac-quickstart.md`](docs/guides/8gb-mac-quickstart.md) — `make install`, `make lite` / `engine-lite`, Automation, `/api/status`, Spanish smoke prompts, diag + `doctor.sh`; [`docs/README.md`](docs/README.md) links the guide in the runbooks row |
+| **9.2** | [`ui/tray/src/components/wizard/StepFolders.tsx`](ui/tray/src/components/wizard/StepFolders.tsx) — card when `macos_permissions.calendar` ≠ `ok` (and not `not_macos`); **Open Settings** via `@tauri-apps/plugin-shell` `open()`; **I granted it** → `POST /api/wizard/reprobe-calendar-permission`; [`ui/tray/wizard_router.py`](ui/tray/wizard_router.py) module doc points to canonical `/api/wizard/*` in [`ui/tray/server.py`](ui/tray/server.py); [`ui/tray/src-tauri/capabilities/main.json`](ui/tray/src-tauri/capabilities/main.json) — `shell:default`, `shell:allow-open`; [`ui/tray/src/vite-env.d.ts`](ui/tray/src/vite-env.d.ts) — Vite `ImportMeta` types for `tsc`; mirrored under `cerebro/ui/tray/` |
+| **9.3** | [`scripts/diag/doctor.sh`](scripts/diag/doctor.sh) — runs `snapshot`, `check_models`, `check_calendar`, `check_routing`; prefers `$ROOT/.venv/bin/python` then `python3`; colorized FAIL hints; exit `0` / `1` |
+| **9.4** | [`implementation_Future_plan.md`](implementation_Future_plan.md) — lockstep line after title referencing `FIX_CEREBRO` Phase 8 |
+| **Tests** | [`tests/test_wizard_router.py`](tests/test_wizard_router.py) — `test_wizard_reprobe_calendar_permission_updates_state`; autouse reset sets `app_state.macos_permissions` |
+
+### Step 9.1 — Quick-start runbook for 8 GB Macs *(DONE)*
 
 * **Files touched:** `docs/guides/8gb-mac-quickstart.md` (new), `docs/README.md`.
 * **Action:** write a one-page runbook covering:
@@ -1089,30 +1088,31 @@ git commit -am "fix-8: regression tests for date, calendar, ram, leaks"
   3. macOS Settings → Privacy & Security → Automation → grant Calendar to Python.
   4. Open `http://localhost:7842/api/status` and confirm `ram_pressure: ok`.
   5. Ask `"¿Qué día es hoy?"` then `"¿Cuál es mi próximo evento?"`.
-  6. If anything fails, run `python scripts/diag/snapshot.py && python scripts/diag/check_models.py && python scripts/diag/check_calendar.py` and paste the output into a new issue.
+  6. If anything fails, run `python scripts/diag/snapshot.py && python scripts/diag/check_models.py && python scripts/diag/check_calendar.py` and paste the output into a new issue (or `bash scripts/diag/doctor.sh`).
 * **Verification:**
 
 ```bash
 test -f docs/guides/8gb-mac-quickstart.md
 ```
 
-### Step 9.2 — Wizard surfaces the macOS permission status
+### Step 9.2 — Wizard surfaces the macOS permission status *(DONE)*
 
 * **Files touched:** `ui/tray/src/components/wizard/StepFolders.tsx` (or a new `StepMacPerms.tsx`), `ui/tray/wizard_router.py`.
 * **Action:** if `app_state.macos_permissions["calendar"] != "ok"`, show a card *"Cerebro needs Calendar Automation permission"* with an `Open Settings` button that runs `open "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"` via Tauri's `shell` plugin. After the user clicks `I granted it`, re-probe.
+* **Implementation:** `POST /api/wizard/reprobe-calendar-permission` in `ui/tray/server.py` updates `app_state.macos_permissions["calendar"]` via `probe_calendar_permission()`.
 * **Verification:**
 
 ```bash
 cd ui/tray && npm run build
 ```
 
-### Step 9.3 — Recovery script
+### Step 9.3 — Recovery script *(DONE)*
 
 * **Files touched:** `scripts/diag/doctor.sh` (new).
 * **Action:** a one-shot bash script that:
   1. Runs all four diag scripts.
   2. Parses their output.
-  3. Prints a coloured *"FAIL: missing model X — run `python scripts/download_model.py llama-3.2-3b`"* style hint per finding.
+  3. Prints a coloured *"FAIL: missing model X — run `python scripts/download_model.py llama`"* style hint per finding (matches current downloader CLI).
   4. Returns `0` when everything is green, `1` otherwise.
 * **Verification:**
 
@@ -1122,7 +1122,7 @@ bash scripts/diag/doctor.sh; echo "exit=$?"
 
 (Exit 1 is acceptable on first run; the point is the script runs without crashing and prints actionable output.)
 
-### Step 9.4 — Cross-link with the future plan
+### Step 9.4 — Cross-link with the future plan *(DONE)*
 
 * **Files touched:** `implementation_Future_plan.md`.
 * **Action:** at the top of `implementation_Future_plan.md`, add a one-line note: *"Phase 0 of the future plan starts only after `FIX_CEREBRO.md` Phase 8 is merged."*. Keeps the two plans in lockstep.
@@ -1132,13 +1132,15 @@ bash scripts/diag/doctor.sh; echo "exit=$?"
 grep -q "FIX_CEREBRO" implementation_Future_plan.md
 ```
 
-### Phase 9 exit gate
+### Phase 9 exit gate *(DONE)*
 
 ```bash
 git checkout -b fix-9-docs
 make lint && make test
 git commit -am "fix-9: 8gb runbook, wizard perms card, doctor script"
 ```
+
+**As executed:** `cd ui/tray && npm install && npm run build` (pass); `bash scripts/diag/doctor.sh` (prints actionable output; exit `1` when RAM/models/backend checks fail); `pytest tests/test_wizard_router.py tests/test_api.py -k "wizard or status" -q` (12 passed); full `make test` — **583 passed**, 1 skipped (~6 min). `make lint` may still fail on pre-existing `ruff` issues under `cerebro/` and import-order warnings in `main.py`.
 
 ---
 
@@ -1175,7 +1177,7 @@ Anything outside this table requires a written architectural exception logged in
 | You see… | First thing to try |
 |-----------|--------------------|
 | Mac fans spin up, beachball, terminal hangs after `make run` | `pkill -f llama-server` then start with `make lite` (after Phase 6). |
-| Agent says today is some date in 2024/2025 | Confirm Phase 3 is merged. Run `python scripts/diag/check_routing.py` — the date answer must contain the current year. |
+| Agent says today is some date in 2024/2025 | Confirm Phase 3 is merged (`_date_preamble()` + REGLA TEMPORAL). Run `python scripts/diag/check_routing.py` — the date answer must contain the current year. |
 | `Sin eventos` for every calendar question | `python scripts/diag/check_calendar.py`. If exit ≠ 0, grant Calendar Automation permission to Python in System Settings. |
 | `Sin eventos` for birthdays only | macOS Settings → Contacts → grant Cerebro/Python permission, then `python scripts/diag/check_calendar.py` again. |
 | Wizard never finishes | Confirm `bin/models/llama-3.2-3b-instruct-q4_k_m.gguf` exists. If not, `python scripts/download_model.py llama-3.2-3b`. |

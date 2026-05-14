@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useSystemStore, selectIsClaudeMode, selectSwapInProgress } from "../../stores/system";
+import { updateConfig } from "../../api/client";
+import { useSystemStore, selectIsClaudeMode, selectRamPressure, selectSwapInProgress } from "../../stores/system";
 import EngineIndicator from "./EngineIndicator";
 import RamGauge from "./RamGauge";
 import LatencyBadge from "./LatencyBadge";
@@ -13,6 +14,18 @@ export default function StatusBar() {
   const swapInProgress = useSystemStore(selectSwapInProgress);
   const [fleetPanelOpen, setFleetPanelOpen] = useState(false);
 
+  async function applyLiteProfileFromStatus(): Promise<void> {
+    try {
+      await updateConfig({
+        inference_backend: "llamacpp",
+        model: "llama-3.2-3b-instruct-q4_k_m.gguf",
+        mlx_enabled: false,
+      });
+    } catch (e) {
+      console.error("lite profile save failed", e);
+    }
+  }
+
   useEffect(() => {
     startPolling(10_000);
   }, [startPolling]);
@@ -24,7 +37,10 @@ export default function StatusBar() {
   const quantization = status?.quantization ?? "";
   const files = status?.indexed_files ?? 0;
   const ramUsed = status?.ram_used_gb ?? 0;
-  const ramTotal = (status?.ram_used_gb ?? 0) + (status?.ram_available_gb ?? 0);
+  const ramTotal =
+    status?.ram_total_gb ??
+    (status?.ram_used_gb ?? 0) + (status?.ram_available_gb ?? 0);
+  const ramPressure = selectRamPressure(status);
   const p95 = (status?.p95_latency_ms ?? 0) / 1000;
   const queries = status?.queries_total ?? 0;
 
@@ -57,7 +73,12 @@ export default function StatusBar() {
           <span className="opacity-60">cloud inference</span>
         ) : (
           <>
-            <RamGauge used={ramUsed} total={ramTotal} />
+            <RamGauge
+              used={ramUsed}
+              total={ramTotal}
+              ramPressure={ramPressure}
+              onApplyLiteProfile={applyLiteProfileFromStatus}
+            />
             {showVram && (
               <>
                 <span className="opacity-20">·</span>

@@ -96,7 +96,7 @@ class TaskPlanner:
         # Strategy 1: Direct JSON parse
         try:
             obj = json.loads(response)
-            if isinstance(obj, list) and all(isinstance(s, str) for s in obj):
+            if isinstance(obj, list) and len(obj) > 0 and all(isinstance(s, str) for s in obj):
                 return obj
         except json.JSONDecodeError:
             pass
@@ -116,20 +116,27 @@ class TaskPlanner:
                 fence_content = "\n".join(fence_lines).strip()
                 try:
                     obj = json.loads(fence_content)
-                    if isinstance(obj, list) and all(isinstance(s, str) for s in obj):
+                    if (
+                        isinstance(obj, list)
+                        and len(obj) > 0
+                        and all(isinstance(s, str) for s in obj)
+                    ):
                         return obj
                 except json.JSONDecodeError:
                     pass
 
-        # Strategy 3: Extract from square brackets (greedy)
+        # Strategy 3: Extract from square brackets — prefer longest valid array (of strings)
         bracket_matches = list(re.finditer(r"\[.*?\]", response, re.DOTALL))
+        candidates: list[list[str]] = []
         for m in bracket_matches:
             try:
                 obj = json.loads(m.group(0))
-                if isinstance(obj, list) and all(isinstance(s, str) for s in obj):
-                    return obj
+                if isinstance(obj, list) and len(obj) > 0 and all(isinstance(s, str) for s in obj):
+                    candidates.append(obj)
             except json.JSONDecodeError:
                 continue
+        if candidates:
+            return max(candidates, key=len)
 
         # Strategy 4: Extract line-by-line numbered steps
         numbered_steps = []

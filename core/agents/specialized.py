@@ -58,8 +58,17 @@ CODE_TOOLS: list[str] = [
     "search_files",
     "create_directory",
 ]
-# Empty list = no restriction in AgentRuntime._context_assembly_node (all tools)
-GENERAL_TOOLS: list[str] = []
+# Read-only, low-risk tools the general agent may use without confirmation
+GENERAL_TOOLS: list[str] = [
+    "get_upcoming_events",
+    "query_events",
+    "search_upcoming",
+    "search_documents",
+    "spotlight_search",
+    "list_directory",
+    "search_files",
+    "search_notes",
+]
 
 _PREFIX_MAP: dict[str, str] = {
     "/academic": ACADEMIC_AGENT_ID,
@@ -147,6 +156,8 @@ def make_calendar_profile() -> AgentProfile:
                 '{"action": "tool", "tool": "get_upcoming_events", "args": {"hours_ahead": 8760}}\n'
                 "Para buscar por palabra clave (ej: 'reunión', 'cumple', 'doctor'):\n"
                 '{"action": "tool", "tool": "query_events", "args": {"keyword": "reunión", "hours_ahead": 8760}}\n'
+                "Para el próximo cumpleaños (puede estar a meses vista):\n"
+                '{"action": "tool", "tool": "search_upcoming", "args": {"keyword": "cumple", "days_ahead": 365}}\n'
                 "NOTA: Los cumpleaños se guardan como eventos recurrentes anuales. "
                 "Para buscar cumpleaños usa query_events con keyword='cumple' y hours_ahead=8760.\n\n"
                 "Para crear una reunión o cita:\n"
@@ -165,6 +176,13 @@ def make_calendar_profile() -> AgentProfile:
 
 def make_general_profile() -> AgentProfile:
     now = _now()
+    _general_extra = (
+        "Si el usuario pregunta por la fecha, hora, eventos, cumpleaños, recordatorios o "
+        "cualquier dato que cambie con el tiempo, USA herramientas — NO inventes la respuesta. "
+        'Para "qué día es hoy" o "qué hora es" mira la línea FECHA Y HORA ACTUAL del prompt. '
+        "Para eventos del calendario usa get_upcoming_events; para cumpleaños usa "
+        'query_events con keyword="cumple" o search_upcoming con keyword="cumple".'
+    )
     return AgentProfile(
         id=GENERAL_AGENT_ID,
         name="Asistente General",
@@ -174,7 +192,7 @@ def make_general_profile() -> AgentProfile:
             "instructions": (
                 "Eres un asistente personal. Responde preguntas, gestiona "
                 "documentos y ejecuta acciones con prudencia. Para acciones de "
-                "escritura, confirma antes de proceder cuando tengas dudas."
+                "escritura, confirma antes de proceder cuando tengas dudas.\n\n" + _general_extra
             )
         },
         created_at=now,

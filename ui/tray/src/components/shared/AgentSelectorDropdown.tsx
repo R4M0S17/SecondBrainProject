@@ -4,6 +4,14 @@ import { useSystemStore } from "../../stores/system";
 import { AGENTS, type AgentId } from "../../api/types";
 
 const AGENT_ICONS: Record<AgentId, JSX.Element> = {
+  auto: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+      <circle cx="5" cy="6" r="2" fill="currentColor" stroke="none" opacity={0.35} />
+      <circle cx="19" cy="6" r="2" fill="currentColor" stroke="none" opacity={0.35} />
+      <circle cx="12" cy="18" r="2" fill="currentColor" stroke="none" opacity={0.35} />
+      <path d="M7 7.5l5 4.5M17 7.5l-5 4.5M12 12v4" />
+    </svg>
+  ),
   general: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
       <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z" fill="currentColor" stroke="none" opacity={0.25}/>
@@ -44,6 +52,7 @@ const AGENT_ICONS: Record<AgentId, JSX.Element> = {
 };
 
 const AGENT_COLORS: Record<AgentId, string> = {
+  auto:     "text-cyan-400",
   general: "text-violet-400",
   thesis:  "text-amber-400",
   code:    "text-emerald-400",
@@ -51,6 +60,7 @@ const AGENT_COLORS: Record<AgentId, string> = {
 };
 
 const AGENT_BG: Record<AgentId, string> = {
+  auto:     "bg-cyan-500/10",
   general: "bg-violet-500/10",
   thesis:  "bg-amber-500/10",
   code:    "bg-emerald-500/10",

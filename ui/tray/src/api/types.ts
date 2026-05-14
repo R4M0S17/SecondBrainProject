@@ -97,6 +97,8 @@ export interface StatusResponse {
   model: string;
   provider: string;
   active_agent: string;
+  ram_pressure: "ok" | "warn" | "critical";
+  ram_total_gb: number;
   ram_used_gb: number;
   ram_available_gb: number;
   queries_total: number;
@@ -105,6 +107,7 @@ export interface StatusResponse {
   tool_call_count: number;
   memory_hits: number;
   provider_fallbacks: number;
+  context_window?: number;
   // Fleet orchestrator extensions
   current_model_id?: string;
   quantization?: string;
@@ -112,6 +115,7 @@ export interface StatusResponse {
   ram_pressure_pct?: number;
   swap_in_progress?: boolean;
   model_swaps_session?: number;
+  macos_permissions?: Record<string, string> | null;
 }
 
 export interface HardwareSnapshot {
@@ -167,6 +171,7 @@ export interface WizardStatus {
   engine_running: boolean;
   model_pulled: boolean;
   folders_configured: boolean;
+  recommend_lite: boolean;
 }
 
 export interface AppConfig {
@@ -181,6 +186,8 @@ export interface AppConfig {
   dnd_enabled: boolean;
   embedding_model: string;
   inference_backend: "llamacpp" | "claude";
+  /** When false, MLX secondary provider is disabled (persisted for lite / 8 GB setups). */
+  mlx_enabled?: boolean;
 }
 
 export interface LocalModel {
@@ -205,7 +212,7 @@ export interface LlamaCppModelsResponse {
   active_model: string | null;
 }
 
-export type AgentId = "general" | "thesis" | "code" | "calendar";
+export type AgentId = "auto" | "general" | "thesis" | "code" | "calendar";
 
 export interface Agent {
   id: AgentId;
@@ -214,6 +221,11 @@ export interface Agent {
 }
 
 export const AGENTS: Agent[] = [
+  {
+    id: "auto",
+    label: "Auto (router)",
+    description: "Picks the best agent for each question",
+  },
   { id: "general", label: "General", description: "All-purpose assistant" },
   { id: "thesis", label: "Thesis", description: "Academic writing & research" },
   { id: "code", label: "Code", description: "Programming & debugging" },

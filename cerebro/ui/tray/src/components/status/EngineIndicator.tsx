@@ -6,7 +6,7 @@ interface EngineIndicatorProps {
 export default function EngineIndicator({ ok, provider }: EngineIndicatorProps) {
   if (provider === "claude") {
     return (
-      <div className="flex items-center gap-1">
+      <div className="engine-claude flex items-center gap-1">
         <div className="w-[6px] h-[6px] rounded-full bg-[#a78bfa]" />
         <span className="text-[#a78bfa]">Claude API</span>
       </div>

@@ -68,7 +68,7 @@ class FileWatcher:
         return path.suffix.lower() not in WATCHED_EXTENSIONS
 
     def _on_modified(self, event: FileSystemEvent) -> None:
-        filepath = os.path.abspath(event.src_path)
+        filepath = os.path.abspath(os.fsdecode(event.src_path))
 
         if self._should_ignore(filepath):
             return
