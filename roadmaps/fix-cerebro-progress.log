@@ -1,0 +1,45 @@
+
+=== STEP 0.1 verification @ 2026-05-14T02:53:27Z ===
+branch=fix-0-triage
+exit=0
+=== STEP 0.2 verification @ 2026-05-14T02:54:36Z ===
+--- snapshot (head) ---
+system: total=8.00GB used=6.01GB available=1.99GB pressure=ok
+  RSS_MB     PID  CMD
+    18.3   40085  /opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Py
+     2.9   40078  /bin/zsh -c snap=$(command cat <&3); builtin unsetopt aliases 2>/dev/null; builtin unalias -m '*' 2>/dev/null || true; b
+--- check_models ---
+models dir: /Users/mb/Desktop/Javier/SecondBrain/bin/models
+  [MISS] router      SmolLM2-135M-Instruct-Q4_K_M.gguf
+  [OK ] general     Llama-3.2-3B-Instruct-Q4_K_M.gguf
+  [MISS] code        Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+  [MISS] embed       v5-nano-retrieval-Q4_K_M.gguf
+  [MISS] chat.args   Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+
+files actually present:
+  - llama-3.2-3b-instruct-q4_k_m.gguf  (1.88 GB)
+check_models_exit=0
+--- check_calendar ---
+{"ok":true,"calendars":["javiramosgt@gmail.com","Festivos en Guatemala","Cumpleaños","Home","Work","Family","Scheduled Reminders","Birthdays","Siri Suggestions"]}
+check_calendar_exit=0
+
+=== STEP 0.3 baseline @ 2026-05-14T02:54:37Z ===
+--- snapshot ---
+system: total=8.00GB used=5.98GB available=2.02GB pressure=ok
+  RSS_MB     PID  CMD
+    18.2   40117  /opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Py
+     2.9   40078  /bin/zsh -c snap=$(command cat <&3); builtin unsetopt aliases 2>/dev/null; builtin unalias -m '*' 2>/dev/null || true; b
+--- check_models ---
+models dir: /Users/mb/Desktop/Javier/SecondBrain/bin/models
+  [MISS] router      SmolLM2-135M-Instruct-Q4_K_M.gguf
+  [OK ] general     Llama-3.2-3B-Instruct-Q4_K_M.gguf
+  [MISS] code        Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+  [MISS] embed       v5-nano-retrieval-Q4_K_M.gguf
+  [MISS] chat.args   Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+
+files actually present:
+  - llama-3.2-3b-instruct-q4_k_m.gguf  (1.88 GB)
+exit=0
+--- check_calendar ---
+{"ok":true,"calendars":["javiramosgt@gmail.com","Festivos en Guatemala","Cumpleaños","Home","Work","Family","Scheduled Reminders","Birthdays","Siri Suggestions"]}
+exit=0
