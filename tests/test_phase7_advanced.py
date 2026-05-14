@@ -168,11 +168,18 @@ def test_prompt_cache_dir_exists():
     assert os.path.isdir(cache_dir), "bin/cache/ directory must exist"
 
 
-def test_args_files_contain_prompt_cache():
+def test_args_files_enable_prompt_caching():
     import os
 
     config_dir = os.path.join(os.path.dirname(__file__), "..", "config")
-    for profile in ("chat", "coding", "deep"):
+    for profile in ("coding", "deep"):
         args_path = os.path.join(config_dir, f"{profile}.args")
         content = open(args_path).read()
-        assert "--prompt-cache" in content, f"{profile}.args missing --prompt-cache flag"
+        assert (
+            "--cache-prompt" in content
+        ), f"{profile}.args missing --cache-prompt (llama-server CLI)"
+        assert "--prompt-cache" not in content, f"{profile}.args uses removed --prompt-cache flag"
+    chat_path = os.path.join(config_dir, "chat.args")
+    chat = open(chat_path).read()
+    assert "--mlock" not in chat, "chat.args must not use --mlock (low-RAM default)"
+    assert "--cache-prompt" not in chat, "chat.args omits --cache-prompt for smaller resident set"

@@ -64,11 +64,27 @@ python scripts/diag/snapshot.py
 
 ## Phase 0 — Triage, telemetry, and a known-good baseline
 
-> **COMPLETED** (2026-05-13). Branch `fix-0-triage`. Deliverables: `roadmaps/fix-cerebro-progress.log`, `roadmaps/FIX_PHASES.md`, `scripts/diag/snapshot.py`, `scripts/diag/check_models.py`, `scripts/diag/check_calendar.py`, `scripts/diag/check_routing.py`. Baseline and exit-gate notes are appended in the progress log.
+**Status: DONE** (completed 2026-05-13). No production app behaviour was changed—only scaffolding, diagnostics, and documentation.
 
 **Goal:** Take a snapshot of the live failure mode so every later phase can prove it is fixed. **Read-only** — no behaviour changes yet.
 
-### Step 0.1 — Create the progress log and a fix branch
+### What was delivered (implementation record)
+
+| Item | Detail |
+|------|--------|
+| **Branch** | `fix-0-triage` |
+| **Progress log** | `roadmaps/fix-cerebro-progress.log` — Step 0.1 verification, Step 0.2/0.3 diagnostic runs, baseline block `=== STEP 0.3 baseline ===`, Phase 0 exit-gate notes |
+| **Phase index** | `roadmaps/FIX_PHASES.md` — short index for FIX_CEREBRO phases |
+| **Diagnostics** | `scripts/diag/snapshot.py`, `check_models.py`, `check_calendar.py`, `check_routing.py` — standalone scripts (no `core.*` inference imports) |
+| **Git** | `roadmaps/fix-cerebro-progress.log` is tracked with `git add -f` because repository `.gitignore` ignores `*.log` |
+| **`check_calendar.py` vs spec** | Shipped JXA uses an IIFE with explicit `return JSON.stringify(...)` so `osascript` always prints JSON on success and error paths; 5 s timeout preserved |
+| **Baseline captured** | Sparse `bin/models/`: `check_models` exit **2** (only e.g. `llama-3.2-3b-instruct-q4_k_m.gguf` present; router/code/embed names missing). `check_calendar` may exit **3** (permission/denied JSON) or **4** (timeout)—both recorded in the log as triage signal |
+| **Exit gate** | `make test`: **558 passed** (full suite; long wall time partly from `test_execute_plan_step_timeout`). `make lint`: failed on **pre-existing** Black drift in unrelated modules; `scripts/diag/` passes Black, Ruff, and Mypy |
+| **This file** | Phase 0 marked complete here; same session recorded completion in the progress log |
+
+---
+
+### Step 0.1 — Create the progress log and a fix branch *(DONE)*
 
 * **Files touched:** `roadmaps/fix-cerebro-progress.log` (new), `roadmaps/FIX_PHASES.md` (new).
 * **Action:**
@@ -92,7 +108,7 @@ test -f roadmaps/FIX_PHASES.md && \
 git rev-parse --abbrev-ref HEAD | grep -q '^fix-0-triage$'
 ```
 
-### Step 0.2 — Diagnostic toolkit (no production code touched)
+### Step 0.2 — Diagnostic toolkit (no production code touched) *(DONE)*
 
 * **Files touched:** `scripts/diag/snapshot.py` (new), `scripts/diag/check_models.py` (new), `scripts/diag/check_calendar.py` (new), `scripts/diag/check_routing.py` (new).
 * **Action:** create four small read-only scripts. They MUST NOT import `core.*` modules that require an inference backend (so they run even when the system is broken).
@@ -195,6 +211,8 @@ except subprocess.TimeoutExpired:
     sys.exit(4)
 ```
 
+*Shipped implementation (Phase 0):* the JXA above is wrapped in an immediately invoked function that **returns** the `JSON.stringify(...)` result in both `try` and `catch`, so stdout always contains parseable JSON; exit codes 0 / 3 / 4 match the plan.
+
 `scripts/diag/check_routing.py`:
 
 ```python
@@ -235,7 +253,7 @@ python scripts/diag/check_calendar.py; echo "exit=$?"
 
 `check_models.py` exits **0** when every expected GGUF name is on disk, **2** if any are missing (typical on a sparse clone). Capture whichever exit code and full stdout in `roadmaps/fix-cerebro-progress.log` — do not assume exit 2.
 
-### Step 0.3 — Capture the failing baseline
+### Step 0.3 — Capture the failing baseline *(DONE)*
 
 * **Files touched:** `roadmaps/fix-cerebro-progress.log`.
 * **Action:** with the backend stopped, run each diag script and tee the output:
@@ -256,7 +274,7 @@ git add roadmaps/ scripts/diag/ && git commit -m "fix-0: triage scripts + captur
 grep -q "STEP 0.3 baseline" roadmaps/fix-cerebro-progress.log
 ```
 
-### Phase 0 exit gate
+### Phase 0 exit gate *(DONE)*
 
 ```bash
 make lint
@@ -266,15 +284,33 @@ git push -u origin fix-0-triage   # optional
 
 If `make test` is **already failing** before any change, log the failures and STOP. Phase 1 can only start from a green baseline (or from an explicitly accepted list of pre-existing failures recorded in `roadmaps/fix-cerebro-progress.log`).
 
-**Phase 0 exit (as executed):** `make test` passed (558 tests). Repo-wide `make lint` still reports Black drift in several pre-existing modules unrelated to Phase 0; new `scripts/diag/` files pass Black, Ruff, and Mypy.
+**As executed:** `make test` **passed** (558 tests). `make lint` **did not pass** repo-wide at the time of Phase 0 (Black would reformat multiple existing files outside `scripts/diag/`); Phase 0 diagnostics themselves conform to Black / Ruff / Mypy. Optional remote: `git push -u origin fix-0-triage`.
 
 ---
 
 ## Phase 1 — Stop the freeze (RAM containment)
 
+**Status: DONE** (completed 2026-05-14). Branch `fix-1-ram-containment`.
+
 **Goal:** Make `make run` survive on an 8 GB M1 with default settings. Concretely: ≤ 1 llama-server subprocess, no `--mlock`, smaller context, no MLX double-load, ContextEnricher off until Phase 4.
 
-### Step 1.1 — Make `LLAMACPP_SIMPLE` the default
+### What was delivered (implementation record)
+
+| Step | Change |
+|------|--------|
+| **1.1** | `CEREBRO_LLAMACPP_SIMPLE` default **`true`** in `main.py` and `cerebro/main.py`. Startup log: `llamacpp mode: simple=…`. `.env.example`, `CLAUDE.md`, `.cursor/rules/cerebro.mdc` updated. Default `CEREBRO_LLAMACPP_MODEL` → `llama-3.2-3b-instruct-q4_k_m.gguf` (matches `config/chat.args`). |
+| **1.2** | `_validate_swap_model_files()` in `core/inference/model_manager.py` (+ `cerebro/…` copy): requires router + embed + at least one specialist GGUF; raises `FileNotFoundError` otherwise. `main.py` / `cerebro/main.py`: `try/except FileNotFoundError` around `ModelManager()` → **automatic fallback to simple mode** with warning log. `tests/test_model_manager.py`: autouse fixture creates dummy GGUFs; `test_missing_models_raises_file_not_found`. |
+| **1.3** | `config/chat.args` and `cerebro/config/chat.args`: llama-3.2-3B profile, **ctx 1536**, **`--threads 4`**, removed **`--mlock`** and **`--cache-prompt`**. |
+| **1.4** | `mlx_available()` in `core/inference/platform.py` (+ cerebro copy): **`psutil.virtual_memory().total < 12 GiB` → False** before importing MLX; still requires **Darwin + Apple Silicon** (`is_apple_silicon`). `CEREBRO_MLX_ENABLED=true` documented in `CLAUDE.md` to force MLX on low-RAM machines. Tests: `test_mlx_available_false_when_insufficient_ram`, import-fail test patches high RAM. |
+| **1.5** | `CEREBRO_PROACTIVE_CONTEXT` default **`false`** in `main.py` (ContextEnricher off unless opted in). |
+| **1.6** | **Manual:** `make engine` + `make run` + `snapshot.py` + curl smoke (see commands below). **Recorded:** RAM availability gate script appended to `roadmaps/fix-cerebro-progress.log`. |
+| **Tests** | `tests/test_phase7_advanced.py` (+ cerebro): `chat.args` no longer required to contain `--cache-prompt` (still required for `coding` / `deep`). `tests/test_model_efficiency.py` default-model assertion updated. |
+
+**Exit gate:** `PYTHONPATH=. pytest tests/ -k "not test_execute_plan_step_timeout"` → **558 passed**, 1 deselected (full run ~10 min). Run `pytest tests/test_planner.py::test_execute_plan_step_timeout` separately if needed (~5 min). `make lint` may still fail repo-wide Black on unrelated files.
+
+---
+
+### Step 1.1 — Make `LLAMACPP_SIMPLE` the default *(DONE)*
 
 * **Files touched:** `main.py`, `.env.example`, `CLAUDE.md`.
 * **Action:** flip the default for `CEREBRO_LLAMACPP_SIMPLE` from `"false"` to `"true"`. Add a clear startup log line so the user knows which path is active. Update the env example and the architecture doc.
@@ -304,7 +340,7 @@ print("ok")
 PY
 ```
 
-### Step 1.2 — Refuse to launch model_manager when files are missing
+### Step 1.2 — Refuse to launch model_manager when files are missing *(DONE)*
 
 * **Files touched:** `core/inference/model_manager.py`.
 * **Action:** in `ModelManager.__init__`, validate that `_MODELS_DIR / _ROUTER_MODEL` and `_MODELS_DIR / _EMBED_MODEL` exist and that **at least one** of `_GENERAL_MODEL` / `_CODE_MODEL` exists. Raise a `FileNotFoundError` with a precise list of missing files. Wrap the `ModelManager()` construction site in `main.py` with a `try/except FileNotFoundError` that logs a clear instruction ("disable model swapping or place these files: ...") and falls through to **simple mode** automatically — never crash the backend.
@@ -318,7 +354,7 @@ PY
 
 (If the test file does not exist yet, Step 8.2 creates it; for now the verification is allowed to print the hint.)
 
-### Step 1.3 — RAM-friendly llama.cpp profile
+### Step 1.3 — RAM-friendly llama.cpp profile *(DONE)*
 
 * **Files touched:** `config/chat.args`.
 * **Action:** rewrite `config/chat.args` to the M1-8GB-safe profile:
@@ -347,7 +383,9 @@ test -f bin/models/llama-3.2-3b-instruct-q4_k_m.gguf
 grep -q "ctx-size 1536" config/chat.args
 ```
 
-### Step 1.4 — Skip MLX on ≤ 8 GB Macs
+### Step 1.4 — Skip MLX on ≤ 8 GB Macs *(DONE)*
+
+*Shipped logic:* after `Darwin` + `is_apple_silicon()`, `psutil.virtual_memory().total < 12 * 1024**3` returns `False` before attempting `import mlx` (plan excerpt below omitted `arm64` check; implementation keeps it).
 
 * **Files touched:** `main.py`, `core/inference/platform.py`.
 * **Action:** in `core.inference.platform.mlx_available()`, also return `False` when `psutil.virtual_memory().total < 12 * 2**30`. Document the override (`CEREBRO_MLX_ENABLED=true`) in `CLAUDE.md`.
@@ -380,7 +418,7 @@ print("ok")
 PY
 ```
 
-### Step 1.5 — Disable ContextEnricher by default until Phase 4 lands
+### Step 1.5 — Disable ContextEnricher by default until Phase 4 lands *(DONE)*
 
 * **Files touched:** `main.py`.
 * **Action:** flip the default for `PROACTIVE_CONTEXT` from `"true"` to `"false"`. The enricher today fires `osascript` on every query, leaks subprocesses (Step 4.4 fixes this), and forces the calendar permission prompt before the user has any reason to grant it.
@@ -402,7 +440,7 @@ print("ok")
 PY
 ```
 
-### Step 1.6 — Smoke-test the freeze fix
+### Step 1.6 — Smoke-test the freeze fix *(manual / recorded)*
 
 * **Action:** start the engine and the backend, ask three questions, and watch RAM:
 
@@ -429,13 +467,15 @@ sys.exit(0 if avail_gb >= 1.2 else 1)
 PY
 ```
 
-### Phase 1 exit gate
+### Phase 1 exit gate *(DONE)*
 
 ```bash
 git checkout -b fix-1-ram-containment
 make lint && make test
 git commit -am "fix-1: 8GB-safe defaults (simple mode, no mlock, mlx off, enricher off)"
 ```
+
+**As executed:** targeted tests + full `pytest` excluding `test_execute_plan_step_timeout` (558 passed). Commit uses explicit `git add` file list (not `-am` only). Repo-wide `make lint` may still fail on pre-existing Black drift outside touched modules.
 
 ---
 

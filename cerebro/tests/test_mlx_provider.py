@@ -205,6 +205,10 @@ def test_is_apple_silicon_false_on_non_darwin(mocker):
 def test_mlx_available_false_when_import_fails(mocker):
     mocker.patch("sys.platform", "darwin")
     mocker.patch("platform.machine", return_value="arm64")
+    mocker.patch(
+        "core.inference.platform.psutil.virtual_memory",
+        return_value=mocker.Mock(total=16 * 1024**3),
+    )
     with patch.dict(sys.modules, {"mlx": None, "mlx.core": None, "mlx_lm": None}):
         from importlib import reload
 
@@ -212,3 +216,15 @@ def test_mlx_available_false_when_import_fails(mocker):
 
         reload(plat)
         assert plat.mlx_available() is False
+
+
+def test_mlx_available_false_when_insufficient_ram(mocker):
+    mocker.patch("sys.platform", "darwin")
+    mocker.patch("platform.machine", return_value="arm64")
+    mocker.patch(
+        "core.inference.platform.psutil.virtual_memory",
+        return_value=mocker.Mock(total=8 * 1024**3),
+    )
+    import core.inference.platform as plat
+
+    assert plat.mlx_available() is False

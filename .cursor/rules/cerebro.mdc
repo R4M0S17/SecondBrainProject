@@ -49,11 +49,12 @@ React 18 + TypeScript + Zustand + Tauri.
 
 ## Dev Commands
 ```bash
+Never use npm, use different alternatives
 make run          # start backend on :7842
 make test         # pytest (all mocked, no live service needed)
 make lint         # black + ruff + mypy
 make engine       # start llama.cpp server on :8080
-cd ui/tray && npm run dev    # frontend dev server (Vite + Tauri)
+cd ui/tray && (npm) run dev    # frontend dev server (Vite + Tauri)
 ```
 
 ## Code Style
@@ -66,7 +67,7 @@ cd ui/tray && npm run dev    # frontend dev server (Vite + Tauri)
 CEREBRO_PORT=7842
 CEREBRO_INFERENCE_BACKEND=llamacpp   # or mlx
 CEREBRO_LLAMACPP_URL=http://127.0.0.1:8080
-CEREBRO_LLAMACPP_SIMPLE=false        # true = single server mode
+CEREBRO_LLAMACPP_SIMPLE=true         # false = ModelManager multi-server model swapping
 CEREBRO_DB=~/.cerebro/db
 CEREBRO_STATE=~/.cerebro/state
 ```

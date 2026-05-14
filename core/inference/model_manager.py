@@ -32,8 +32,32 @@ _ROLE_MODEL: dict[str, str] = {
 }
 
 
+def _validate_swap_model_files() -> None:
+    """Ensure GGUF files exist before ModelManager spawns subprocesses."""
+    missing: list[str] = []
+    router_path = _MODELS_DIR / _ROUTER_MODEL
+    embed_path = _MODELS_DIR / _EMBED_MODEL
+    general_path = _MODELS_DIR / _GENERAL_MODEL
+    code_path = _MODELS_DIR / _CODE_MODEL
+    if not router_path.is_file():
+        missing.append(str(router_path))
+    if not embed_path.is_file():
+        missing.append(str(embed_path))
+    if not general_path.is_file() and not code_path.is_file():
+        missing.append(str(general_path))
+        missing.append(str(code_path))
+    if missing:
+        joined = "\n  ".join(missing)
+        raise FileNotFoundError(
+            f"Model swapping requires these files under {_MODELS_DIR}:\n  {joined}\n"
+            "Set CEREBRO_LLAMACPP_SIMPLE=true to use a single external llama-server, "
+            "or add the missing GGUFs."
+        )
+
+
 class ModelManager:
     def __init__(self) -> None:
+        _validate_swap_model_files()
         self._router_proc: subprocess.Popen | None = None
         self._specialist_proc: subprocess.Popen | None = None
         self._embed_proc: subprocess.Popen | None = None

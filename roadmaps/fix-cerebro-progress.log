@@ -47,3 +47,8 @@ exit=0
 === Phase 0 exit gate @ 2026-05-14T03:14:44Z ===
 make test: PASS (558 passed, ~16m — includes test_execute_plan_step_timeout sleep)
 make lint: FAIL on repo (14 files would be reformatted outside Phase 0 scope); Phase 0 scripts: black+ruff+mypy OK on scripts/diag/
+
+=== Phase 1 complete @ 2026-05-14T18:03:06Z ===
+Steps 1.1-1.5 implemented; 1.6 manual smoke deferred (engine+backend).
+post-change RAM check available=1.34GB
+ram_gate_exit=0

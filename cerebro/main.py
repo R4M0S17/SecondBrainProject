@@ -38,12 +38,17 @@ RAM_PRIMARY_GB = float(os.getenv("CEREBRO_RAM_PRIMARY_GB", "1.0"))
 RAM_FALLBACK_GB = float(os.getenv("CEREBRO_RAM_FALLBACK_GB", "0.3"))
 MLX_MODEL = os.getenv("CEREBRO_MLX_MODEL", "mlx-community/Phi-4-mini-instruct-4bit")
 MLX_ENABLED = os.getenv("CEREBRO_MLX_ENABLED", "auto")  # "auto" | "true" | "false"
-INFERENCE_BACKEND = os.getenv("CEREBRO_INFERENCE_BACKEND", "llamacpp")  # "llamacpp" | "mlx"
+INFERENCE_BACKEND = os.getenv(
+    "CEREBRO_INFERENCE_BACKEND", "llamacpp"
+)  # "llamacpp" | "mlx" | "claude"
 LLAMACPP_URL = os.getenv("CEREBRO_LLAMACPP_URL", "http://127.0.0.1:8080")
 LLAMACPP_EMBED_URL = os.getenv("CEREBRO_LLAMACPP_EMBED_URL", "http://127.0.0.1:8082")
-LLAMACPP_MODEL = os.getenv("CEREBRO_LLAMACPP_MODEL", "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf")
+LLAMACPP_MODEL = os.getenv(
+    "CEREBRO_LLAMACPP_MODEL",
+    "llama-3.2-3b-instruct-q4_k_m.gguf",
+)
 LLAMACPP_PROFILE = os.getenv("CEREBRO_LLAMACPP_PROFILE", "chat")
-LLAMACPP_SIMPLE = os.getenv("CEREBRO_LLAMACPP_SIMPLE", "false").lower() == "true"
+LLAMACPP_SIMPLE = os.getenv("CEREBRO_LLAMACPP_SIMPLE", "true").lower() == "true"
 
 CEREBRO_FILES_PATH = os.path.expanduser(os.getenv("CEREBRO_FILES_PATH", "~/Desktop/CerebroFiles"))
 AUTHORIZED_READ_PATHS = [
@@ -65,8 +70,40 @@ def _build_app_state() -> None:
     llm_router: LLMRouter | None = None
     use_mlx = (MLX_ENABLED == "true") or (MLX_ENABLED == "auto" and mlx_available())
 
-    if INFERENCE_BACKEND == "llamacpp":
-        if LLAMACPP_SIMPLE:
+    if INFERENCE_BACKEND == "claude":
+        from core.inference.providers.claude_api_provider import ClaudeApiChatProvider
+
+        embed = LlamaCppEmbeddingProvider(base_url=LLAMACPP_EMBED_URL)
+        claude_model = os.environ.get("CEREBRO_CLAUDE_MODEL", "claude-sonnet-4-6")
+        chat_provider = ClaudeApiChatProvider(model=claude_model)
+        registry.register("claude", chat_provider, embed)
+        registry.set_primary("claude")
+        logger.info("Inference: Claude API ({})", claude_model)
+    elif INFERENCE_BACKEND == "llamacpp":
+        model_manager = None
+        llm_router = None
+        app_state.model_manager = None
+        use_simple = LLAMACPP_SIMPLE
+        if not use_simple:
+            try:
+                model_manager = ModelManager()
+                llm_router = LLMRouter()
+                app_state.model_manager = model_manager
+            except FileNotFoundError as exc:
+                logger.warning(
+                    "Model swapping disabled — missing GGUF files ({}). "
+                    "Falling back to simple llama.cpp at {}.",
+                    exc,
+                    LLAMACPP_URL,
+                )
+                use_simple = True
+
+        logger.info(
+            "llamacpp mode: simple={} (set CEREBRO_LLAMACPP_SIMPLE=false for model swapping)",
+            use_simple,
+        )
+
+        if use_simple:
             embed = LlamaCppEmbeddingProvider(base_url=LLAMACPP_EMBED_URL)
             llamacpp_chat = LlamaCppChatProvider(
                 model=LLAMACPP_MODEL,
@@ -88,10 +125,7 @@ def _build_app_state() -> None:
             else:
                 logger.info("Inference: llama.cpp simple → {}", LLAMACPP_URL)
         else:
-            model_manager = ModelManager()
-            llm_router = LLMRouter()
-            app_state.model_manager = model_manager
-
+            assert model_manager is not None
             embed = LlamaCppEmbeddingProvider(base_url=model_manager.embed_url)
             llamacpp_chat = LlamaCppChatProvider(
                 model=LLAMACPP_MODEL,
@@ -124,7 +158,8 @@ def _build_app_state() -> None:
         if not use_mlx:
             raise RuntimeError(
                 "No inference backend available. "
-                "Set CEREBRO_INFERENCE_BACKEND=llamacpp or ensure MLX is available on Apple Silicon."
+                "Set CEREBRO_INFERENCE_BACKEND=llamacpp, CEREBRO_INFERENCE_BACKEND=claude "
+                "(with ANTHROPIC_API_KEY), or ensure MLX is available on Apple Silicon."
             )
         from core.inference.providers.mlx_provider import MlxChatProvider, MlxEmbeddingProviderStub
 

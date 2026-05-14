@@ -9,6 +9,17 @@ import pytest
 import core.inference.model_manager as mm_module
 from core.inference.model_manager import ModelManager
 
+
+@pytest.fixture(autouse=True)
+def _swap_model_files_exist(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """ModelManager.__init__ requires router, embed, and at least one specialist GGUF."""
+    d = tmp_path
+    (d / mm_module._ROUTER_MODEL).write_text("", encoding="utf-8")
+    (d / mm_module._EMBED_MODEL).write_text("", encoding="utf-8")
+    (d / mm_module._GENERAL_MODEL).write_text("", encoding="utf-8")
+    monkeypatch.setattr(mm_module, "_MODELS_DIR", d)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -280,3 +291,16 @@ async def test_stop_kills_embed_server():
 
     embed_proc.terminate.assert_called_once()
     assert manager._embed_proc is None
+
+
+# ---------------------------------------------------------------------------
+# test_missing_models_raises_file_not_found
+# ---------------------------------------------------------------------------
+
+
+def test_missing_models_raises_file_not_found(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    empty = tmp_path / "nomodels"
+    empty.mkdir()
+    monkeypatch.setattr(mm_module, "_MODELS_DIR", empty)
+    with pytest.raises(FileNotFoundError, match="Model swapping requires"):
+        ModelManager()

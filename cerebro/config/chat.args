@@ -1,9 +1,9 @@
---model bin/models/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
---ctx-size 2048
+--model bin/models/llama-3.2-3b-instruct-q4_k_m.gguf
+--ctx-size 1536
 --cache-type-k q4_0
 --cache-type-v q4_0
 --n-gpu-layers 99
 --flash-attn on
---mlock
 --temp 0.7
 --repeat-penalty 1.1
+--threads 4
