@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import re
 
 import httpx
 from loguru import logger
+
+from core.agents.intent_keywords import classify_intent_fast
 
 _CLASSIFY_PROMPT = """\
 Classify the user's request into ONE category:
@@ -17,18 +20,29 @@ Respond with ONLY the category word.
 User: {query}
 Category:"""
 
-_VALID_CATEGORIES = {"code", "calendar", "academic", "general"}
 _CATEGORY_RE = re.compile(r"\b(code|calendar|academic|general)\b", re.IGNORECASE)
 
 
 class LLMRouter:
-    def __init__(self, base_url: str = "http://127.0.0.1:8080") -> None:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8080",
+        model: str | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._model = model or os.getenv(
+            "CEREBRO_LLAMACPP_MODEL",
+            "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
+        )
 
     async def classify(self, query: str) -> str:
+        fast = classify_intent_fast(query)
+        if fast is not None:
+            return fast
+
         truncated = query[:300]
         payload = {
-            "model": "router",
+            "model": self._model,
             "messages": [
                 {"role": "user", "content": _CLASSIFY_PROMPT.format(query=truncated)},
             ],

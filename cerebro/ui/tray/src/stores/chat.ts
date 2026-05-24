@@ -25,6 +25,8 @@ interface ChatState {
   isLoading: boolean;
   abortController: AbortController | null;
   activeAgent: AgentId;
+  /** Durable session key — same as API ``conversation_id`` for this chat surface. */
+  conversationId: string | null;
   pendingConfirmation: PendingConfirmation | null;
 
   addMessage: (msg: Omit<Message, "id" | "timestamp">) => string;
@@ -36,6 +38,7 @@ interface ChatState {
   setAbortController: (ctrl: AbortController | null) => void;
   toggleMessagePanel: (id: string, panel: "sources" | "tools" | "memory") => void;
   setPendingConfirmation: (conf: PendingConfirmation | null) => void;
+  setConversationId: (id: string | null) => void;
   clearMessages: () => void;
 }
 
@@ -47,7 +50,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isLoading: false,
   abortController: null,
-  activeAgent: "general",
+  activeAgent: "auto",
+  conversationId: null,
   pendingConfirmation: null,
 
   addMessage: (msg) => {
@@ -100,5 +104,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setPendingConfirmation: (conf) => set({ pendingConfirmation: conf }),
 
-  clearMessages: () => set({ messages: [] }),
+  setConversationId: (id) => set({ conversationId: id }),
+
+  clearMessages: () => set({ messages: [], conversationId: null }),
 }));

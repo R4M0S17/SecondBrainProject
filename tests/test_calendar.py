@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from integrations.calendar_reader import (
     _JXA_BIRTHDAYS_TEMPLATE,
     AppleCalendarBackend,
+    BackendResult,
     BirthdayBackend,
     CalendarReader,
     ICalBackend,
@@ -331,12 +332,39 @@ def test_reader_backend_exception_does_not_propagate():
     assert events == []
 
 
-def test_reader_includes_birthday_backend_on_macos():
+def test_reader_apple_without_birthday_chain_by_default():
     with patch("integrations.calendar_reader.platform.system", return_value="Darwin"):
         reader = CalendarReader(use_apple_calendar=True)
     backend_types = [type(b).__name__ for b in reader._backends]
     assert "AppleCalendarBackend" in backend_types
+    assert "BirthdayChainBackend" not in backend_types
+
+
+def test_reader_includes_birthday_backend_when_requested():
+    with patch("integrations.calendar_reader.platform.system", return_value="Darwin"):
+        reader = CalendarReader(use_apple_calendar=True, include_birthday_backends=True)
+    backend_types = [type(b).__name__ for b in reader._backends]
     assert "BirthdayChainBackend" in backend_types
+
+
+def test_merge_returns_ics_when_apple_times_out(tmp_path: Path):
+    now = datetime.now(UTC)
+    ics = _make_ics([_vevent("ICS Meeting", now + timedelta(hours=4))])
+    p = tmp_path / "cal.ics"
+    p.write_bytes(ics)
+
+    reader = CalendarReader(ics_path=str(p), use_apple_calendar=True)
+    apple = MagicMock(spec=["get_upcoming_events_v2"])
+    apple.get_upcoming_events_v2.return_value = BackendResult(
+        status="timeout", detail="osascript timed out"
+    )
+    reader._backends = [ICalBackend(str(p)), apple]
+
+    result = reader.get_upcoming_events_v2(hours_ahead=24)
+    assert result.status == "ok"
+    assert len(result.events) == 1
+    assert result.events[0].title == "ICS Meeting"
+    assert result.detail == "partial_apple_timeout"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -454,53 +482,44 @@ def test_search_upcoming_uses_days_not_hours(tmp_path: Path):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# add_apple_reminder (integrations layer)
+# delete_apple_calendar_event_by_title (integrations layer)
 # ──────────────────────────────────────────────────────────────────────────────
 
-from integrations.calendar_reader import add_apple_reminder
+from integrations.calendar_reader import delete_apple_calendar_event_by_title
 
 
-def _reminder_ok() -> MagicMock:
+def _osascript_count_ok(count: str = "1") -> MagicMock:
     m = MagicMock()
     m.returncode = 0
-    m.stdout = "ok"
+    m.stdout = count
     m.stderr = ""
     return m
 
 
-def test_add_apple_reminder_returns_true_on_success():
+def test_delete_apple_calendar_event_by_title_returns_count():
     with patch("integrations.calendar_reader.platform.system", return_value="Darwin"):
-        with patch("integrations.calendar_reader.subprocess.run", return_value=_reminder_ok()):
-            result = add_apple_reminder(
-                "Call doctor", "2026-05-20T09:00:00+00:00", "bring insurance card"
-            )
-    assert result is True
+        with patch(
+            "integrations.calendar_reader.subprocess.run", return_value=_osascript_count_ok("2")
+        ):
+            result = delete_apple_calendar_event_by_title("Meeting")
+    assert result == 2
 
 
-def test_add_apple_reminder_returns_false_on_non_macos():
+def test_delete_apple_calendar_event_by_title_returns_minus_one_on_non_macos():
     with patch("integrations.calendar_reader.platform.system", return_value="Linux"):
-        result = add_apple_reminder("Call doctor", "2026-05-20T09:00:00+00:00")
-    assert result is False
+        result = delete_apple_calendar_event_by_title("Meeting")
+    assert result == -1
 
 
-def test_add_apple_reminder_returns_false_on_osascript_error():
+def test_delete_apple_calendar_event_by_title_returns_minus_one_on_osascript_error():
     m = MagicMock()
     m.returncode = 1
     m.stdout = ""
-    m.stderr = "Reminders not accessible"
+    m.stderr = "Calendar not accessible"
     with patch("integrations.calendar_reader.platform.system", return_value="Darwin"):
         with patch("integrations.calendar_reader.subprocess.run", return_value=m):
-            result = add_apple_reminder("Task", "2026-05-20T09:00:00+00:00")
-    assert result is False
-
-
-def test_add_apple_reminder_returns_false_on_subprocess_exception():
-    with patch("integrations.calendar_reader.platform.system", return_value="Darwin"):
-        with patch(
-            "integrations.calendar_reader.subprocess.run", side_effect=OSError("osascript missing")
-        ):
-            result = add_apple_reminder("Task", "2026-05-20T09:00:00+00:00")
-    assert result is False
+            result = delete_apple_calendar_event_by_title("Task")
+    assert result == -1
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -512,9 +531,10 @@ from core.tools.handlers.calendar import add_reminder as handler_add_reminder
 
 def test_add_reminder_success():
     with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
-        with patch("core.tools.handlers.calendar.add_apple_reminder", return_value=True):
+        with patch("core.tools.handlers.calendar.create_apple_calendar_event", return_value=True):
             result = handler_add_reminder("Call doctor", "2026-05-20 09:00")
     assert "Call doctor" in result
+    assert "calendario" in result.lower()
     assert "Failed" not in result
 
 
@@ -523,6 +543,7 @@ def test_add_reminder_non_macos_returns_informative_message():
         result = handler_add_reminder("Buy milk", "tomorrow at 9am")
     assert "macOS" in result
     assert "Buy milk" in result
+    assert "Calendario" in result or "calendario" in result
 
 
 def test_add_reminder_bad_date_returns_error():
@@ -533,19 +554,87 @@ def test_add_reminder_bad_date_returns_error():
 
 def test_add_reminder_osascript_failure_returns_error():
     with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
-        with patch("core.tools.handlers.calendar.add_apple_reminder", return_value=False):
+        with patch("core.tools.handlers.calendar.create_apple_calendar_event", return_value=False):
             result = handler_add_reminder("Fix bug", "2026-06-01 10:00")
-    assert "Failed" in result
+    assert "No pude crear" in result
     assert "Fix bug" in result
 
 
 def test_add_reminder_notes_passed_through():
     with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
-        with patch("core.tools.handlers.calendar.add_apple_reminder", return_value=True) as mock_fn:
+        with patch(
+            "core.tools.handlers.calendar.create_apple_calendar_event", return_value=True
+        ) as mock_fn:
             handler_add_reminder("Dentist", "2026-06-01 10:00", notes="bring X-rays")
     mock_fn.assert_called_once()
-    _, _, notes_arg = mock_fn.call_args[0]
+    _, _, _, notes_arg = mock_fn.call_args[0]
     assert notes_arg == "bring X-rays"
+
+
+def test_add_reminder_uses_short_duration():
+    from core.tools.handlers.calendar import _REMINDER_EVENT_DURATION_MINS
+
+    with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
+        with patch(
+            "core.tools.handlers.calendar.create_apple_calendar_event", return_value=True
+        ) as mock_fn:
+            handler_add_reminder("Pay rent", "2026-06-01 10:00")
+    iso_start, iso_end = mock_fn.call_args[0][1], mock_fn.call_args[0][2]
+    start = datetime.fromisoformat(iso_start)
+    end = datetime.fromisoformat(iso_end)
+    assert int((end - start).total_seconds() / 60) == _REMINDER_EVENT_DURATION_MINS
+
+
+from core.tools.handlers.calendar import delete_reminder as handler_delete_reminder
+from core.tools.handlers.calendar import limit_keyword_event_matches
+from integrations.calendar_reader import CalendarEvent
+
+
+def test_limit_keyword_event_matches_caps_at_three():
+    now = datetime.now(UTC)
+    events = [
+        CalendarEvent(
+            title=f"E{i}", start=now + timedelta(days=i), end=now + timedelta(days=i, hours=1)
+        )
+        for i in range(6)
+    ]
+    limited = limit_keyword_event_matches(events, max_results=3)
+    assert len(limited) == 3
+
+
+def test_limit_keyword_event_matches_same_day_bundle():
+    now = datetime.now(UTC)
+    day = now + timedelta(days=5)
+    events = [
+        CalendarEvent(title="A", start=day, end=day + timedelta(hours=1)),
+        CalendarEvent(title="B", start=day + timedelta(hours=2), end=day + timedelta(hours=3)),
+        CalendarEvent(
+            title="C", start=now + timedelta(days=6), end=now + timedelta(days=6, hours=1)
+        ),
+    ]
+    limited = limit_keyword_event_matches(events, max_results=3)
+    assert len(limited) == 2
+    assert {ev.title for ev in limited} == {"A", "B"}
+
+
+def test_delete_reminder_success():
+    with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
+        with patch(
+            "core.tools.handlers.calendar.delete_apple_calendar_event_by_title", return_value=1
+        ):
+            result = handler_delete_reminder("pruebaCalendario")
+    assert "eliminado" in result.lower()
+    assert "calendario" in result.lower()
+
+
+def test_delete_reminder_not_found():
+    with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
+        with patch(
+            "core.tools.handlers.calendar.delete_apple_calendar_event_by_title", return_value=0
+        ):
+            result = handler_delete_reminder("missing")
+    assert "No encontré" in result
+    assert "Calendario" in result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -573,6 +662,30 @@ def test_birthday_template_includes_fallback_title_scan():
 # ──────────────────────────────────────────────────────────────────────────────
 # Bug 0-B: Calendar handler outputs local timezone, not hardcoded UTC (Phase 0 fix)
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_get_upcoming_events_next_event_single(tmp_path):
+    now = datetime.now(UTC)
+    ics = _make_ics(
+        [
+            _vevent("Soon", now + timedelta(hours=2)),
+            _vevent("Later", now + timedelta(hours=20)),
+        ]
+    )
+    p = tmp_path / "cal.ics"
+    p.write_bytes(ics)
+
+    from core.tools.handlers.calendar import get_upcoming_events
+
+    with patch("core.tools.handlers.calendar._use_apple_calendar", return_value=False):
+        result = get_upcoming_events(
+            hours_ahead=48,
+            ics_path=str(p),
+            max_events=1,
+        )
+    assert "Próximo evento" in result
+    assert "Soon" in result
+    assert "Later" not in result
 
 
 def test_get_upcoming_events_uses_local_timezone_format(tmp_path):

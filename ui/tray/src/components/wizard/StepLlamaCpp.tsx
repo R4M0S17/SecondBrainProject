@@ -64,7 +64,7 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
     try {
       await updateConfig({
         inference_backend: "llamacpp",
-        model: "llama-3.2-3b-instruct-q4_k_m.gguf",
+        model: "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
         mlx_enabled: false,
       });
       setLiteApplied(true);

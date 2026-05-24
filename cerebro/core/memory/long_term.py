@@ -15,20 +15,24 @@ if TYPE_CHECKING:
     from core.inference.registry import EmbeddingProvider
     from core.memory.vector_store import VectorStore
 
+from core.memory.vector_store import EmbeddingDimensionMismatchError, _check_vector_dim
+
 VECTOR_DIM = 768
 
-_AGENT_MEMORY_SCHEMA = pa.schema(
-    [
-        pa.field("id", pa.string()),
-        pa.field("agent_id", pa.string()),
-        pa.field("content", pa.string()),
-        pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-        pa.field("tags", pa.string()),  # JSON-encoded list[str]
-        pa.field("created_at", pa.float64()),
-        pa.field("confidence", pa.float64()),
-        pa.field("source", pa.string()),
-    ]
-)
+
+def agent_memory_schema(embedding_dim: int) -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("agent_id", pa.string()),
+            pa.field("content", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), embedding_dim)),
+            pa.field("tags", pa.string()),  # JSON-encoded list[str]
+            pa.field("created_at", pa.float64()),
+            pa.field("confidence", pa.float64()),
+            pa.field("source", pa.string()),
+        ]
+    )
 
 
 @dataclass
@@ -64,15 +68,33 @@ class LongTermStore:
         self._db = lancedb.connect(vector_store.db_path)
         self._agent_id = agent_id
         self._embed = embed
+        self._embedding_dim = embed.dimensions()
         self._table = self._get_or_create_table()
 
     def _get_or_create_table(self):
-        # exist_ok=True handles concurrent connections to the same DB path
-        return self._db.create_table(self.TABLE_NAME, schema=_AGENT_MEMORY_SCHEMA, exist_ok=True)
+        schema = agent_memory_schema(self._embedding_dim)
+        try:
+            return self._db.create_table(self.TABLE_NAME, schema=schema)
+        except ValueError:
+            table = self._db.open_table(self.TABLE_NAME)
+            try:
+                sample = table.to_arrow().select(["vector"]).slice(0, 1)
+                if sample.num_rows > 0:
+                    first = sample["vector"][0].as_py()
+                    if first is not None:
+                        _check_vector_dim([float(x) for x in first], self._embedding_dim)
+            except EmbeddingDimensionMismatchError:
+                raise
+            except Exception as e:
+                logger.debug("Could not validate agent_memory dimensions: {}", e)
+            return table
 
     async def search(self, query: str, context: RetrievalContext) -> list[MemoryChunk]:
         try:
             vector = await self._embed.embed(query)
+            _check_vector_dim(vector, self._embedding_dim)
+        except EmbeddingDimensionMismatchError:
+            raise
         except Exception as e:
             logger.warning("Embedding unavailable, skipping long-term memory search: {}", e)
             return []
@@ -119,6 +141,7 @@ class LongTermStore:
     async def store_episode(self, summary: str, tags: list[str]) -> str:
         chunk_id = str(uuid.uuid4())
         vector = await self._embed.embed(summary)
+        _check_vector_dim(vector, self._embedding_dim)
         row = {
             "id": chunk_id,
             "agent_id": self._agent_id,

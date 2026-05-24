@@ -95,8 +95,10 @@ async def test_complete_raises_on_auth_error(mocker: pytest.MockFixture, api_key
         "core.inference.providers.claude_api_provider.anthropic.AsyncAnthropic",
         return_value=mock_client,
     )
+    mock_response = MagicMock()
+    mock_response.status_code = 401
     mock_client.messages.create = AsyncMock(
-        side_effect=anthropic.AuthenticationError("bad", None, None)
+        side_effect=anthropic.AuthenticationError("bad", response=mock_response, body=None)
     )
     provider = ClaudeApiChatProvider()
     with pytest.raises(ClaudeApiUnavailableError, match="Invalid"):
@@ -112,7 +114,9 @@ async def test_complete_raises_on_connection_error(
         "core.inference.providers.claude_api_provider.anthropic.AsyncAnthropic",
         return_value=mock_client,
     )
-    mock_client.messages.create = AsyncMock(side_effect=anthropic.APIConnectionError("down"))
+    mock_client.messages.create = AsyncMock(
+        side_effect=anthropic.APIConnectionError(request=MagicMock())
+    )
     provider = ClaudeApiChatProvider()
     with pytest.raises(ClaudeApiUnavailableError, match="Cannot reach"):
         await provider.complete([{"role": "user", "content": "hi"}])
@@ -151,7 +155,9 @@ async def test_stream_raises_on_connection_error(mocker: pytest.MockFixture, api
         "core.inference.providers.claude_api_provider.anthropic.AsyncAnthropic",
         return_value=mock_client,
     )
-    mock_client.messages.stream = MagicMock(side_effect=anthropic.APIConnectionError("down"))
+    mock_client.messages.stream = MagicMock(
+        side_effect=anthropic.APIConnectionError(request=MagicMock())
+    )
     provider = ClaudeApiChatProvider()
     with pytest.raises(ClaudeApiUnavailableError, match="Cannot reach"):
         async for _ in provider.stream([{"role": "user", "content": "x"}]):

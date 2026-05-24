@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from core.memory.long_term import LongTermStore, MemoryChunk, RetrievalContext
 
 if TYPE_CHECKING:
     from core.agents.state_store import AgentState
-    from core.inference.registry import Message
+    from core.inference.registry import ChatProvider, Message
     from core.memory.short_term import ShortTermStore
     from core.memory.vector_store import SearchResult
 
@@ -15,6 +17,15 @@ if TYPE_CHECKING:
 _CHARS_PER_TOKEN = 4
 # Leave headroom for system prompt and model response
 DEFAULT_TOKEN_BUDGET = 3500
+
+_CONSOLIDATION_THRESHOLD = 0.85
+_TARGET_FILL_RATIO = 0.60
+_SYSTEM_OVERHEAD_TOKENS = 800
+_CONSOLIDATION_INSTRUCTION = (
+    "Resume nuestra conversación hasta ahora en 3 párrafos técnicos, "
+    "preservando variables, nombres de archivos, decisiones de herramientas y hechos clave. "
+    "No inventes información que no aparezca en el historial."
+)
 
 
 @dataclass
@@ -40,6 +51,78 @@ class ContextBuilder:
 
     def _tokens(self, text: str) -> int:
         return max(1, len(text) // _CHARS_PER_TOKEN)
+
+    def estimate_session_fill(self, agent_state: AgentState, messages: list[Message]) -> int:
+        instructions = agent_state.profile.preferences.get("instructions", "")
+        working_text = " ".join(str(v) for v in agent_state.working_memory.values())
+        return (
+            self._tokens(instructions)
+            + self._tokens(working_text)
+            + self._tokens(agent_state.session_summary)
+            + sum(self._tokens(m["content"]) for m in messages)
+            + _SYSTEM_OVERHEAD_TOKENS
+        )
+
+    def _messages_to_evict(
+        self, messages: list[Message], current_tokens: int, target_tokens: int
+    ) -> int:
+        if current_tokens <= target_tokens or not messages:
+            return 0
+        tokens_to_free = current_tokens - target_tokens
+        evicted = 0
+        freed = 0
+        for msg in messages:
+            if freed >= tokens_to_free:
+                break
+            freed += self._tokens(msg["content"])
+            evicted += 1
+        return min(evicted, max(0, len(messages) - 1))
+
+    async def maybe_consolidate(
+        self,
+        agent_state: AgentState,
+        provider: ChatProvider,
+        context_window: int,
+    ) -> bool:
+        """Summarize and evict oldest turns when estimated fill exceeds 85 % of context."""
+        messages = self._short_term.get_context().active_messages
+        if not messages:
+            return False
+
+        fill = self.estimate_session_fill(agent_state, messages)
+        threshold = int(context_window * _CONSOLIDATION_THRESHOLD)
+        if fill < threshold:
+            return False
+
+        target = int(context_window * _TARGET_FILL_RATIO)
+        to_evict = self._messages_to_evict(messages, fill, target)
+        if to_evict <= 0:
+            return False
+
+        evicted = messages[:to_evict]
+        conversation_text = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in evicted)
+        summary = await provider.complete(
+            [
+                {"role": "system", "content": _CONSOLIDATION_INSTRUCTION},
+                {"role": "user", "content": conversation_text},
+            ]
+        )
+
+        block = f"[Consolidación automática]\n{summary.strip()}"
+        if agent_state.session_summary:
+            agent_state.session_summary = f"{agent_state.session_summary}\n---\n{block}"
+        else:
+            agent_state.session_summary = block
+
+        self._short_term.drop_oldest(to_evict)
+        logger.info(
+            "consolidation: evicted {} messages (~{}/{} tokens before, target ≤{})",
+            to_evict,
+            fill,
+            context_window,
+            target,
+        )
+        return True
 
     async def build(self, query: str, agent_state: AgentState) -> AssembledContext:
         remaining = self._token_budget

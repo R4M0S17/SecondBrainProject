@@ -7,7 +7,7 @@ Canonical technical docs live under **`docs/`** at the repository root (not unde
 | **Architecture & ops** | [`../CLAUDE.md`](../CLAUDE.md) | Stack overview, make targets, env vars, REST API sketch |
 | **Connection checklist** | [`connection/progress.md`](connection/progress.md) | Backend ↔ frontend wiring modules and smoke-test notes |
 | **HTTP / API usage** | [`connection/api-guide.md`](connection/api-guide.md) | REST examples |
-| **Runbooks** | [`guides/8gb-mac-quickstart.md`](guides/8gb-mac-quickstart.md) · [`guides/howToRun.md`](guides/howToRun.md) · [`guides/running-es.md`](guides/running-es.md) · [`guides/llamacpp-run-guide.md`](guides/llamacpp-run-guide.md) | 8 GB Mac one-pager (`make lite` / Automation / status checks); English / Spanish startup; llama.cpp notes |
+| **Runbooks** | [`guides/8gb-mac-quickstart.md`](guides/8gb-mac-quickstart.md) · [`guides/FIX_CHAT_RUNTIME_WARNINGS.md`](guides/FIX_CHAT_RUNTIME_WARNINGS.md) · [`guides/howToRun.md`](guides/howToRun.md) · [`guides/running-es.md`](guides/running-es.md) · [`guides/llamacpp-run-guide.md`](guides/llamacpp-run-guide.md) | 8 GB Mac one-pager; embed/RAM/context-enricher warnings; English / Spanish startup; llama.cpp notes |
 | **Inference** | [`inference/`](inference/) | llama.cpp, MLX, RAM notes |
 | **Frontend** | [`frontend/`](frontend/) | Design, roadmap, pending changes |
 | **Product / spec** | [`project/`](project/) | Specs, current state, Obsidian inspiration |
@@ -115,3 +115,21 @@ Cerebro is split into three cooperating planes: **desktop UI**, **HTTP API**, an
 **Quality gates.** **`make test`** runs **pytest** with heavy mocking at `AppState` boundaries so CI does not require GPUs or live inference. **`make lint`** runs formatter, **Ruff**, and **Mypy** on the Python side; the tray app has its own **npm** scripts for type-check and build.
 
 Together, this architecture implements a **single-user, local-first agent shell**: one HTTP backend coordinates models, memory, and tools, while the desktop UI focuses on chat, settings, status, and safe approval of high-risk operations.
+
+---
+
+## ImplemeFIX environment variables (8 GB profile)
+
+Set in [`config/profiles/lite-8gb.env`](../config/profiles/lite-8gb.env) or export before `make run`:
+
+| Variable | Default (8 GB) | Purpose |
+|----------|----------------|---------|
+| `CEREBRO_LLAMACPP_MODEL` | `Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf` | Chat model id sent to llama-server |
+| `CEREBRO_EMBEDDINGS_BACKEND` | `local` (auto on ≤10 GB RAM) | `local` = sentence-transformers; `llamacpp` = HTTP embed on :8082 |
+| `CEREBRO_LOCAL_EMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace model for local embeddings |
+| `CEREBRO_AUTHORIZED_READ_PATHS` | project + `~/Desktop/CerebroFiles` | Colon-separated read roots |
+| `CEREBRO_AUTHORIZED_WRITE_PATHS` | `~/Desktop/CerebroFiles` | Colon-separated write roots |
+| `CEREBRO_PROMPT_CACHE_PATH` | `bin/cache/chat.cache` | Prompt-cache sidecar path (Module 1) |
+| `CEREBRO_PROACTIVE_CONTEXT` | `false` in lite profile | macOS ambient context (osascript) |
+
+**Verification:** `make test` · `make smoke` (requires `make engine` + `make run`) · report in [`manual_tests/post_implemefix_smoke.md`](../manual_tests/post_implemefix_smoke.md).

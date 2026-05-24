@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.agents.runtime import AgentRuntime
 from core.agents.state_store import (
     AgentProfile,
     AgentState,
@@ -165,6 +166,7 @@ async def test_runtime_updates_session_summary_after_run(tmp_path):
     mock_context.sources_used = []
 
     mock_builder = MagicMock()
+    mock_builder.maybe_consolidate = AsyncMock(return_value=False)
     mock_builder.build = AsyncMock(return_value=mock_context)
 
     runtime = AgentRuntime(
@@ -257,6 +259,7 @@ async def test_runtime_aborts_on_duplicate_tool_call(tmp_path):
     mock_context.sources_used = []
 
     mock_builder = MagicMock()
+    mock_builder.maybe_consolidate = AsyncMock(return_value=False)
     mock_builder.build = AsyncMock(return_value=mock_context)
 
     def fake_read_file(**_kwargs):
@@ -347,6 +350,33 @@ def test_parse_plain_text_fallback():
     assert "reunión" in args["answer"]
 
 
+def test_parse_answer_list_becomes_bulleted_text():
+    action, tool, args = _parse_llm_response('{"action":"answer","answer":["a","b","c"]}')
+    assert action == "answer"
+    assert tool is None
+    assert args["answer"] == "- a\n- b\n- c"
+
+
+def test_parse_answer_dict_becomes_kv_text():
+    action, _, args = _parse_llm_response('{"action":"answer","answer":{"k1":"v1","k2":2}}')
+    assert action == "answer"
+    assert args["answer"] == "k1: v1\nk2: 2"
+
+
+def test_parse_answer_single_error_key():
+    action, _, args = _parse_llm_response('{"action":"answer","answer":{"error":"Sin eventos"}}')
+    assert action == "answer"
+    assert args["answer"] == "Sin eventos"
+
+
+def test_parse_answer_error_and_code():
+    action, _, args = _parse_llm_response(
+        '{"action":"answer","answer":{"error":"Sin eventos","code":404}}'
+    )
+    assert action == "answer"
+    assert args["answer"] == "Sin eventos (404)"
+
+
 # ---------------------------------------------------------------------------
 # Bug 0-B: system prompt uses local timezone, not hardcoded UTC
 # ---------------------------------------------------------------------------
@@ -430,6 +460,7 @@ async def test_search_files_tool_reached_when_authorized(tmp_path):
     mock_context.sources_used = []
 
     mock_builder = MagicMock()
+    mock_builder.maybe_consolidate = AsyncMock(return_value=False)
     mock_builder.build = AsyncMock(return_value=mock_context)
 
     runtime = AgentRuntime(
@@ -443,3 +474,169 @@ async def test_search_files_tool_reached_when_authorized(tmp_path):
 
     assert handler_called, "search_files handler was not called"
     assert isinstance(answer, str) and len(answer) > 0
+
+
+# ---------------------------------------------------------------------------
+# A1.3 — semantic history compression when context fill exceeds 85 %
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consolidation_triggers_above_85_percent_fill():
+    from unittest.mock import AsyncMock
+
+    from core.memory.context_builder import ContextBuilder
+    from core.memory.short_term import ShortTermStore
+
+    short_term = ShortTermStore()
+    for _ in range(15):
+        short_term.push_message({"role": "user", "content": "x" * 500})
+        short_term.push_message({"role": "assistant", "content": "y" * 500})
+
+    before_count = len(short_term.get_context().active_messages)
+    assert before_count > 0
+
+    long_term = AsyncMock()
+    long_term.search = AsyncMock(return_value=[])
+    builder = ContextBuilder(short_term=short_term, long_term=long_term)
+
+    provider = AsyncMock()
+    provider.complete = AsyncMock(
+        return_value="Resumen técnico con archivo config.py y variable API_KEY."
+    )
+
+    agent_state = _make_state(summary="")
+    context_window = 4096
+
+    triggered = await builder.maybe_consolidate(agent_state, provider, context_window)
+
+    assert triggered is True
+    assert "Consolidación automática" in agent_state.session_summary
+    assert len(short_term.get_context().active_messages) < before_count
+    provider.complete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reason_node_passes_grammar_to_complete(tmp_path):
+    from core.agents.runtime import AgentRuntime
+    from core.inference.registry import ProviderRegistry
+
+    agent_id = "agent-grammar"
+    store = AgentStateStore(state_dir=str(tmp_path))
+
+    captured: dict = {}
+
+    async def fake_complete(_messages, **kwargs):
+        captured.update(kwargs)
+        return '{"action": "answer", "answer": "respuesta con áéíóú ñ"}'
+
+    mock_chat = MagicMock()
+    mock_chat.complete = fake_complete
+    mock_registry = MagicMock(spec=ProviderRegistry)
+    mock_registry.select_for_task = MagicMock(return_value="primary")
+    mock_registry.get_chat = MagicMock(return_value=mock_chat)
+
+    mock_context = MagicMock()
+    mock_context.retrieved_memory = []
+    mock_context.session_history = []
+    mock_context.retrieved_documents = []
+    mock_context.agent_summary = ""
+    mock_context.total_tokens_estimated = 10
+    mock_context.sources_used = []
+
+    mock_builder = MagicMock()
+    mock_builder.maybe_consolidate = AsyncMock(return_value=False)
+    mock_builder.build = AsyncMock(return_value=mock_context)
+
+    runtime = AgentRuntime(
+        registry=mock_registry,
+        state_store=store,
+        context_builder=mock_builder,
+        tool_registry={},
+    )
+
+    await runtime.run("¿Qué hora es?", agent_id)
+
+    assert "grammar" in captured
+    assert "answer-response" in captured["grammar"]
+    assert "json-string" in captured["grammar"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_resumes_capped_conversation_history(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from core.agents.conversation_store import ConversationStore
+    from core.agents.session_policy import SESSION_RESUME_MAX_TURNS
+    from core.agents.specialized import make_general_profile
+    from core.memory.context_builder import ContextBuilder
+    from core.memory.short_term import ShortTermStore
+
+    conv_store = ConversationStore(str(tmp_path))
+    conv_id = conv_store.create("general-v1")
+    for i in range(12):
+        conv_store.append(conv_id, f"q{i}", f"a{i}", {})
+
+    store = AgentStateStore(str(tmp_path / "agents"))
+    profile = make_general_profile()
+    store.save(
+        AgentState(
+            profile=profile,
+            session_summary="",
+            working_memory={},
+            tool_trace=[],
+            semantic_memory_refs=[],
+            execution_count=0,
+            last_active=datetime.now(UTC).isoformat(),
+        )
+    )
+
+    short_term = ShortTermStore()
+    long_term = AsyncMock()
+    long_term.search = AsyncMock(return_value=[])
+    builder = ContextBuilder(short_term=short_term, long_term=long_term)
+
+    mock_chat = MagicMock()
+    mock_chat.complete = AsyncMock(return_value='{"action": "answer", "answer": "ok"}')
+    mock_chat.context_window = MagicMock(return_value=4096)
+    mock_registry = MagicMock()
+    mock_registry.select_for_task = MagicMock(return_value="primary")
+    mock_registry.get_chat = MagicMock(return_value=mock_chat)
+
+    runtime = AgentRuntime(
+        registry=mock_registry,
+        state_store=store,
+        context_builder=builder,
+        tool_registry={},
+        conversation_store=conv_store,
+    )
+
+    runtime.prepare_conversation(conv_id, "general-v1")
+
+    messages = short_term.get_context().active_messages
+    assert len(messages) == SESSION_RESUME_MAX_TURNS
+    assert messages[0]["content"] == "q8"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_skipped_below_threshold():
+    from unittest.mock import AsyncMock
+
+    from core.memory.context_builder import ContextBuilder
+    from core.memory.short_term import ShortTermStore
+
+    short_term = ShortTermStore()
+    short_term.push_message({"role": "user", "content": "hola"})
+
+    long_term = AsyncMock()
+    long_term.search = AsyncMock(return_value=[])
+    builder = ContextBuilder(short_term=short_term, long_term=long_term)
+
+    provider = AsyncMock()
+    provider.complete = AsyncMock(return_value="no debería llamarse")
+
+    agent_state = _make_state(summary="")
+    triggered = await builder.maybe_consolidate(agent_state, provider, context_window=4096)
+
+    assert triggered is False
+    provider.complete.assert_not_awaited()

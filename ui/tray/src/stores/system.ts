@@ -1,9 +1,10 @@
 import { create } from "zustand";
-import type { StatusResponse, FleetStatus, ModelSwapEvent } from "../api/types";
-import { getStatus, getFleetStatus } from "../api/client";
+import type { StatusResponse, HealthResponse, FleetStatus, ModelSwapEvent } from "../api/types";
+import { getStatus, getHealth, getFleetStatus } from "../api/client";
 
 interface SystemState {
   status: StatusResponse | null;
+  health: HealthResponse | null;
   fleetStatus: FleetStatus | null;
   swapEvent: ModelSwapEvent | null;
   lastRefreshed: number | null;
@@ -19,6 +20,7 @@ interface SystemState {
 
 export const useSystemStore = create<SystemState>((set, get) => ({
   status: null,
+  health: null,
   fleetStatus: null,
   swapEvent: null,
   lastRefreshed: null,
@@ -27,8 +29,8 @@ export const useSystemStore = create<SystemState>((set, get) => ({
 
   refresh: async () => {
     try {
-      const status = await getStatus();
-      set({ status, lastRefreshed: Date.now(), error: null });
+      const [status, health] = await Promise.all([getStatus(), getHealth()]);
+      set({ status, health, lastRefreshed: Date.now(), error: null });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Unknown error" });
     }
@@ -78,4 +80,10 @@ export function selectRamPressure(
 
 export function selectSwapInProgress(state: SystemState): boolean {
   return state.fleetStatus?.swap_in_progress ?? false;
+}
+
+export function selectLlamaServerState(
+  state: SystemState,
+): "up" | "restarting" | "down" | null {
+  return state.health?.llama_server ?? null;
 }

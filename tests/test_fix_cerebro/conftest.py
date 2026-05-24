@@ -101,10 +101,11 @@ def install_runtime_for_query_e2e(
 
     db_dir = tmp_path / "lance"
     db_dir.mkdir(parents=True, exist_ok=True)
-    vector_store = VectorStore(db_path=str(db_dir))
+    vector_store = VectorStore(db_path=str(db_dir), embedding_dim=768)
 
     embed = MagicMock()
     embed.embed = AsyncMock(return_value=[0.01] * 768)
+    embed.dimensions = MagicMock(return_value=768)
 
     short_term = ShortTermStore()
     long_term = LongTermStore(vector_store=vector_store, agent_id=GENERAL_AGENT_ID, embed=embed)

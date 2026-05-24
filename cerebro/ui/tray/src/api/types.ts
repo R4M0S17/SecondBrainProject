@@ -91,12 +91,21 @@ export interface IndexStatusResponse {
   message: string;
 }
 
+export interface HealthResponse {
+  llama_server: "up" | "restarting" | "down";
+  last_restart_at: string | null;
+  restart_count_session: number;
+  message: string | null;
+}
+
 export interface StatusResponse {
   indexed_files: number;
   engine_ok: boolean;
   model: string;
   provider: string;
   active_agent: string;
+  ram_pressure: "ok" | "warn" | "critical";
+  ram_total_gb: number;
   ram_used_gb: number;
   ram_available_gb: number;
   queries_total: number;
@@ -113,6 +122,7 @@ export interface StatusResponse {
   ram_pressure_pct?: number;
   swap_in_progress?: boolean;
   model_swaps_session?: number;
+  macos_permissions?: Record<string, string> | null;
 }
 
 export interface HardwareSnapshot {
@@ -206,7 +216,7 @@ export interface LlamaCppModelsResponse {
   active_model: string | null;
 }
 
-export type AgentId = "general" | "thesis" | "code" | "calendar";
+export type AgentId = "auto" | "general" | "thesis" | "code" | "calendar";
 
 export interface Agent {
   id: AgentId;
@@ -215,6 +225,11 @@ export interface Agent {
 }
 
 export const AGENTS: Agent[] = [
+  {
+    id: "auto",
+    label: "Auto (router)",
+    description: "Picks the best agent for each question",
+  },
   { id: "general", label: "General", description: "All-purpose assistant" },
   { id: "thesis", label: "Thesis", description: "Academic writing & research" },
   { id: "code", label: "Code", description: "Programming & debugging" },

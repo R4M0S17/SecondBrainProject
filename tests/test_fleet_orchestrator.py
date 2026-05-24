@@ -296,3 +296,67 @@ class TestFleetOrchestrator:
         assert result is not None
         assert isinstance(result, ModelSelection)
         assert orchestrator.current_selection is result
+
+    def test_pin_model_updates_selection(self, orchestrator, sample_models, tmp_path):
+        model = sample_models[0]
+        model_path = tmp_path / "smollm2.gguf"
+        model_path.write_text("x", encoding="utf-8")
+        on_disk = ModelConfig(
+            id=model.id,
+            path=str(model_path),
+            family=model.family,
+            params_b=model.params_b,
+            quant=model.quant,
+            ram_required_gb=model.ram_required_gb,
+            vram_required_gb=model.vram_required_gb,
+            gpu_layers=0,
+            context_length=model.context_length,
+            capabilities=model.capabilities,
+            speed_tokens_per_sec=model.speed_tokens_per_sec,
+        )
+        with patch("core.inference.fleet.orchestrator.load_registry", return_value=[on_disk]):
+            orchestrator.pin_model(on_disk.id)
+        assert orchestrator.mode == "pinned"
+        assert orchestrator.current_selection is not None
+        assert orchestrator.current_selection.model.id == on_disk.id
+
+    def test_pin_model_rejects_missing_file(self, orchestrator):
+        with pytest.raises(ValueError, match="Unknown fleet model"):
+            orchestrator.pin_model("does-not-exist")
+
+    def test_use_auto_selection_clears_pin(self, orchestrator, tmp_path):
+        model_path = tmp_path / "smollm2.gguf"
+        model_path.write_text("x", encoding="utf-8")
+        pinned = ModelConfig(
+            id="smollm2-360m",
+            path=str(model_path),
+            family="smollm2",
+            params_b=0.36,
+            quant="Q8_0",
+            ram_required_gb=0.8,
+            vram_required_gb=0.7,
+            gpu_layers=0,
+            context_length=2048,
+            capabilities=["chat"],
+            speed_tokens_per_sec=300.0,
+        )
+        with patch("core.inference.fleet.orchestrator.load_registry", return_value=[pinned]):
+            orchestrator.pin_model(pinned.id)
+        with (
+            patch("core.inference.fleet.orchestrator.snapshot") as mock_snap,
+            patch("core.inference.fleet.orchestrator.load_registry") as mock_load,
+        ):
+            mock_snap.return_value = HardwareSnapshot(
+                ram_total_gb=16.0,
+                ram_available_gb=8.0,
+                cpu_count=8,
+                cpu_percent=5.0,
+                gpu_backend="metal",
+                gpu_vram_total_gb=16.0,
+                gpu_vram_available_gb=8.0,
+                unified_memory=True,
+            )
+            mock_load.return_value = [pinned]
+            orchestrator.use_auto_selection()
+        assert orchestrator.mode == "auto"
+        assert orchestrator._pinned_model_id is None

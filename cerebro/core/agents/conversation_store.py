@@ -4,6 +4,11 @@ Stores multi-turn conversation records as JSON files under
 ~/.cerebro/state/conversations/.  Each record holds an ordered list of
 ConversationTurn objects (alternating user / assistant) plus lightweight
 bookkeeping fields for listing / browsing sessions.
+
+The API ``conversation_id`` is the durable session key (same UUID for the
+lifetime of a chat surface).  ``session_summary`` holds compressed context
+from older turns when the resume cap (``CEREBRO_SESSION_RESUME_MAX_TURNS``)
+drops verbatim history.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ class ConversationRecord:
     started_at: str
     last_active: str
     turns: list[ConversationTurn] = field(default_factory=list)
+    session_summary: str = ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -46,6 +52,7 @@ def _record_to_dict(r: ConversationRecord) -> dict:
         "agent_id": r.agent_id,
         "started_at": r.started_at,
         "last_active": r.last_active,
+        "session_summary": r.session_summary,
         "turns": [
             {
                 "role": t.role,
@@ -64,6 +71,7 @@ def _record_from_dict(d: dict) -> ConversationRecord:
         agent_id=d.get("agent_id", ""),
         started_at=d.get("started_at", ""),
         last_active=d.get("last_active", ""),
+        session_summary=d.get("session_summary", ""),
         turns=[
             ConversationTurn(
                 role=t["role"],
@@ -131,6 +139,13 @@ class ConversationStore:
         except Exception as exc:
             logger.warning("Corrupted conversation {}: {}", conv_id, exc)
             return None
+
+    def update_session_summary(self, conv_id: str, summary: str) -> None:
+        record = self.get(conv_id)
+        if record is None:
+            raise KeyError(f"Conversation {conv_id!r} not found")
+        record.session_summary = summary
+        self._write(record)
 
     def list_all(self) -> list[ConversationRecord]:
         records: list[ConversationRecord] = []

@@ -62,6 +62,7 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
     from core.tools.handlers.calendar import (
         add_reminder,
         create_calendar_event,
+        delete_reminder,
         get_upcoming_events,
         query_events,
         search_upcoming,
@@ -133,8 +134,8 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="add_reminder",
             description=(
-                "Add a task/reminder to Apple Reminders app "
-                "(use for 'remind me to', 'don't forget', to-dos — not meetings)"
+                "Create a short timed reminder as an Apple Calendar event "
+                "(use for 'remind me to', 'crea un recordatorio', 'recuérdame' — not meetings)"
             ),
             handler=add_reminder,
             required_permission="tools.calendar.write",
@@ -146,6 +147,18 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
                 "datetime_str": "str — fecha/hora en lenguaje natural o ISO (ej: 'next saturday', 'tomorrow at 9am')",
                 "notes": "str — notas opcionales",
             },
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="delete_reminder",
+            description="Delete a calendar event by exact title (including reminder-style events)",
+            handler=delete_reminder,
+            required_permission="tools.calendar.write",
+            requires_confirmation=True,
+            scope=ToolScope.LOCAL,
+            audit_level=AuditLevel.FULL,
+            parameters={"title": "str — título exacto del recordatorio a borrar"},
         )
     )
 
@@ -352,5 +365,25 @@ def register_macos_tools(registry: ToolRegistry) -> None:
                 "title": "str — título de la notificación",
                 "message": "str — cuerpo del mensaje",
             },
+        )
+    )
+
+
+def register_math_tools(registry: ToolRegistry) -> None:
+    from core.tools.handlers.math import evaluate_math
+
+    registry.register(
+        ToolDefinition(
+            name="evaluate_math",
+            description=(
+                "Evaluate a deterministic numeric expression "
+                "(arithmetic, parentheses, power). Use for any math the user asks."
+            ),
+            handler=evaluate_math,
+            required_permission="tools.math.eval",
+            requires_confirmation=False,
+            scope=ToolScope.SANDBOXED,
+            audit_level=AuditLevel.METADATA,
+            parameters={"expression": "str — expresión numérica (ej: '17*23')"},
         )
     )

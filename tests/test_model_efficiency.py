@@ -146,18 +146,11 @@ class TestModelComparison:
     """Tests to compare Qwen vs Llama-3.2-3B performance."""
 
     def test_model_availability_qwen(self) -> None:
-        """Verify Qwen model is available."""
-        model_dir = Path("/Users/mb/Desktop/Javier/SecondBrain/bin/models")
-        qwen_model = model_dir / "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
-        assert model_dir.exists(), f"Models directory should exist at {model_dir}"
-        assert qwen_model.name.endswith(".gguf")
-
-    def test_model_availability_llama(self) -> None:
-        """Verify Llama-3.2-3B model is available or can be downloaded."""
-        model_dir = Path("/Users/mb/Desktop/Javier/SecondBrain/bin/models")
-        llama_model = model_dir / "llama-3.2-3b-instruct-q4_k_m.gguf"
+        """Verify default Qwen2.5-Coder-3B GGUF is present."""
+        model_dir = Path(__file__).resolve().parents[1] / "bin" / "models"
+        qwen_model = model_dir / "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
         assert model_dir.exists(), "Models directory should exist"
-        assert "llama" in llama_model.name.lower()
+        assert qwen_model.exists(), f"Missing default chat model: {qwen_model}"
 
     def test_config_switch_mechanism(self) -> None:
         """Verify configuration can be switched between models."""
@@ -166,9 +159,9 @@ class TestModelComparison:
 
         original = os.environ.get("CEREBRO_LLAMACPP_MODEL")
         try:
-            os.environ["CEREBRO_LLAMACPP_MODEL"] = "llama-3.2-3b-instruct-q4_k_m.gguf"
+            os.environ["CEREBRO_LLAMACPP_MODEL"] = "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
             model_from_env = os.environ.get("CEREBRO_LLAMACPP_MODEL")
-            assert model_from_env == "llama-3.2-3b-instruct-q4_k_m.gguf"
+            assert model_from_env == "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
         finally:
             if original:
                 os.environ["CEREBRO_LLAMACPP_MODEL"] = original
@@ -240,7 +233,7 @@ class TestRollbackPlan:
 
         # Test ability to switch back
         original_model = os.environ.get(
-            "CEREBRO_LLAMACPP_MODEL", "llama-3.2-3b-instruct-q4_k_m.gguf"
+            "CEREBRO_LLAMACPP_MODEL", "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
         )
         assert original_model.endswith(".gguf")
 

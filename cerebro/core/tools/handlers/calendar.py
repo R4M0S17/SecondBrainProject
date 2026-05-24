@@ -14,12 +14,66 @@ from datetime import UTC, datetime, timedelta
 import dateparser
 
 from integrations.calendar_reader import (
+    BackendResult,
     CalendarReader,
     add_apple_reminder,
     create_apple_calendar_event,
 )
 
 _ICS_PATH = os.path.expanduser(os.getenv("CEREBRO_ICS", "~/.cerebro/calendar.ics"))
+
+
+def _use_apple_calendar() -> bool:
+    mode = os.getenv("CEREBRO_CALENDAR_APPLE", "auto").lower()
+    if mode in ("0", "false", "no", "off"):
+        return False
+    return platform.system() == "Darwin"
+
+
+def format_merged_calendar_result(result: BackendResult, hours_ahead: int, now_str: str) -> str:
+    """Turn merged BackendResult into user-facing Spanish text (Phase 4)."""
+    if result.status == "permission_denied":
+        raw = (result.detail or "").strip()
+        if raw == "contacts" or raw.endswith("; contacts"):
+            return (
+                f"Fecha y hora actual: {now_str}\n"
+                "No tengo permiso para leer Contactos (cumpleaños). Abre "
+                "Ajustes del sistema → Privacidad y seguridad → Automatización, "
+                "y autoriza Contacts para Python/Cerebro. Luego vuelve a preguntar."
+            )
+        return (
+            f"Fecha y hora actual: {now_str}\n"
+            "No tengo permiso para leer Apple Calendar. Abre "
+            "Ajustes del sistema → Privacidad y seguridad → Automatización, "
+            "y autoriza Calendar para Python/Cerebro. Luego vuelve a preguntar."
+        )
+    if result.status == "timeout":
+        return (
+            f"Fecha y hora actual: {now_str}\n"
+            "Apple Calendar tardó demasiado en responder. Reintenta en unos segundos."
+        )
+    if result.status == "error" and not result.events:
+        detail = (result.detail or "error desconocido")[:240]
+        return f"Fecha y hora actual: {now_str}\nError al consultar calendarios: {detail}"
+    if result.status == "no_calendar" and not result.events:
+        return (
+            f"Fecha y hora actual: {now_str}\n"
+            f"Sin eventos en las próximas {hours_ahead} horas. "
+            f"(Archivo .ics no encontrado: {result.detail})"
+        )
+    if not result.events:
+        return f"Fecha y hora actual: {now_str}\nSin eventos en las próximas {hours_ahead} horas."
+
+    lines = [f"Fecha y hora actual: {now_str}\nEventos próximos (próximas {hours_ahead}h):"]
+    for ev in result.events:
+        fmt = "%Y-%m-%d %H:%M %Z" if ev.start.tzinfo else "%Y-%m-%d %H:%M"
+        line = f"- {ev.title} a las {ev.start.strftime(fmt)}"
+        if ev.location:
+            line += f" [{ev.location}]"
+        if ev.description:
+            line += f" — {ev.description[:120]}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def get_upcoming_events(hours_ahead: int = 24, ics_path: str | None = None) -> str:
@@ -30,23 +84,11 @@ def get_upcoming_events(hours_ahead: int = 24, ics_path: str | None = None) -> s
         ics_path: Override the .ics file path (for testing).
     """
     path = ics_path or _ICS_PATH
-    reader = CalendarReader(ics_path=path, use_apple_calendar=platform.system() == "Darwin")
-    events = reader.get_upcoming_events(hours_ahead=hours_ahead)
+    reader = CalendarReader(ics_path=path, use_apple_calendar=_use_apple_calendar())
+    result = reader.get_upcoming_events_v2(hours_ahead=hours_ahead)
     now = datetime.now().astimezone()
     now_str = now.strftime("%A %d de %B de %Y, %H:%M %Z")
-    if not events:
-        return f"Fecha y hora actual: {now_str}\nSin eventos en las próximas {hours_ahead} horas."
-
-    lines = [f"Fecha y hora actual: {now_str}\nEventos próximos (próximas {hours_ahead}h):"]
-    for ev in events:
-        fmt = "%Y-%m-%d %H:%M %Z" if ev.start.tzinfo else "%Y-%m-%d %H:%M"
-        line = f"- {ev.title} a las {ev.start.strftime(fmt)}"
-        if ev.location:
-            line += f" [{ev.location}]"
-        if ev.description:
-            line += f" — {ev.description[:120]}"
-        lines.append(line)
-    return "\n".join(lines)
+    return format_merged_calendar_result(result, hours_ahead, now_str)
 
 
 def query_events(keyword: str, hours_ahead: int = 168, ics_path: str | None = None) -> str:
@@ -58,11 +100,16 @@ def query_events(keyword: str, hours_ahead: int = 168, ics_path: str | None = No
         ics_path: Override the .ics file path (for testing).
     """
     path = ics_path or _ICS_PATH
-    reader = CalendarReader(ics_path=path, use_apple_calendar=platform.system() == "Darwin")
-    events = reader.get_upcoming_events(hours_ahead=hours_ahead)
-    kw = keyword.lower()
-    matches = [ev for ev in events if kw in ev.title.lower() or kw in ev.description.lower()]
+    reader = CalendarReader(ics_path=path, use_apple_calendar=_use_apple_calendar())
+    result = reader.get_upcoming_events_v2(hours_ahead=hours_ahead)
     now_str = datetime.now().astimezone().strftime("%A %d de %B de %Y, %H:%M %Z")
+    if result.status in ("permission_denied", "timeout") or (
+        result.status in ("error", "no_calendar") and not result.events
+    ):
+        return format_merged_calendar_result(result, hours_ahead, now_str)
+
+    kw = keyword.lower()
+    matches = [ev for ev in result.events if kw in ev.title.lower() or kw in ev.description.lower()]
     if not matches:
         return f"Fecha y hora actual: {now_str}\nSin eventos que coincidan con '{keyword}' en las próximas {hours_ahead} horas."
 
@@ -88,11 +135,16 @@ def search_upcoming(keyword: str, days_ahead: int = 365, ics_path: str | None = 
         ics_path: Override the .ics file path (for testing).
     """
     path = ics_path or _ICS_PATH
-    reader = CalendarReader(ics_path=path, use_apple_calendar=platform.system() == "Darwin")
-    events = reader.get_upcoming_events(hours_ahead=days_ahead * 24)
-    kw = keyword.lower()
-    matches = [ev for ev in events if kw in ev.title.lower() or kw in ev.description.lower()]
+    reader = CalendarReader(ics_path=path, use_apple_calendar=_use_apple_calendar())
+    result = reader.get_upcoming_events_v2(hours_ahead=days_ahead * 24)
     now_str = datetime.now().astimezone().strftime("%A %d de %B de %Y, %H:%M %Z")
+    if result.status in ("permission_denied", "timeout") or (
+        result.status in ("error", "no_calendar") and not result.events
+    ):
+        return format_merged_calendar_result(result, days_ahead * 24, now_str)
+
+    kw = keyword.lower()
+    matches = [ev for ev in result.events if kw in ev.title.lower() or kw in ev.description.lower()]
     if not matches:
         return f"Fecha y hora actual: {now_str}\nSin eventos que coincidan con '{keyword}' en los próximos {days_ahead} días."
 

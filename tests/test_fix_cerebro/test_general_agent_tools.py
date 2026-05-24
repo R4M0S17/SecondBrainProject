@@ -41,9 +41,10 @@ async def test_runtime_invokes_get_upcoming_events_when_llm_requests_tool(tmp_pa
 
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
-    vector_store = VectorStore(db_path=str(db_dir))
+    vector_store = VectorStore(db_path=str(db_dir), embedding_dim=768)
     embed = MagicMock()
     embed.embed = AsyncMock(return_value=[0.02] * 768)
+    embed.dimensions = MagicMock(return_value=768)
     short_term = ShortTermStore()
     long_term = LongTermStore(vector_store=vector_store, agent_id=GENERAL_AGENT_ID, embed=embed)
     context_builder = ContextBuilder(short_term=short_term, long_term=long_term)

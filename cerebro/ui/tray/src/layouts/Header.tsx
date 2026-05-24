@@ -1,4 +1,5 @@
 import AgentSelectorDropdown from "../components/shared/AgentSelectorDropdown";
+import ServiceControls from "../components/status/ServiceControls";
 import { useSettingsStore } from "../stores/settings";
 import { useSystemStore, selectIsClaudeMode } from "../stores/system";
 
@@ -22,7 +23,8 @@ export default function Header() {
         <AgentSelectorDropdown />
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 shrink-0">
+        <ServiceControls />
         <button
           onClick={open}
           className="p-1 rounded text-[#c9c4d7] hover:bg-[#35343d] transition-colors"

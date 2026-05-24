@@ -79,6 +79,138 @@ def test_confirmation_required_tools_contains_execute_python():
     assert "execute_python" in CONFIRMATION_REQUIRED_TOOLS
 
 
+def test_confirmation_required_tools_contains_create_calendar_event():
+    assert "create_calendar_event" in CONFIRMATION_REQUIRED_TOOLS
+
+
+def test_confirmation_required_tools_contains_add_reminder():
+    assert "add_reminder" in CONFIRMATION_REQUIRED_TOOLS
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AgentRuntime._requires_confirmation
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_requires_confirmation_uses_registry_flag():
+    from core.agents.runtime import AgentRuntime
+    from core.inference.registry import ProviderRegistry
+    from core.tools.registry import AuditLevel, ToolDefinition, ToolRegistry, ToolScope
+
+    reg = ToolRegistry()
+    reg.register(
+        ToolDefinition(
+            name="create_calendar_event",
+            description="",
+            handler=lambda **_: "",
+            required_permission="tools.calendar.write",
+            requires_confirmation=True,
+            scope=ToolScope.LOCAL,
+            audit_level=AuditLevel.FULL,
+        )
+    )
+    reg.register(
+        ToolDefinition(
+            name="get_upcoming_events",
+            description="",
+            handler=lambda **_: "",
+            required_permission="tools.calendar.read",
+            requires_confirmation=False,
+            scope=ToolScope.LOCAL,
+            audit_level=AuditLevel.METADATA,
+        )
+    )
+
+    runtime = AgentRuntime(
+        registry=MagicMock(spec=ProviderRegistry),
+        state_store=MagicMock(),
+        context_builder=MagicMock(),
+        tool_definitions=reg.definitions(),
+    )
+
+    assert runtime._requires_confirmation("create_calendar_event") is True
+    assert runtime._requires_confirmation("get_upcoming_events") is False
+
+
+def test_requires_confirmation_fallback_without_definition():
+    from core.agents.runtime import AgentRuntime
+    from core.inference.registry import ProviderRegistry
+
+    runtime = AgentRuntime(
+        registry=MagicMock(spec=ProviderRegistry),
+        state_store=MagicMock(),
+        context_builder=MagicMock(),
+        tool_definitions={},
+    )
+
+    assert runtime._requires_confirmation("write_file") is True
+    assert runtime._requires_confirmation("not_a_tool") is False
+
+
+def test_confirm_tool_pause_message_default_spanish():
+    from core.i18n.messages import _L
+
+    msg = _L("confirm.tool_pause", tool_name="write_file")
+    assert "write_file" in msg
+    assert "aprobación" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_calendar_event_pauses_for_confirmation(tmp_path):
+    from core.agents.runtime import AgentRuntime
+    from core.agents.specialized import CALENDAR_AGENT_ID, make_calendar_profile
+    from core.agents.state_store import AgentStateStore
+    from core.inference.registry import ProviderRegistry
+    from core.tools.registry import ToolRegistry, register_calendar_tools
+
+    store = AgentStateStore(state_dir=str(tmp_path))
+    calendar_state = store.load(CALENDAR_AGENT_ID)
+    calendar_state.profile = make_calendar_profile()
+    store.save(calendar_state)
+
+    tool_reg = ToolRegistry()
+    register_calendar_tools(tool_reg)
+
+    mock_chat = MagicMock()
+    mock_chat.complete = AsyncMock(
+        return_value=(
+            '{"action": "tool", "tool": "create_calendar_event", '
+            '"args": {"title": "Cerebro smoke", "datetime_str": "tomorrow 4pm"}}'
+        )
+    )
+    mock_chat.context_window = MagicMock(return_value=4096)
+
+    mock_registry = MagicMock(spec=ProviderRegistry)
+    mock_registry.select_for_task = MagicMock(return_value="primary")
+    mock_registry.get_chat = MagicMock(return_value=mock_chat)
+
+    mock_context = MagicMock()
+    mock_context.retrieved_memory = []
+    mock_context.session_history = []
+    mock_context.retrieved_documents = []
+    mock_context.agent_summary = ""
+    mock_context.total_tokens_estimated = 10
+    mock_context.sources_used = []
+
+    mock_builder = MagicMock()
+    mock_builder.maybe_consolidate = AsyncMock(return_value=False)
+    mock_builder.build = AsyncMock(return_value=mock_context)
+
+    runtime = AgentRuntime(
+        registry=mock_registry,
+        state_store=store,
+        context_builder=mock_builder,
+        tool_registry=tool_reg.handlers(),
+        tool_definitions=tool_reg.definitions(),
+    )
+
+    answer, final_state = await runtime.run("crea evento mañana 4pm", CALENDAR_AGENT_ID)
+
+    assert final_state.pending_tool_name == "create_calendar_event"
+    assert "create_calendar_event" in answer
+    assert "aprobación" in answer.lower()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # AgentState transient fields
 # ──────────────────────────────────────────────────────────────────────────────

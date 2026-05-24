@@ -15,7 +15,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["icons/tray-icon.png"]
+    "resources": [
+      "icons/tray-icon.png",
+      "resources/cerebro_desktop_launcher.sh",
+      "resources/cerebro_desktop_stop.sh"
+    ]
   },
   "app": {
     "withGlobalTauri": true,
@@ -31,13 +35,14 @@
         "titleBarStyle": "Overlay",
         "alwaysOnTop": false,
         "focus": true,
-        "visible": true,
+        "visible": false,
         "center": true,
         "visibleOnAllWorkspaces": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": ["main-capability", "dev-capability"]
     }
   },
   "identifier": "com.cerebro.app",

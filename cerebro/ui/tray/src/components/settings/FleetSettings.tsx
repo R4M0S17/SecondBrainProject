@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { useSystemStore } from "../../stores/system";
 import { getFleetModels, setFleetMode } from "../../api/client";
+import { useSystemStore } from "../../stores/system";
 import type { FleetModelEntry } from "../../api/types";
 
 export default function FleetSettings() {
   const fleetStatus = useSystemStore((s) => s.fleetStatus);
+  const refreshFleet = useSystemStore((s) => s.refreshFleet);
   const [models, setModels] = useState<FleetModelEntry[]>([]);
   const [pinnedModelId, setPinnedModelId] = useState("");
   const [ramMargin, setRamMargin] = useState(15);
@@ -26,6 +27,7 @@ export default function FleetSettings() {
     setApplying(true);
     try {
       await setFleetMode(next, next === "pinned" ? pinnedModelId : undefined);
+      await refreshFleet();
     } finally {
       setApplying(false);
     }
@@ -36,6 +38,7 @@ export default function FleetSettings() {
     setApplying(true);
     try {
       await setFleetMode("pinned", id);
+      await refreshFleet();
     } finally {
       setApplying(false);
     }

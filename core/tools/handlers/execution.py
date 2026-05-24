@@ -94,7 +94,7 @@ def execute_python(code: str, timeout_seconds: int = 10) -> str:
 
 def run_script(filepath: str, authorized_paths: list[str], timeout_seconds: int = 30) -> str:
     if not validate_path(filepath, authorized_paths):
-        raise PathNotAuthorizedError(f"Path '{filepath}' is not within authorized paths")
+        raise PathNotAuthorizedError(filepath, authorized_paths, operation="ejecutar")
     p = Path(filepath)
     if not p.exists():
         return f"Error: file not found: {filepath}"

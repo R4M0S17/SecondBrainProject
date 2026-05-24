@@ -37,6 +37,13 @@ def test_create_python_file_rejects_path_separators(tmp_path):
     assert "Error" in result
 
 
+def test_create_python_file_rejects_broken_quotes(tmp_path):
+    really_bad = 'print("hello\\")'
+    out = create_python_file("x.py", really_bad, [str(tmp_path)])
+    assert out.startswith("Error: code is not valid Python")
+    assert not (tmp_path / "x.py").exists()
+
+
 # ---------------------------------------------------------------------------
 # run_script
 # ---------------------------------------------------------------------------

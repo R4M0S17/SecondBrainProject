@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,12 +10,28 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from core.agents.conversation_store import ConversationStore
+from core.agents.runtime import StreamRunComplete
+from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector
 from ui.tray.server import app, app_state
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+class _RunStreamingMock:
+    """Async generator stand-in for ``AgentRuntime.run_streaming`` in API tests."""
+
+    def __init__(self, answer: str, final_state: MagicMock) -> None:
+        self.answer = answer
+        self.final_state = final_state
+        self.calls: list[tuple] = []
+
+    async def __call__(self, query: str, agent_id: str, conversation_id: str | None = None):
+        self.calls.append((query, agent_id, conversation_id))
+        yield self.answer
+        yield StreamRunComplete(answer=self.answer, final_state=self.final_state)
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +44,8 @@ def reset_state(tmp_path):
     app_state.metrics = MetricsCollector()
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
+    app_state.ram_monitor = RamMonitor()
+    app_state.llama_health_monitor = None
     yield
     app_state.runtime = None
     app_state.vector_store = None
@@ -35,6 +54,8 @@ def reset_state(tmp_path):
     app_state.metrics = MetricsCollector()
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
+    app_state.ram_monitor = RamMonitor()
+    app_state.llama_health_monitor = None
 
 
 @pytest.fixture
@@ -45,10 +66,11 @@ def client():
 @pytest.fixture
 def mock_runtime():
     rt = AsyncMock()
-    rt.run.return_value = (
-        "Respuesta de prueba.",
-        MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None),
-    )
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None)
+    answer = "Respuesta de prueba."
+    rt.run.return_value = (answer, final_state)
+    rt._run_streaming_mock = _RunStreamingMock(answer, final_state)
+    rt.run_streaming = rt._run_streaming_mock
     app_state.runtime = rt
     return rt
 
@@ -94,6 +116,9 @@ async def test_status_has_required_fields(client):
         "tool_call_count",
         "memory_hits",
         "provider_fallbacks",
+        "context_window",
+        "ram_pressure",
+        "ram_total_gb",
     ]
     for field in required:
         assert field in data, f"Missing field: {field}"
@@ -113,6 +138,92 @@ async def test_status_ram_fields_are_positive_numbers(client):
     data = resp.json()
     assert data["ram_used_gb"] >= 0
     assert data["ram_available_gb"] > 0
+    assert data["ram_pressure"] in ("ok", "warn", "critical")
+    assert data["ram_total_gb"] > 0
+
+
+@pytest.mark.asyncio
+async def test_ram_pressure_critical_query_returns_warning_not_503(client, mock_runtime):
+    mon = MagicMock()
+    mon.snapshot.return_value = {
+        "pressure": "critical",
+        "used_gb": 14.0,
+        "available_gb": 0.5,
+        "total_gb": 16.0,
+    }
+    app_state.ram_monitor = mon
+    mock_runtime.run = AsyncMock(
+        return_value=("ok", MagicMock(tool_trace=[], pending_tool_name=None))
+    )
+    async with client as c:
+        resp = await c.post("/api/query", json={"question": "hi", "agent": "general-v1"})
+    assert resp.status_code == 200
+    assert "ram_pressure_critical" in resp.json()["metadata"]["warnings"]
+    mock_runtime.run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ram_pressure_critical_stream_returns_warning_not_503(client, mock_runtime):
+    mon = MagicMock()
+    mon.snapshot.return_value = {
+        "pressure": "critical",
+        "used_gb": 14.0,
+        "available_gb": 0.5,
+        "total_gb": 16.0,
+    }
+    app_state.ram_monitor = mon
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None)
+    mock_runtime._run_streaming_mock = _RunStreamingMock("stream ok", final_state)
+    mock_runtime.run_streaming = mock_runtime._run_streaming_mock
+
+    async def _collect_stream():
+        chunks = []
+        async with client as c:
+            async with c.stream(
+                "POST",
+                "/api/query/stream",
+                json={"question": "hello", "agent": "general-v1"},
+            ) as resp:
+                assert resp.status_code == 200
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: "):
+                        chunks.append(line[6:])
+        return chunks
+
+    chunks = await _collect_stream()
+    meta_chunks = [c for c in chunks if c.strip().startswith("{") and "metadata" in c]
+    assert meta_chunks, "expected metadata SSE event"
+    meta = json.loads(meta_chunks[-1])
+    assert "ram_pressure_critical" in meta["metadata"]["warnings"]
+    assert len(mock_runtime._run_streaming_mock.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_wizard_check_llamacpp_skipped_when_claude_backend(client, monkeypatch):
+    monkeypatch.setenv("CEREBRO_INFERENCE_BACKEND", "claude")
+    async with client as c:
+        resp = await c.post("/api/wizard/check-llamacpp")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["running"] is True
+    assert data["status"] == "skipped"
+    assert "reason" in data
+
+
+@pytest.mark.asyncio
+async def test_wizard_check_models_skipped_reflects_api_key(client, monkeypatch):
+    monkeypatch.setenv("CEREBRO_INFERENCE_BACKEND", "claude")
+    async with client as c:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        resp = await c.post("/api/wizard/check-models")
+        assert resp.json()["ok"] is False
+        assert resp.json().get("status") == "skipped"
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        resp2 = await c.post("/api/wizard/check-models")
+    body = resp2.json()
+    assert body["ok"] is True
+    assert body.get("status") == "skipped"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -253,6 +364,31 @@ async def test_config_put_merges_settings(client):
 
 
 @pytest.mark.asyncio
+async def test_patch_config_rebinds_read_handlers(client, tmp_path):
+    from functools import partial
+
+    from core.tools.handlers.filesystem import read_file
+
+    extra = tmp_path / "new_watch"
+    extra.mkdir()
+    (extra / "hi.txt").write_text("hello")
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    app_state.authorized_read_paths = [str(startup)]
+
+    tr = {"read_file": partial(read_file, authorized_paths=[str(startup)])}
+    mock_rt = MagicMock()
+    mock_rt._tool_registry = tr
+    app_state.runtime = mock_rt
+
+    async with client as c:
+        resp = await c.patch("/api/config", json={"watched_folders": [str(extra)]})
+    assert resp.status_code == 200
+    body = tr["read_file"](path=str(extra / "hi.txt"))
+    assert body == "hello"
+
+
+@pytest.mark.asyncio
 async def test_config_model_change_switches_llamacpp_provider(client):
     """Patching model with a llama.cpp model name updates the registry primary."""
     from core.inference.providers.llamacpp_provider import LlamaCppChatProvider
@@ -364,6 +500,21 @@ async def test_query_without_model_manager_uses_get_chat(client, mock_runtime):
     assert resp.status_code == 200
     registry.get_chat.assert_called_once()
     assert resp.json()["metadata"]["model_used"] == "phi3:mini"
+
+
+@pytest.mark.asyncio
+async def test_query_stream_calls_runtime_run_streaming(client, mock_runtime):
+    """B2: /api/query/stream uses runtime.run_streaming(), not legacy runtime.stream()."""
+    mock_runtime.stream = MagicMock()
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "hello", "agent": "general-v1"},
+        )
+        assert resp.status_code == 200
+        await resp.aread()
+    assert len(mock_runtime._run_streaming_mock.calls) == 1
+    mock_runtime.stream.assert_not_called()
 
 
 @pytest.mark.asyncio

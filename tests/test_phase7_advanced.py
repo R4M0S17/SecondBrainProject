@@ -182,4 +182,5 @@ def test_args_files_enable_prompt_caching():
     chat_path = os.path.join(config_dir, "chat.args")
     chat = open(chat_path).read()
     assert "--mlock" not in chat, "chat.args must not use --mlock (low-RAM default)"
-    assert "--cache-prompt" not in chat, "chat.args omits --cache-prompt for smaller resident set"
+    assert "--cache-prompt" in chat, "chat.args must enable --cache-prompt for warm-turn latency"
+    assert "--cache-ram" in chat, "chat.args should cap in-RAM prompt cache on 8 GB hosts"

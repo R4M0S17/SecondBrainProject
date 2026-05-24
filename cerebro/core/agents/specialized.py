@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from core.agents.intent_keywords import classify_intent_fast
 from core.agents.state_store import AgentProfile, AgentState, AgentStateStore
 
 if TYPE_CHECKING:
@@ -52,14 +53,29 @@ CODE_TOOLS: list[str] = [
     "execute_python",
     # Phase 1 & 2: filesystem + script execution
     "create_python_file",
+    "write_file",
     "run_script",
     "delete_file",
     "list_directory",
     "search_files",
     "create_directory",
+    "evaluate_math",
 ]
-# Empty list = no restriction in AgentRuntime._context_assembly_node (all tools)
-GENERAL_TOOLS: list[str] = []
+GENERAL_TOOLS: list[str] = [
+    "get_upcoming_events",
+    "query_events",
+    "search_upcoming",
+    "create_calendar_event",
+    "add_reminder",
+    "search_documents",
+    "spotlight_search",
+    "list_directory",
+    "search_files",
+    "search_notes",
+    "write_file",
+    "read_file",
+    "evaluate_math",
+]
 
 _PREFIX_MAP: dict[str, str] = {
     "/academic": ACADEMIC_AGENT_ID,
@@ -133,28 +149,24 @@ def make_calendar_profile() -> AgentProfile:
         preferences={
             "instructions": (
                 "Eres un asistente de calendario y gestión de tareas. "
-                "Puedes consultar eventos, recordatorios y tareas usando las herramientas disponibles.\n"
+                "Usa las herramientas listadas en HERRAMIENTAS DISPONIBLES (esquemas allí).\n"
                 "IMPORTANTE: Cuando respondas sobre fechas u horas, incluye SIEMPRE el día, "
                 "mes, año y hora completos. Nunca respondas solo el nombre del día sin el año y mes.\n\n"
                 "REGLA ANTI-BUCLE: Llama a una herramienta UNA SOLA VEZ por consulta. "
                 "Si el resultado dice 'Sin eventos', responde directamente con esa información. "
                 "NO repitas la llamada con una ventana de tiempo más grande.\n\n"
-                "Para ver eventos de hoy/mañana:\n"
+                "Herramientas:\n"
+                "- get_upcoming_events: eventos en las próximas N horas\n"
+                "- query_events: buscar por palabra clave en una ventana de horas\n"
+                "- search_upcoming: búsqueda por días hacia adelante\n"
+                "- create_calendar_event: reuniones, citas, bloquear tiempo\n"
+                "- add_reminder: recordatorios y tareas con fecha\n"
+                "- search_documents: búsqueda en documentos indexados\n"
+                "- send_notification: aviso de escritorio tras crear eventos\n\n"
+                "Ejemplo consulta:\n"
                 '{"action": "tool", "tool": "get_upcoming_events", "args": {"hours_ahead": 48}}\n'
-                "Para ver la semana completa:\n"
-                '{"action": "tool", "tool": "get_upcoming_events", "args": {"hours_ahead": 168}}\n'
-                "Para el evento o cumpleaños MÁS CERCANO (próximo año):\n"
-                '{"action": "tool", "tool": "get_upcoming_events", "args": {"hours_ahead": 8760}}\n'
-                "Para buscar por palabra clave (ej: 'reunión', 'cumple', 'doctor'):\n"
-                '{"action": "tool", "tool": "query_events", "args": {"keyword": "reunión", "hours_ahead": 8760}}\n'
-                "NOTA: Los cumpleaños se guardan como eventos recurrentes anuales. "
-                "Para buscar cumpleaños usa query_events con keyword='cumple' y hours_ahead=8760.\n\n"
-                "Para crear una reunión o cita:\n"
+                "Ejemplo crear evento:\n"
                 '{"action": "tool", "tool": "create_calendar_event", "args": {"title": "Reunión equipo", "datetime_str": "next monday at 3pm", "duration_mins": 60}}\n'
-                "Para añadir un recordatorio:\n"
-                '{"action": "tool", "tool": "add_reminder", "args": {"title": "Llamar al médico", "datetime_str": "next saturday at 9am"}}\n'
-                "USA create_calendar_event para: reuniones, citas, bloquear tiempo.\n"
-                "USA add_reminder para: 'recuérdame', 'no olvidar', tareas con fecha.\n"
                 "Responde de forma clara y en el idioma del usuario."
             )
         },
@@ -165,6 +177,13 @@ def make_calendar_profile() -> AgentProfile:
 
 def make_general_profile() -> AgentProfile:
     now = _now()
+    _general_extra = (
+        "Si el usuario pregunta por la fecha, hora, eventos, cumpleaños, recordatorios o "
+        "cualquier dato que cambie con el tiempo, USA herramientas — NO inventes la respuesta. "
+        'Para "qué día es hoy" o "qué hora es" mira la línea FECHA Y HORA ACTUAL del prompt. '
+        "Para eventos del calendario usa get_upcoming_events; para cumpleaños usa "
+        'query_events con keyword="cumple" o search_upcoming con keyword="cumple".'
+    )
     return AgentProfile(
         id=GENERAL_AGENT_ID,
         name="Asistente General",
@@ -174,7 +193,7 @@ def make_general_profile() -> AgentProfile:
             "instructions": (
                 "Eres un asistente personal. Responde preguntas, gestiona "
                 "documentos y ejecuta acciones con prudencia. Para acciones de "
-                "escritura, confirma antes de proceder cuando tengas dudas."
+                "escritura, confirma antes de proceder cuando tengas dudas.\n\n" + _general_extra
             )
         },
         created_at=now,
@@ -212,23 +231,28 @@ class SpecializedAgentRouter:
         self._llm_router = llm_router
 
     def route(self, raw_input: str) -> RouteResult:
+        """Prefix map, then keyword fast path (zero extra inference)."""
         stripped = raw_input.strip()
         for prefix, agent_id in _PREFIX_MAP.items():
             if stripped.startswith(prefix + " ") or stripped == prefix:
                 query = stripped[len(prefix) :].strip()
                 return RouteResult(agent_id=agent_id, query=query or stripped)
+        category = classify_intent_fast(stripped)
+        if category is not None:
+            agent_id = _LLM_CATEGORY_MAP.get(category, GENERAL_AGENT_ID)
+            return RouteResult(agent_id=agent_id, query=stripped)
         return RouteResult(agent_id=GENERAL_AGENT_ID, query=stripped)
 
     async def route_with_llm(self, raw_input: str) -> RouteResult:
-        """Prefix routing first; falls back to LLM classification if no prefix matches."""
-        prefix_result = self.route(raw_input)
-        if prefix_result.agent_id != GENERAL_AGENT_ID:
-            return prefix_result
+        """Prefix + keywords first; slow LLM classify only when still general."""
+        fast_result = self.route(raw_input)
+        if fast_result.agent_id != GENERAL_AGENT_ID:
+            return fast_result
         if self._llm_router is not None:
             category = await self._llm_router.classify(raw_input)
             agent_id = _LLM_CATEGORY_MAP.get(category, GENERAL_AGENT_ID)
-            return RouteResult(agent_id=agent_id, query=prefix_result.query)
-        return prefix_result
+            return RouteResult(agent_id=agent_id, query=fast_result.query)
+        return fast_result
 
     def ensure_profiles(self, store: AgentStateStore) -> None:
         """Seed default profiles and keep existing ones in sync with factory defaults.

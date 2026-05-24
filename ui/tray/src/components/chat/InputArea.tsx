@@ -1,6 +1,6 @@
 import { useRef, useState, KeyboardEvent, ChangeEvent } from "react";
 import { useChatStore } from "../../stores/chat";
-import { useSystemStore } from "../../stores/system";
+import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
 import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP } from "../../api/client";
 import CommandAutocomplete from "./CommandAutocomplete";
 
@@ -19,8 +19,12 @@ export default function InputArea() {
     setAbortController,
     setPendingConfirmation,
     activeAgent,
+    conversationId,
+    setConversationId,
   } = useChatStore();
-  const { refresh, setSwapEvent } = useSystemStore();
+  const { refresh, setSwapEvent, status } = useSystemStore();
+  const llamaServer = selectLlamaServerState(useSystemStore.getState());
+  const isClaude = selectIsClaudeMode(status);
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -52,6 +56,23 @@ export default function InputArea() {
     const query = text.trim();
     if (!query || isLoading) return;
 
+    if (!isClaude && llamaServer === "down") {
+      addMessage({
+        role: "assistant",
+        content:
+          "El motor de inferencia no está disponible. Se está reintentando la conexión; espera unos segundos e inténtalo de nuevo.",
+      });
+      return;
+    }
+
+    if (!isClaude && llamaServer === "restarting") {
+      addMessage({
+        role: "assistant",
+        content: "El motor de inferencia se está reiniciando. Espera un momento e inténtalo de nuevo.",
+      });
+      return;
+    }
+
     setText("");
     setShowAutocomplete(false);
     if (textareaRef.current) textareaRef.current.style.height = "44px";
@@ -70,9 +91,14 @@ export default function InputArea() {
         // Calendar agent uses tool execution which requires the non-streaming path.
         // Fake streaming UX by replaying the answer character-by-character.
         const response = await queryAgent(
-          { question: query, agent: AGENT_ID_MAP[activeAgent] },
+          {
+            question: query,
+            agent: AGENT_ID_MAP[activeAgent],
+            conversation_id: conversationId ?? undefined,
+          },
           ctrl.signal,
         );
+        setConversationId(response.conversation_id);
 
         if (response.metadata?.pending_tool) {
           hasPendingConfirm = true;
@@ -112,11 +138,19 @@ export default function InputArea() {
         }
       } else {
         let conversationId: string | undefined;
+        let streamConversationId: string | undefined;
         const metadata = await queryAgentStream(
-          { question: query, agent: AGENT_ID_MAP[activeAgent] },
+          {
+            question: query,
+            agent: AGENT_ID_MAP[activeAgent],
+            conversation_id: conversationId ?? undefined,
+          },
           (token) => appendToken(assistantId, token),
           ctrl.signal,
-          (id) => { conversationId = id; },
+          (id) => {
+            streamConversationId = id;
+            setConversationId(id);
+          },
           (event) => {
             if (event.phase === "started") {
               setSwapEvent(event);
@@ -126,9 +160,9 @@ export default function InputArea() {
           },
         );
 
-        if (metadata?.pending_tool && conversationId) {
+        if (metadata?.pending_tool && streamConversationId) {
           hasPendingConfirm = true;
-          const convId = conversationId;
+          const convId = streamConversationId;
           const toolName = metadata.pending_tool.name;
           updateMessage(assistantId, { metadata });
 

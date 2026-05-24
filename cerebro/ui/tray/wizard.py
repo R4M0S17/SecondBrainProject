@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import httpx
+import psutil
 from loguru import logger
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -38,6 +39,14 @@ class WizardStep(StrEnum):
 
 
 class WizardError(Exception): ...
+
+
+def recommend_lite_profile() -> bool:
+    """True when total system RAM is at most 10 GB (wizard may suggest lite profile)."""
+    try:
+        return psutil.virtual_memory().total <= 10 * 2**30
+    except Exception:
+        return False
 
 
 # ── session ───────────────────────────────────────────────────────────────────

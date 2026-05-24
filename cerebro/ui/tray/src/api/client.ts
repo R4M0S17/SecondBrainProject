@@ -6,6 +6,7 @@ import type {
   IndexResponse,
   IndexStatusResponse,
   StatusResponse,
+  HealthResponse,
   WizardStatus,
   AppConfig,
   AgentId,
@@ -19,6 +20,7 @@ import type {
 } from "./types";
 
 export const AGENT_ID_MAP: Record<AgentId, string> = {
+  auto:     "auto",
   general:  "general-v1",
   thesis:   "academic-v1",
   code:     "code-v1",
@@ -138,6 +140,10 @@ export async function setFleetMode(
 
 export async function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/api/status");
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+  return request<HealthResponse>("/api/health");
 }
 
 export async function startIndex(paths: string[]): Promise<IndexResponse> {

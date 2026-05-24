@@ -263,7 +263,7 @@ async def test_get_chat_for_agent_general_uses_chat_profile():
     mock_mm.ensure_specialist.assert_called_once_with("general")
     assert isinstance(provider, LlamaCppChatProvider)
     assert provider.model_id() == "general-v1"
-    assert provider.context_window() == 2048  # "chat" profile
+    assert provider.context_window() == 4096  # "chat" profile
 
 
 @pytest.mark.asyncio

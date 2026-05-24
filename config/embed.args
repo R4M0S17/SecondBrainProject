@@ -1,0 +1,5 @@
+--model bin/models/v5-nano-retrieval-Q4_K_M.gguf
+--ctx-size 512
+--n-gpu-layers 99
+--embedding
+--threads 2

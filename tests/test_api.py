@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,6 +10,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from core.agents.conversation_store import ConversationStore
+from core.agents.runtime import StreamRunComplete
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector
 from ui.tray.server import app, app_state
@@ -16,6 +18,20 @@ from ui.tray.server import app, app_state
 # ──────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+class _RunStreamingMock:
+    """Async generator stand-in for ``AgentRuntime.run_streaming`` in API tests."""
+
+    def __init__(self, answer: str, final_state: MagicMock) -> None:
+        self.answer = answer
+        self.final_state = final_state
+        self.calls: list[tuple] = []
+
+    async def __call__(self, query: str, agent_id: str, conversation_id: str | None = None):
+        self.calls.append((query, agent_id, conversation_id))
+        yield self.answer
+        yield StreamRunComplete(answer=self.answer, final_state=self.final_state)
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +45,7 @@ def reset_state(tmp_path):
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
     app_state.ram_monitor = RamMonitor()
+    app_state.llama_health_monitor = None
     yield
     app_state.runtime = None
     app_state.vector_store = None
@@ -38,6 +55,7 @@ def reset_state(tmp_path):
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
     app_state.ram_monitor = RamMonitor()
+    app_state.llama_health_monitor = None
 
 
 @pytest.fixture
@@ -48,10 +66,11 @@ def client():
 @pytest.fixture
 def mock_runtime():
     rt = AsyncMock()
-    rt.run.return_value = (
-        "Respuesta de prueba.",
-        MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None),
-    )
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None)
+    answer = "Respuesta de prueba."
+    rt.run.return_value = (answer, final_state)
+    rt._run_streaming_mock = _RunStreamingMock(answer, final_state)
+    rt.run_streaming = rt._run_streaming_mock
     app_state.runtime = rt
     return rt
 
@@ -124,7 +143,7 @@ async def test_status_ram_fields_are_positive_numbers(client):
 
 
 @pytest.mark.asyncio
-async def test_ram_pressure_503_on_query_when_critical(client, mock_runtime):
+async def test_ram_pressure_critical_query_returns_warning_not_503(client, mock_runtime):
     mon = MagicMock()
     mon.snapshot.return_value = {
         "pressure": "critical",
@@ -133,15 +152,18 @@ async def test_ram_pressure_503_on_query_when_critical(client, mock_runtime):
         "total_gb": 16.0,
     }
     app_state.ram_monitor = mon
+    mock_runtime.run = AsyncMock(
+        return_value=("ok", MagicMock(tool_trace=[], pending_tool_name=None))
+    )
     async with client as c:
         resp = await c.post("/api/query", json={"question": "hi", "agent": "general-v1"})
-    assert resp.status_code == 503
-    assert resp.json()["detail"] == "Out of RAM. Lite profile recommended."
-    mock_runtime.run.assert_not_called()
+    assert resp.status_code == 200
+    assert "ram_pressure_critical" in resp.json()["metadata"]["warnings"]
+    mock_runtime.run.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_ram_pressure_503_on_query_stream_when_critical(client, mock_runtime):
+async def test_ram_pressure_critical_stream_returns_warning_not_503(client, mock_runtime):
     mon = MagicMock()
     mon.snapshot.return_value = {
         "pressure": "critical",
@@ -150,16 +172,30 @@ async def test_ram_pressure_503_on_query_stream_when_critical(client, mock_runti
         "total_gb": 16.0,
     }
     app_state.ram_monitor = mon
-    mock_runtime.stream = MagicMock()
-    async with client as c:
-        resp = await c.post(
-            "/api/query/stream",
-            json={"question": "hello", "agent": "general-v1"},
-        )
-    assert resp.status_code == 503
-    assert resp.json()["detail"] == "Out of RAM. Lite profile recommended."
-    mock_runtime.run.assert_not_called()
-    mock_runtime.stream.assert_not_called()
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None)
+    mock_runtime._run_streaming_mock = _RunStreamingMock("stream ok", final_state)
+    mock_runtime.run_streaming = mock_runtime._run_streaming_mock
+
+    async def _collect_stream():
+        chunks = []
+        async with client as c:
+            async with c.stream(
+                "POST",
+                "/api/query/stream",
+                json={"question": "hello", "agent": "general-v1"},
+            ) as resp:
+                assert resp.status_code == 200
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: "):
+                        chunks.append(line[6:])
+        return chunks
+
+    chunks = await _collect_stream()
+    meta_chunks = [c for c in chunks if c.strip().startswith("{") and "metadata" in c]
+    assert meta_chunks, "expected metadata SSE event"
+    meta = json.loads(meta_chunks[-1])
+    assert "ram_pressure_critical" in meta["metadata"]["warnings"]
+    assert len(mock_runtime._run_streaming_mock.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -328,6 +364,31 @@ async def test_config_put_merges_settings(client):
 
 
 @pytest.mark.asyncio
+async def test_patch_config_rebinds_read_handlers(client, tmp_path):
+    from functools import partial
+
+    from core.tools.handlers.filesystem import read_file
+
+    extra = tmp_path / "new_watch"
+    extra.mkdir()
+    (extra / "hi.txt").write_text("hello")
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    app_state.authorized_read_paths = [str(startup)]
+
+    tr = {"read_file": partial(read_file, authorized_paths=[str(startup)])}
+    mock_rt = MagicMock()
+    mock_rt._tool_registry = tr
+    app_state.runtime = mock_rt
+
+    async with client as c:
+        resp = await c.patch("/api/config", json={"watched_folders": [str(extra)]})
+    assert resp.status_code == 200
+    body = tr["read_file"](path=str(extra / "hi.txt"))
+    assert body == "hello"
+
+
+@pytest.mark.asyncio
 async def test_config_model_change_switches_llamacpp_provider(client):
     """Patching model with a llama.cpp model name updates the registry primary."""
     from core.inference.providers.llamacpp_provider import LlamaCppChatProvider
@@ -442,8 +503,8 @@ async def test_query_without_model_manager_uses_get_chat(client, mock_runtime):
 
 
 @pytest.mark.asyncio
-async def test_query_stream_calls_runtime_run_not_stream(client, mock_runtime):
-    """Phase 2: /api/query/stream always uses runtime.run(), not runtime.stream()."""
+async def test_query_stream_calls_runtime_run_streaming(client, mock_runtime):
+    """B2: /api/query/stream uses runtime.run_streaming(), not legacy runtime.stream()."""
     mock_runtime.stream = MagicMock()
     async with client as c:
         resp = await c.post(
@@ -452,7 +513,7 @@ async def test_query_stream_calls_runtime_run_not_stream(client, mock_runtime):
         )
         assert resp.status_code == 200
         await resp.aread()
-    mock_runtime.run.assert_awaited_once()
+    assert len(mock_runtime._run_streaming_mock.calls) == 1
     mock_runtime.stream.assert_not_called()
 
 
@@ -477,3 +538,116 @@ async def test_config_model_change_switches_to_mlx(client):
         await c.patch("/api/config", json={"model": "mlx-community/Phi-4-mini-instruct-4bit"})
 
     assert registry.get_chat() is mlx_chat
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# /fleet/*
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fleet_orchestrator(tmp_path):
+    from core.inference.fleet.hardware_monitor import HardwareSnapshot
+    from core.inference.fleet.model_registry import ModelConfig
+    from core.inference.fleet.orchestrator import FleetOrchestrator, ModelSelection
+
+    model_path = tmp_path / "tiny.gguf"
+    model_path.write_text("fake", encoding="utf-8")
+    model = ModelConfig(
+        id="tiny-q4",
+        path=str(model_path),
+        family="test",
+        params_b=0.5,
+        quant="Q4_K_M",
+        ram_required_gb=1.0,
+        vram_required_gb=0.5,
+        gpu_layers=0,
+        context_length=2048,
+        capabilities=["chat"],
+        speed_tokens_per_sec=100.0,
+    )
+    hw = HardwareSnapshot(
+        ram_total_gb=16.0,
+        ram_available_gb=8.0,
+        cpu_count=8,
+        cpu_percent=10.0,
+        gpu_backend="metal",
+        gpu_vram_total_gb=16.0,
+        gpu_vram_available_gb=8.0,
+        unified_memory=True,
+    )
+    fleet = FleetOrchestrator()
+    fleet._hw_snapshot = hw
+    fleet.current_selection = ModelSelection(
+        model=model,
+        gpu_layers=0,
+        context_length=2048,
+        rationale="test fixture",
+    )
+    app_state.fleet_orchestrator = fleet
+    return fleet
+
+
+@pytest.mark.asyncio
+async def test_fleet_status_returns_200(client, fleet_orchestrator):
+    async with client as c:
+        resp = await c.get("/api/fleet/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "auto"
+    assert body["current_model"]["id"] == "tiny-q4"
+    assert body["hardware"]["ram_pressure_pct"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_fleet_status_503_without_orchestrator(client):
+    app_state.fleet_orchestrator = None
+    async with client as c:
+        resp = await c.get("/api/fleet/status")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_fleet_models_lists_registry(client, fleet_orchestrator, monkeypatch):
+    model = fleet_orchestrator.current_selection.model
+    monkeypatch.setattr(fleet_orchestrator, "list_models", lambda registry_path=None: [model])
+    async with client as c:
+        resp = await c.get("/api/fleet/models")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["active_model_id"] == "tiny-q4"
+    assert len(body["models"]) == 1
+    assert body["models"][0]["available_on_disk"] is True
+
+
+@pytest.mark.asyncio
+async def test_fleet_config_pinned_persists(client, fleet_orchestrator, monkeypatch):
+    model = fleet_orchestrator.current_selection.model
+    monkeypatch.setattr(fleet_orchestrator, "list_models", lambda registry_path=None: [model])
+    async with client as c:
+        resp = await c.patch(
+            "/api/fleet/config",
+            json={"mode": "pinned", "pinned_model_id": "tiny-q4"},
+        )
+    assert resp.status_code == 200
+    assert app_state._config["fleet_mode"] == "pinned"
+    assert fleet_orchestrator.mode == "pinned"
+
+
+@pytest.mark.asyncio
+async def test_fleet_config_auto_restores_selection(client, fleet_orchestrator, monkeypatch):
+    def _fake_startup(registry_path=None, default_task_complexity=None):
+        sel = fleet_orchestrator.current_selection
+        fleet_orchestrator._mode = "auto"
+        fleet_orchestrator._pinned_model_id = None
+        return sel
+
+    model = fleet_orchestrator.current_selection.model
+    monkeypatch.setattr(fleet_orchestrator, "list_models", lambda registry_path=None: [model])
+    monkeypatch.setattr(fleet_orchestrator, "select_on_startup", _fake_startup)
+    fleet_orchestrator.pin_model("tiny-q4")
+    async with client as c:
+        resp = await c.patch("/api/fleet/config", json={"mode": "auto"})
+    assert resp.status_code == 200
+    assert app_state._config["fleet_mode"] == "auto"
+    assert fleet_orchestrator.mode == "auto"

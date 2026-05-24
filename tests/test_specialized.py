@@ -62,11 +62,37 @@ def test_code_prefix_leading_whitespace_ignored():
     assert result.query == "refactoriza esto"
 
 
-def test_unknown_slash_command_routes_to_general():
-    # /foo is not a registered prefix — falls through to general
+def test_unknown_slash_prefix_uses_keyword_routing():
+    # /foo is not a registered prefix — keyword "schedule" → calendar
     router = SpecializedAgentRouter()
     result = router.route("/schedule meeting")
+    assert result.agent_id == CALENDAR_AGENT_ID
+
+
+def test_unknown_slash_without_keywords_routes_to_general():
+    router = SpecializedAgentRouter()
+    result = router.route("/foo something random")
     assert result.agent_id == GENERAL_AGENT_ID
+
+
+def test_keyword_routes_calendar_create_event():
+    router = SpecializedAgentRouter()
+    result = router.route(
+        "Crea un evento llamado Cerebro smoke test mañana a las 4pm por 30 minutos"
+    )
+    assert result.agent_id == CALENDAR_AGENT_ID
+
+
+def test_keyword_routes_code_write_file():
+    router = SpecializedAgentRouter()
+    result = router.route("escribe un archivo test.txt con la palabra hola")
+    assert result.agent_id == CODE_AGENT_ID
+
+
+def test_keyword_routes_academic_pdf():
+    router = SpecializedAgentRouter()
+    result = router.route("Resume este pdf de física")
+    assert result.agent_id == ACADEMIC_AGENT_ID
 
 
 # ---------------------------------------------------------------------------
@@ -89,18 +115,38 @@ def test_code_profile_has_correct_id_and_tools():
     assert profile.id == CODE_AGENT_ID
     assert set(profile.authorized_tools) == set(CODE_TOOLS)
     assert "execute_python" in profile.authorized_tools
-    # write-only tools must NOT be in code profile
-    assert "write_file" not in profile.authorized_tools
+    assert "write_file" in profile.authorized_tools
     assert "create_note" not in profile.authorized_tools
 
 
-def test_general_profile_has_explicit_readonly_tools():
+def test_general_profile_has_expected_tools():
     profile = make_general_profile()
     assert profile.id == GENERAL_AGENT_ID
     assert set(profile.authorized_tools) == set(GENERAL_TOOLS)
     assert "get_upcoming_events" in profile.authorized_tools
     assert "execute_python" not in profile.authorized_tools
-    assert "write_file" not in profile.authorized_tools
+    assert "write_file" in profile.authorized_tools
+    assert "read_file" in profile.authorized_tools
+
+
+def test_general_profile_can_call_create_calendar_event():
+    assert "create_calendar_event" in make_general_profile().authorized_tools
+
+
+def test_general_can_write_file():
+    assert "write_file" in make_general_profile().authorized_tools
+
+
+def test_code_can_write_file():
+    assert "write_file" in make_code_profile().authorized_tools
+
+
+def test_general_can_evaluate_math():
+    assert "evaluate_math" in make_general_profile().authorized_tools
+
+
+def test_code_can_evaluate_math():
+    assert "evaluate_math" in make_code_profile().authorized_tools
 
 
 def test_profiles_have_non_empty_instructions():
@@ -198,6 +244,14 @@ def test_calendar_profile_has_non_empty_instructions():
     assert len(profile.preferences["instructions"]) > 20
 
 
+def test_calendar_instructions_under_prompt_budget():
+    instructions = make_calendar_profile().preferences["instructions"]
+    assert len(instructions) < 1500
+    assert "get_upcoming_events" in instructions
+    assert "create_calendar_event" in instructions
+    assert instructions.count('{"action": "tool"') == 2
+
+
 def test_calendar_prefix_routes_correctly():
     router = SpecializedAgentRouter()
     result = router.route("/calendar ¿qué tengo mañana?")
@@ -282,6 +336,17 @@ async def test_route_with_llm_falls_back_to_general_without_llm_router():
     router = SpecializedAgentRouter(llm_router=None)
     result = await router.route_with_llm("some random question")
     assert result.agent_id == GENERAL_AGENT_ID
+
+
+@pytest.mark.asyncio
+async def test_route_with_llm_keyword_skips_slow_llm():
+    from unittest.mock import AsyncMock
+
+    mock_llm = AsyncMock()
+    router = SpecializedAgentRouter(llm_router=mock_llm)
+    result = await router.route_with_llm("¿Qué tengo en el calendario mañana?")
+    assert result.agent_id == CALENDAR_AGENT_ID
+    mock_llm.classify.assert_not_called()
 
 
 @pytest.mark.asyncio

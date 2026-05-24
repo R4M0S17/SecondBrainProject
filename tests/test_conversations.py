@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from core.agents.conversation_store import ConversationStore
+from core.agents.session_policy import SESSION_RESUME_MAX_TURNS, resume_messages
 from core.observability.response_meta import MetricsCollector
 from ui.tray.server import app, app_state
 
@@ -174,6 +175,28 @@ async def test_get_conversation_unknown_id_returns_404(client):
     async with client as c:
         resp = await c.get("/api/conversations/nonexistent-id")
     assert resp.status_code == 404
+
+
+def test_resume_messages_caps_at_configured_turns(tmp_path):
+    store = ConversationStore(str(tmp_path))
+    conv_id = store.create("general-v1")
+    for i in range(12):
+        store.append(conv_id, f"q{i}", f"a{i}", {})
+    record = store.get(conv_id)
+    assert record is not None
+    messages = resume_messages(record)
+    assert len(messages) == SESSION_RESUME_MAX_TURNS
+    assert messages[0]["content"] == "q8"
+
+
+def test_conversation_session_summaries_are_isolated(tmp_path):
+    store = ConversationStore(str(tmp_path))
+    conv_a = store.create("general-v1")
+    conv_b = store.create("general-v1")
+    store.update_session_summary(conv_a, "summary for A only")
+    store.update_session_summary(conv_b, "summary for B only")
+    assert store.get(conv_a).session_summary == "summary for A only"
+    assert store.get(conv_b).session_summary == "summary for B only"
 
 
 @pytest.mark.asyncio

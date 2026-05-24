@@ -91,6 +91,13 @@ export interface IndexStatusResponse {
   message: string;
 }
 
+export interface HealthResponse {
+  llama_server: "up" | "restarting" | "down";
+  last_restart_at: string | null;
+  restart_count_session: number;
+  message: string | null;
+}
+
 export interface StatusResponse {
   indexed_files: number;
   engine_ok: boolean;

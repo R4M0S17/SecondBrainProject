@@ -13,19 +13,34 @@ from loguru import logger
 from core.inference.engine import InferenceEngine
 from core.ingestion.pipeline import Document
 
+# Legacy default for tests; production uses embed provider dimensions (384 local, 1024 llamacpp).
 VECTOR_DIM = 768
 
-_SCHEMA = pa.schema(
-    [
-        pa.field("id", pa.string()),
-        pa.field("content", pa.string()),
-        pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-        pa.field("source_path", pa.string()),
-        pa.field("chunk_index", pa.int32()),
-        pa.field("file_modified", pa.float64()),
-        pa.field("metadata", pa.string()),
-    ]
-)
+
+def vector_schema(embedding_dim: int) -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("content", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), embedding_dim)),
+            pa.field("source_path", pa.string()),
+            pa.field("chunk_index", pa.int32()),
+            pa.field("file_modified", pa.float64()),
+            pa.field("metadata", pa.string()),
+        ]
+    )
+
+
+class EmbeddingDimensionMismatchError(ValueError):
+    """Raised when stored vectors do not match the active embedding provider."""
+
+
+def _check_vector_dim(vector: list[float], expected: int) -> None:
+    if len(vector) != expected:
+        raise EmbeddingDimensionMismatchError(
+            f"Vector length {len(vector)} != expected {expected}. "
+            "Run: python scripts/reindex_embeddings.py after changing CEREBRO_EMBEDDINGS_BACKEND."
+        )
 
 
 @dataclass
@@ -39,17 +54,39 @@ class SearchResult:
 
 
 class VectorStore:
-    def __init__(self, db_path: str, table_name: str = "documents") -> None:
+    def __init__(
+        self,
+        db_path: str,
+        table_name: str = "documents",
+        embedding_dim: int = VECTOR_DIM,
+    ) -> None:
         self.db_path = db_path
         self.table_name = table_name
+        self.embedding_dim = embedding_dim
         self._db = lancedb.connect(db_path)
         self._table = self._get_or_create_table()
 
     def _get_or_create_table(self):
+        schema = vector_schema(self.embedding_dim)
         try:
-            return self._db.create_table(self.table_name, schema=_SCHEMA)
+            return self._db.create_table(self.table_name, schema=schema)
         except ValueError:
-            return self._db.open_table(self.table_name)
+            table = self._db.open_table(self.table_name)
+            self._validate_existing_table(table)
+            return table
+
+    def _validate_existing_table(self, table: Any) -> None:
+        try:
+            sample = table.to_arrow().select(["vector"]).slice(0, 1)
+            if sample.num_rows == 0:
+                return
+            first = sample["vector"][0].as_py()
+            if first is not None:
+                _check_vector_dim([float(x) for x in first], self.embedding_dim)
+        except EmbeddingDimensionMismatchError:
+            raise
+        except Exception as e:
+            logger.debug("Could not validate vector table dimensions: {}", e)
 
     async def upsert(self, documents: list[Document], engine: InferenceEngine) -> int:
         if not documents:
@@ -79,6 +116,7 @@ class VectorStore:
         rows = []
         for doc in to_insert:
             vector = await engine.embed(doc.content)
+            _check_vector_dim(vector, self.embedding_dim)
             rows.append(
                 {
                     "id": doc.id,
@@ -99,6 +137,7 @@ class VectorStore:
         self, query: str, engine: InferenceEngine, top_k: int = 5
     ) -> list[SearchResult]:
         vector = await engine.embed(query)
+        _check_vector_dim(vector, self.embedding_dim)
         rows = await asyncio.to_thread(lambda: self._table.search(vector).limit(top_k).to_list())
         return [
             SearchResult(

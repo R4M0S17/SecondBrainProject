@@ -1,4 +1,4 @@
-"""Phase 8.7 — RAM pressure 503 on /api/query."""
+"""Phase 8.7 — RAM pressure warning on /api/query (A1.4: non-blocking)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from ui.tray.server import app_state
 
 
 @pytest.mark.asyncio
-async def test_ram_critical_returns_503(api_client, tmp_path):
-    mock_chat = make_stub_chat_complete(['{"action": "answer", "answer": "should not run"}'])
+async def test_ram_critical_returns_warning_in_metadata(api_client, tmp_path):
+    mock_chat = make_stub_chat_complete(['{"action": "answer", "answer": "ok bajo presión"}'])
     install_runtime_for_query_e2e(tmp_path, mock_chat)
 
     mon = MagicMock()
@@ -29,6 +29,5 @@ async def test_ram_critical_returns_503(api_client, tmp_path):
             "/api/query",
             json={"question": "hola", "agent": "general-v1"},
         )
-    assert resp.status_code == 503
-    assert resp.json()["detail"] == "Out of RAM. Lite profile recommended."
-    mock_chat.complete.assert_not_called()
+    assert resp.status_code == 200
+    assert "ram_pressure_critical" in resp.json()["metadata"]["warnings"]

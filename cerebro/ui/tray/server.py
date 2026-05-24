@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-import psutil
 from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -32,7 +31,11 @@ from pydantic import BaseModel, Field
 
 from core.agents.conversation_store import ConversationStore
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
+from core.inference.inference_warnings import clear_inference_warnings, consume_inference_warnings
+from core.inference.ram_preflight import RAM_WARNING_CRITICAL, collect_ram_warnings
+from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
+from ui.tray.wizard import recommend_lite_profile
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Pydantic models for request / response serialisation
@@ -142,12 +145,21 @@ class _IndexJob:
     message: str = ""
 
 
+class HealthResponse(BaseModel):
+    llama_server: Literal["up", "restarting", "down"]
+    last_restart_at: str | None = None
+    restart_count_session: int = 0
+    message: str | None = None
+
+
 class StatusResponse(BaseModel):
     indexed_files: int
     engine_ok: bool
     model: str
     provider: str
     active_agent: str
+    ram_pressure: Literal["ok", "warn", "critical"] = "ok"
+    ram_total_gb: float = 0.0
     ram_used_gb: float
     ram_available_gb: float
     queries_total: int
@@ -158,7 +170,13 @@ class StatusResponse(BaseModel):
     provider_fallbacks: int
     specialist_role: str | None = None
     specialist_loaded: bool = False
+    current_model_id: str | None = None
+    current_model_quant: str | None = None
+    current_model_params_b: float | None = None
+    hardware_snapshot: dict[str, Any] | None = None
+    selection_rationale: str | None = None
     context_window: int = 0
+    macos_permissions: dict[str, str] | None = None
 
 
 class WizardStatusResponse(BaseModel):
@@ -166,10 +184,44 @@ class WizardStatusResponse(BaseModel):
     engine_running: bool
     model_pulled: bool
     folders_configured: bool
+    recommend_lite: bool = False
+
+
+class EmbeddingCacheStatsResponse(BaseModel):
+    """Embedding cache statistics response.
+
+    Fields:
+        hits: Number of cache hits
+        misses: Number of cache misses
+        hit_rate_percent: Hit rate as percentage (0-100)
+        size: Current number of cached embeddings
+        max_size: Maximum cache size
+        evictions: Total evictions due to LRU
+        avg_get_latency_ms: Average get operation latency
+        avg_put_latency_ms: Average put operation latency
+        ttl_seconds: TTL setting or None if no expiry
+        persistence_store: Backend store name (InMemoryCacheStore or SQLiteCacheStore)
+    """
+
+    hits: int
+    misses: int
+    hit_rate_percent: float
+    size: int
+    max_size: int
+    evictions: int = 0
+    avg_get_latency_ms: float = 0.0
+    avg_put_latency_ms: float = 0.0
+    ttl_seconds: int | None = None
+    persistence_store: str = "InMemoryCacheStore"
 
 
 class SetFoldersRequest(BaseModel):
     folders: list[str]
+
+
+class FleetModeRequest(BaseModel):
+    mode: Literal["auto", "pinned"]
+    pinned_model_id: str | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -183,6 +235,10 @@ class AppState:
         self.vector_store: Any = None  # VectorStore | None
         self.provider_registry: Any = None  # ProviderRegistry | None
         self.model_manager: Any = None  # ModelManager | None
+        self.planner: Any = None  # TaskPlanner | None
+        self.enricher: Any = None  # ContextEnricher | None
+        self.embedding_provider: Any = None  # CachedEmbeddingProvider | None
+        self.fleet_orchestrator: Any = None  # FleetOrchestrator | None
         self.router: SpecializedAgentRouter = SpecializedAgentRouter()
         self.active_agent_id: str = GENERAL_AGENT_ID
         self.metrics: MetricsCollector = MetricsCollector()
@@ -200,6 +256,9 @@ class AppState:
         self._config_file: Path = _state_dir / "config.json"
         self._config: dict[str, Any] = self._load_config()
         self.conv_store: ConversationStore = ConversationStore(str(_state_dir))
+        self.macos_permissions: dict[str, str] = {"calendar": "unknown"}
+        self.ram_monitor: RamMonitor = RamMonitor()
+        self.llama_health_monitor: Any = None
         self._load_wizard_state()
 
     def _load_config(self) -> dict[str, Any]:
@@ -263,12 +322,27 @@ async def _verify_api_key(key: str | None = Security(_API_KEY_HEADER)) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        from core.observability.macos_perms import probe_calendar_permission
+
+        app_state.macos_permissions["calendar"] = await probe_calendar_permission()
+    except Exception:
+        logger.exception("macOS calendar permission probe failed")
+        app_state.macos_permissions["calendar"] = "unknown"
+
     if app_state.model_manager is not None:
         try:
             await app_state.model_manager.start()
         except Exception:
             logger.exception("ModelManager failed to start — model swapping disabled")
+
+    if app_state.llama_health_monitor is not None:
+        await app_state.llama_health_monitor.start()
+
     yield
+
+    if app_state.llama_health_monitor is not None:
+        await app_state.llama_health_monitor.stop()
     if app_state.model_manager is not None:
         await app_state.model_manager.stop()
 
@@ -361,6 +435,8 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     model_name = "phi3:mini"
     provider_name = "unknown"
     warnings: list[str] = []
+    clear_inference_warnings()
+    await _apply_ram_pressure_warnings(warnings)
     if app_state.provider_registry is not None:
         try:
             if app_state.model_manager is not None:
@@ -390,12 +466,15 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
 
     start = time.perf_counter()
     try:
-        answer, final_state = await app_state.runtime.run(query_text, agent_id)
+        answer, final_state = await app_state.runtime.run(
+            query_text, agent_id, conversation_id=conv_id
+        )
     except Exception as exc:
         logger.exception("Runtime error during /query")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     total_latency_ms = (time.perf_counter() - start) * 1000
+    warnings.extend(consume_inference_warnings())
     meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
     for tc in final_state.tool_trace[pre_trace_len:]:
         meta.tools_called.append(
@@ -453,6 +532,8 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
     model_name = "phi3:mini"
     provider_name = "unknown"
     warnings: list[str] = []
+    clear_inference_warnings()
+    await _apply_ram_pressure_warnings(warnings)
     # When model_manager is active, resolve model identity inside each generator
     # so we can emit a specialist_loading SSE event before the blocking load.
     if app_state.provider_registry is not None and app_state.model_manager is None:
@@ -467,88 +548,18 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
     if stream_conv_id is None or app_state.conv_store.get(stream_conv_id) is None:
         stream_conv_id = app_state.conv_store.create(agent_id)
 
-    # Use runtime.run() (tool loop) for any agent with tools; stream() for tool-less agents.
-    # Checking confirmation-required tools only was a bug: calendar/academic/code agents
-    # need run() regardless of whether they have destructive tools.
+    # Phase 2: always use runtime.run() (tool loop) for /query/stream so live-data
+    # questions invoke tools; token streaming is simulated from the final answer.
     pre_trace_len = 0
-    uses_tools = False
     try:
         _pre = app_state.runtime._state_store.load(agent_id)
-        uses_tools = bool(_pre.profile.authorized_tools)
         pre_trace_len = len(_pre.tool_trace)
     except Exception:
         pass
 
     start = time.perf_counter()
 
-    if uses_tools:
-
-        async def event_generator_tools():
-            nonlocal model_name, provider_name, warnings
-            if app_state.model_manager is not None and app_state.provider_registry is not None:
-                yield f"data: {json.dumps({'event': 'specialist_loading'})}\n\n"
-                try:
-                    _chat = await app_state.provider_registry.get_chat_for_agent(
-                        agent_id, app_state.model_manager
-                    )
-                    model_name = _chat.model_id()
-                    provider_name = "llamacpp"
-                except Exception:
-                    warnings.append("provider_fallback")
-            try:
-                answer, final_state = await app_state.runtime.run(query_text, agent_id)
-            except Exception as exc:
-                logger.exception("Runtime error during /query/stream (tools path)")
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-
-            # Simulate streaming word by word.
-            words = answer.split(" ")
-            for i, word in enumerate(words):
-                token = word + (" " if i < len(words) - 1 else "")
-                yield f"data: {json.dumps({'token': token})}\n\n"
-
-            total_latency_ms = (time.perf_counter() - start) * 1000
-            meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
-            for tc in final_state.tool_trace[pre_trace_len:]:
-                meta.tools_called.append(
-                    ToolCallRecord(
-                        name=tc.tool_name,
-                        args_summary=str(tc.args)[:100] if tc.args else "",
-                        result_summary=(tc.result or "")[:200],
-                        latency_ms=0.0,
-                        approved=True,
-                    )
-                )
-
-            if final_state.pending_tool_name:
-                app_state._pending_tools[stream_conv_id] = {
-                    "tool_name": final_state.pending_tool_name,
-                    "tool_args": final_state.pending_tool_args or {},
-                    "agent_id": agent_id,
-                }
-                meta.pending_tool = {
-                    "name": final_state.pending_tool_name,
-                    "args": final_state.pending_tool_args or {},
-                }
-
-            app_state.metrics.record_query(meta)
-            meta_model = _meta_to_model(meta)
-
-            try:
-                app_state.conv_store.append(
-                    stream_conv_id, query_text, answer, meta_model.model_dump()
-                )
-            except Exception:
-                logger.exception("Failed to persist streaming (tools) turn for {}", stream_conv_id)
-
-            yield f"data: {json.dumps({'metadata': meta_model.model_dump(), 'conversation_id': stream_conv_id})}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(event_generator_tools(), media_type="text/event-stream")
-
-    async def event_generator():
+    async def event_generator_tools():
         nonlocal model_name, provider_name, warnings
         if app_state.model_manager is not None and app_state.provider_registry is not None:
             yield f"data: {json.dumps({'event': 'specialist_loading'})}\n\n"
@@ -560,33 +571,168 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
                 provider_name = "llamacpp"
             except Exception:
                 warnings.append("provider_fallback")
-        tokens: list[str] = []
         try:
-            async for token in app_state.runtime.stream(query_text, agent_id):
-                tokens.append(token)
-                yield f"data: {json.dumps({'token': token})}\n\n"
+            from core.agents.runtime import StreamRunComplete
+
+            answer_parts: list[str] = []
+            final_state = None
+            live_streamed = False
+            async for chunk in app_state.runtime.run_streaming(
+                query_text, agent_id, conversation_id=stream_conv_id
+            ):
+                if isinstance(chunk, StreamRunComplete):
+                    final_state = chunk.final_state
+                    if not answer_parts:
+                        answer_parts = [chunk.answer]
+                    break
+                live_streamed = True
+                answer_parts.append(chunk)
+                yield f"data: {json.dumps({'token': chunk})}\n\n"
+
+            if final_state is None:
+                raise RuntimeError("run_streaming ended without StreamRunComplete")
+            answer = "".join(answer_parts)
+
+            if not live_streamed:
+                words = answer.split(" ")
+                for i, word in enumerate(words):
+                    token = word + (" " if i < len(words) - 1 else "")
+                    yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception as exc:
-            logger.exception("Streaming error during /query/stream")
+            logger.exception("Runtime error during /query/stream (tools path)")
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             yield "data: [DONE]\n\n"
             return
 
         total_latency_ms = (time.perf_counter() - start) * 1000
+        warnings.extend(consume_inference_warnings())
         meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
+        for tc in final_state.tool_trace[pre_trace_len:]:
+            meta.tools_called.append(
+                ToolCallRecord(
+                    name=tc.tool_name,
+                    args_summary=str(tc.args)[:100] if tc.args else "",
+                    result_summary=(tc.result or "")[:200],
+                    latency_ms=0.0,
+                    approved=True,
+                )
+            )
+
+        if final_state.pending_tool_name:
+            app_state._pending_tools[stream_conv_id] = {
+                "tool_name": final_state.pending_tool_name,
+                "tool_args": final_state.pending_tool_args or {},
+                "agent_id": agent_id,
+            }
+            meta.pending_tool = {
+                "name": final_state.pending_tool_name,
+                "args": final_state.pending_tool_args or {},
+            }
+
         app_state.metrics.record_query(meta)
         meta_model = _meta_to_model(meta)
 
         try:
-            app_state.conv_store.append(
-                stream_conv_id, query_text, "".join(tokens), meta_model.model_dump()
-            )
+            app_state.conv_store.append(stream_conv_id, query_text, answer, meta_model.model_dump())
         except Exception:
-            logger.exception("Failed to persist streaming conversation turn for {}", stream_conv_id)
+            logger.exception("Failed to persist streaming (tools) turn for {}", stream_conv_id)
 
         yield f"data: {json.dumps({'metadata': meta_model.model_dump(), 'conversation_id': stream_conv_id})}\n\n"
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(event_generator_tools(), media_type="text/event-stream")
+
+
+@api.post("/query/plan")
+async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
+    """Execute a complex multi-step query using task decomposition.
+
+    For complex queries, decomposes the task into steps and executes each
+    sequentially, streaming progress. Falls back to regular run() for simple queries.
+    """
+    if app_state.runtime is None or app_state.planner is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Runtime or planner not initialized.",
+        )
+
+    if req.agent == "auto":
+        route = await app_state.router.route_with_llm(req.question)
+        agent_id = route.agent_id
+        query_text = route.query
+    else:
+        agent_id = req.agent
+        query_text = req.question
+
+    app_state.active_agent_id = agent_id
+    app_state.metrics.set_active_agent(agent_id)
+
+    plan_conv_id = req.conversation_id
+    if plan_conv_id is None or app_state.conv_store.get(plan_conv_id) is None:
+        plan_conv_id = app_state.conv_store.create(agent_id)
+
+    start = time.perf_counter()
+
+    async def event_generator_plan():
+        """Decompose query, execute plan sequentially, stream step progress."""
+        try:
+            # Check if task is complex; if not, fall back to single-step run()
+            is_complex = app_state.planner.is_complex_task(query_text)
+            if not is_complex:
+                answer, final_state = await app_state.runtime.run(
+                    query_text, agent_id, conversation_id=plan_conv_id
+                )
+                yield f"data: {json.dumps({'step': 0, 'description': query_text[:100], 'total': 1})}\n\n"
+                words = answer.split(" ")
+                for i, word in enumerate(words):
+                    token = word + (" " if i < len(words) - 1 else "")
+                    yield f"data: {json.dumps({'step': 0, 'token': token})}\n\n"
+            else:
+                # Decompose into steps
+                steps = await app_state.planner.decompose(query_text)
+                total_steps = len(steps)
+
+                # Execute each step sequentially
+                for step_idx, step_text in enumerate(steps):
+                    yield f"data: {json.dumps({'step': step_idx, 'description': step_text[:100], 'total': total_steps})}\n\n"
+
+                    answer, final_state = await app_state.runtime.run(
+                        step_text, agent_id, conversation_id=plan_conv_id
+                    )
+
+                    # Stream tokens for this step's answer
+                    words = answer.split(" ")
+                    for i, word in enumerate(words):
+                        token = word + (" " if i < len(words) - 1 else "")
+                        yield f"data: {json.dumps({'step': step_idx, 'token': token})}\n\n"
+
+            # Emit final metadata
+            total_latency_ms = (time.perf_counter() - start) * 1000
+            model_name = "unknown"
+            provider_name = "unknown"
+            warnings: list[str] = []
+
+            try:
+                if app_state.provider_registry is not None:
+                    chat = app_state.provider_registry.get_chat()
+                    model_name = chat.model_id()
+                    provider_name = app_state.provider_registry.primary_name
+            except Exception:
+                warnings.append("provider_fallback")
+
+            meta = _build_metadata(total_latency_ms, model_name, provider_name, warnings)
+            app_state.metrics.record_query(meta)
+            meta_model = _meta_to_model(meta)
+
+            yield f"data: {json.dumps({'plan_complete': True, 'metadata': meta_model.model_dump(), 'conversation_id': plan_conv_id})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        except Exception as exc:
+            logger.exception("Error in /query/plan")
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator_plan(), media_type="text/event-stream")
 
 
 @api.post("/tool-confirm", response_model=QueryResponse)
@@ -701,12 +847,43 @@ async def index_status_endpoint(job_id: str) -> IndexStatusResponse:
     )
 
 
+async def _apply_ram_pressure_warnings(warnings: list[str]) -> None:
+    """Record RAM pressure in metadata; purge embedding cache when critical."""
+    codes = collect_ram_warnings(app_state.ram_monitor)
+    for code in codes:
+        if code not in warnings:
+            warnings.append(code)
+    if RAM_WARNING_CRITICAL in codes and app_state.embedding_provider is not None:
+        cache = getattr(app_state.embedding_provider, "_cache", None)
+        if cache is not None:
+            await cache.clear()
+
+
+@api.get("/health", response_model=HealthResponse)
+async def health_endpoint() -> HealthResponse:
+    if app_state.llama_health_monitor is None:
+        return HealthResponse(
+            llama_server="up",
+            last_restart_at=None,
+            restart_count_session=0,
+            message=None,
+        )
+    snap = app_state.llama_health_monitor.snapshot()
+    return HealthResponse(
+        llama_server=snap.llama_server,
+        last_restart_at=snap.last_restart_at,
+        restart_count_session=snap.restart_count_session,
+        message=snap.message,
+    )
+
+
 @api.get("/status", response_model=StatusResponse)
 async def status_endpoint() -> StatusResponse:
-    vm = psutil.virtual_memory()
-    ram_total_gb = vm.total / (1024**3)
-    ram_available_gb = vm.available / (1024**3)
-    ram_used_gb = ram_total_gb - ram_available_gb
+    ram_snap = app_state.ram_monitor.snapshot()
+    ram_total_gb = ram_snap["total_gb"]
+    ram_available_gb = ram_snap["available_gb"]
+    ram_used_gb = ram_snap["used_gb"]
+    ram_pressure = ram_snap["pressure"]
 
     engine_ok = False
     model_name = "—"
@@ -738,12 +915,39 @@ async def status_endpoint() -> StatusResponse:
         specialist_role = s["role"]
         specialist_loaded = s["loaded"]
 
+    current_model_id = None
+    current_model_quant = None
+    current_model_params_b = None
+    hardware_snapshot = None
+    selection_rationale = None
+    if app_state.fleet_orchestrator is not None:
+        sel = app_state.fleet_orchestrator.current_selection
+        if sel is not None:
+            current_model_id = sel.model.id
+            current_model_quant = sel.model.quant
+            current_model_params_b = sel.model.params_b
+            selection_rationale = sel.rationale
+            if app_state.fleet_orchestrator._hw_snapshot is not None:
+                hw = app_state.fleet_orchestrator._hw_snapshot
+                hardware_snapshot = {
+                    "ram_total_gb": round(hw.ram_total_gb, 2),
+                    "ram_available_gb": round(hw.ram_available_gb, 2),
+                    "cpu_count": hw.cpu_count,
+                    "cpu_percent": hw.cpu_percent,
+                    "gpu_backend": hw.gpu_backend,
+                    "gpu_vram_total_gb": round(hw.gpu_vram_total_gb, 2),
+                    "gpu_vram_available_gb": round(hw.gpu_vram_available_gb, 2),
+                    "unified_memory": hw.unified_memory,
+                }
+
     return StatusResponse(
         indexed_files=indexed_files,
         engine_ok=engine_ok,
         model=model_name,
         provider=active_provider,
         active_agent=app_state.active_agent_id,
+        ram_pressure=ram_pressure,
+        ram_total_gb=round(ram_total_gb, 2),
         ram_used_gb=round(ram_used_gb, 2),
         ram_available_gb=round(ram_available_gb, 2),
         queries_total=stats.queries_total,
@@ -754,8 +958,30 @@ async def status_endpoint() -> StatusResponse:
         provider_fallbacks=stats.provider_fallbacks,
         specialist_role=specialist_role,
         specialist_loaded=specialist_loaded,
+        current_model_id=current_model_id,
+        current_model_quant=current_model_quant,
+        current_model_params_b=current_model_params_b,
+        hardware_snapshot=hardware_snapshot,
+        selection_rationale=selection_rationale,
         context_window=context_window,
+        macos_permissions=dict(app_state.macos_permissions),
     )
+
+
+@api.get("/cache/embedding-stats", response_model=EmbeddingCacheStatsResponse)
+async def embedding_cache_stats() -> EmbeddingCacheStatsResponse:
+    if app_state.embedding_provider is None:
+        return EmbeddingCacheStatsResponse(
+            hits=0, misses=0, hit_rate_percent=0.0, size=0, max_size=0
+        )
+    try:
+        stats = app_state.embedding_provider.get_cache_stats()
+        return EmbeddingCacheStatsResponse(**stats)
+    except Exception as e:
+        logger.warning("Failed to get embedding cache stats: {}", e)
+        return EmbeddingCacheStatsResponse(
+            hits=0, misses=0, hit_rate_percent=0.0, size=0, max_size=0
+        )
 
 
 @api.get("/conversations", response_model=list[ConversationSummary])
@@ -807,6 +1033,112 @@ async def get_conversation(conv_id: str) -> ConversationDetail:
     )
 
 
+def _fleet_hardware_payload(hw: Any) -> dict[str, Any]:
+    from core.inference.fleet.hardware_monitor import HardwareSnapshot
+
+    if not isinstance(hw, HardwareSnapshot):
+        raise TypeError("expected HardwareSnapshot")
+    ram_used = max(0.0, hw.ram_total_gb - hw.ram_available_gb)
+    ram_pressure_pct = round((ram_used / hw.ram_total_gb) * 100, 1) if hw.ram_total_gb > 0 else 0.0
+    gpu_backend = hw.gpu_backend if hw.gpu_backend in ("metal", "cuda", "none") else "none"
+    return {
+        "ram_total_gb": round(hw.ram_total_gb, 2),
+        "ram_available_gb": round(hw.ram_available_gb, 2),
+        "ram_pressure_pct": ram_pressure_pct,
+        "gpu_backend": gpu_backend,
+        "gpu_vram_total_gb": round(hw.gpu_vram_total_gb, 2),
+        "gpu_vram_available_gb": round(hw.gpu_vram_available_gb, 2),
+        "unified_memory": hw.unified_memory,
+    }
+
+
+def _fleet_model_entry(model: Any) -> dict[str, Any]:
+    from core.inference.fleet.model_registry import ModelConfig
+
+    if not isinstance(model, ModelConfig):
+        raise TypeError("expected ModelConfig")
+    path = Path(model.path).expanduser()
+    return {
+        "id": model.id,
+        "family": model.family,
+        "path": model.path,
+        "params_b": model.params_b,
+        "quant": model.quant,
+        "ram_required_gb": model.ram_required_gb,
+        "vram_required_gb": model.vram_required_gb,
+        "gpu_layers": model.gpu_layers,
+        "context_length": model.context_length,
+        "capabilities": list(model.capabilities),
+        "speed_tokens_per_sec": model.speed_tokens_per_sec,
+        "available_on_disk": path.exists(),
+    }
+
+
+def _require_fleet() -> Any:
+    fleet = app_state.fleet_orchestrator
+    if fleet is None:
+        raise HTTPException(status_code=503, detail="Fleet orchestrator not initialised")
+    return fleet
+
+
+@api.get("/fleet/status")
+async def fleet_status() -> dict[str, Any]:
+    fleet = _require_fleet()
+    sel = fleet.current_selection
+    if sel is None:
+        sel = fleet.select_on_startup()
+    if sel is None:
+        raise HTTPException(status_code=503, detail="No fleet models configured")
+    hw = fleet._hw_snapshot
+    if hw is None:
+        from core.inference.fleet.hardware_monitor import snapshot
+
+        hw = snapshot()
+        fleet._hw_snapshot = hw
+    return {
+        "mode": app_state._config.get("fleet_mode", fleet.mode),
+        "current_model": _fleet_model_entry(sel.model),
+        "hardware": _fleet_hardware_payload(hw),
+        "swap_in_progress": False,
+        "swap_target_model_id": None,
+        "model_swaps_session": fleet.swaps_session_count,
+        "selection_rationale": sel.rationale,
+    }
+
+
+@api.get("/fleet/models")
+async def fleet_models() -> dict[str, Any]:
+    fleet = _require_fleet()
+    models = fleet.list_models()
+    active = fleet.current_selection.model.id if fleet.current_selection else ""
+    return {
+        "models": [_fleet_model_entry(m) for m in models],
+        "active_model_id": active,
+    }
+
+
+@api.patch("/fleet/config")
+async def fleet_config(req: FleetModeRequest) -> dict[str, Any]:
+    fleet = _require_fleet()
+    app_state._config["fleet_mode"] = req.mode
+    if req.mode == "pinned":
+        if not req.pinned_model_id:
+            raise HTTPException(
+                status_code=400,
+                detail="pinned_model_id is required when mode is pinned",
+            )
+        try:
+            fleet.pin_model(req.pinned_model_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._config["fleet_pinned_model_id"] = req.pinned_model_id
+    else:
+        fleet.use_auto_selection()
+        app_state._config.pop("fleet_pinned_model_id", None)
+    app_state._save_config()
+    return app_state._config
+
+
 @api.get("/config")
 async def get_config() -> dict[str, Any]:
     return app_state._config
@@ -829,6 +1161,22 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
             registry.get_chat("llamacpp").set_model(model_name)  # type: ignore[union-attr]
 
         registry.set_primary(target)
+
+    if "watched_folders" in settings and app_state.runtime is not None:
+        from functools import partial
+
+        from core.tools.handlers.filesystem import list_directory, read_file, search_files
+
+        startup_reads = list(app_state.authorized_read_paths or [])
+        merged_reads = list(dict.fromkeys(startup_reads + list(settings["watched_folders"])))
+        app_state.authorized_read_paths = merged_reads
+        tr = app_state.runtime._tool_registry
+        if "read_file" in tr:
+            tr["read_file"] = partial(read_file, authorized_paths=merged_reads)
+        if "list_directory" in tr:
+            tr["list_directory"] = partial(list_directory, authorized_paths=merged_reads)
+        if "search_files" in tr:
+            tr["search_files"] = partial(search_files, authorized_paths=merged_reads)
 
     app_state._save_config()
     return app_state._config
@@ -928,6 +1276,7 @@ async def wizard_status() -> WizardStatusResponse:
             engine_running=True,
             model_pulled=has_key,
             folders_configured=bool(app_state._config.get("watched_folders")),
+            recommend_lite=recommend_lite_profile(),
         )
     running = await _llamacpp_running()
     models_ok = (
@@ -938,6 +1287,7 @@ async def wizard_status() -> WizardStatusResponse:
         engine_running=running,
         model_pulled=models_ok,
         folders_configured=bool(app_state._config.get("watched_folders")),
+        recommend_lite=recommend_lite_profile(),
     )
 
 

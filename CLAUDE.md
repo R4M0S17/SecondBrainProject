@@ -107,7 +107,7 @@ CEREBRO_CLAUDE_MODEL        claude-sonnet-4-6
 ANTHROPIC_API_KEY           sk-ant-...          # required when backend=claude
 CEREBRO_LLAMACPP_URL        http://127.0.0.1:8080
 CEREBRO_LLAMACPP_EMBED_URL  http://127.0.0.1:8081
-CEREBRO_LLAMACPP_MODEL      llama-3.2-3b-instruct-q4_k_m.gguf   # default simple-mode GGUF name
+CEREBRO_LLAMACPP_MODEL      Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf   # default simple-mode GGUF name
 CEREBRO_LLAMACPP_SIMPLE     true   # false = ModelManager multi-server swapping
 CEREBRO_PROACTIVE_CONTEXT   false  # true = ContextEnricher (osascript) on every query
 CEREBRO_MLX_ENABLED         auto | true | false

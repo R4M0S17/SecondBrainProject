@@ -7,7 +7,10 @@ from functools import partial
 import pytest
 
 from core.tools.handlers.filesystem import (
+    READ_FILE_MAX_BYTES,
+    SEARCH_FILES_MAX_LINE_CHARS,
     PathNotAuthorizedError,
+    read_file,
     search_files,
     write_file,
 )
@@ -88,3 +91,40 @@ def test_write_file_via_partial_creates_file(tmp_path):
     ok = handler(path=target, content="hello phase 1")
     assert ok is True
     assert (tmp_path / "output.txt").read_text() == "hello phase 1"
+
+
+# ---------------------------------------------------------------------------
+# read_file — truncation (FIX_PLAN2 D4)
+# ---------------------------------------------------------------------------
+
+
+def test_read_file_truncates_large_file(tmp_path):
+    big = tmp_path / "big.txt"
+    big.write_bytes(b"x" * (READ_FILE_MAX_BYTES * 2))
+    result = read_file(str(big), [str(tmp_path)])
+    assert "Archivo truncado" in result
+    assert f"{READ_FILE_MAX_BYTES}/" in result
+    assert len(result.encode("utf-8")) <= READ_FILE_MAX_BYTES + 200
+
+
+def test_read_file_small_file_no_truncation_hint(tmp_path):
+    small = tmp_path / "small.txt"
+    small.write_text("hello")
+    result = read_file(str(small), [str(tmp_path)])
+    assert result == "hello"
+    assert "Archivo truncado" not in result
+
+
+def test_search_files_clips_long_lines(tmp_path):
+    deep = tmp_path
+    for _ in range(12):
+        deep = deep / "verylongdirectorysegment"
+    deep.mkdir(parents=True)
+    (deep / "file.txt").write_text("x")
+    result = search_files("*", [str(tmp_path)], base_path=str(tmp_path))
+    assert "No files found" not in result
+    lines = [line for line in result.splitlines() if line.strip()]
+    assert lines
+    for line in lines:
+        assert len(line) <= SEARCH_FILES_MAX_LINE_CHARS
+    assert any(line.endswith("...") for line in lines)

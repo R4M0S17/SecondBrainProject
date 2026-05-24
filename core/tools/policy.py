@@ -18,6 +18,15 @@ class PolicyResult:
 
 
 class PolicyEngine:
+    """Validate tool calls against agent authorization + path scoping.
+
+    Confirmation gating is owned by ``AgentRuntime._requires_confirmation``,
+    which reads the *same* ``ToolDefinition.requires_confirmation`` flag that
+    ``PolicyEngine.validate_call()`` surfaces in ``PolicyResult``. Tests in
+    ``tests/test_tool_governance.py`` assert the flag at the registry layer;
+    ``tests/test_tool_confirmation.py`` covers the runtime pause path.
+    """
+
     def __init__(
         self,
         registry: ToolRegistry,

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { updateConfig } from "../../api/client";
-import { useSystemStore, selectIsClaudeMode, selectRamPressure, selectSwapInProgress } from "../../stores/system";
+import {
+  useSystemStore,
+  selectIsClaudeMode,
+  selectRamPressure,
+  selectSwapInProgress,
+  selectLlamaServerState,
+} from "../../stores/system";
 import EngineIndicator from "./EngineIndicator";
 import RamGauge from "./RamGauge";
 import LatencyBadge from "./LatencyBadge";
@@ -10,7 +16,8 @@ import VramGauge from "./VramGauge";
 import FleetPanel from "./FleetPanel";
 
 export default function StatusBar() {
-  const { status, fleetStatus, startPolling } = useSystemStore();
+  const { status, health, fleetStatus, startPolling } = useSystemStore();
+  const llamaServer = selectLlamaServerState(useSystemStore.getState());
   const swapInProgress = useSystemStore(selectSwapInProgress);
   const [fleetPanelOpen, setFleetPanelOpen] = useState(false);
 
@@ -18,7 +25,7 @@ export default function StatusBar() {
     try {
       await updateConfig({
         inference_backend: "llamacpp",
-        model: "llama-3.2-3b-instruct-q4_k_m.gguf",
+        model: "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
         mlx_enabled: false,
       });
     } catch (e) {
@@ -55,7 +62,7 @@ export default function StatusBar() {
     >
       {/* Left group */}
       <div className="flex items-center gap-3">
-        <EngineIndicator ok={engineOk} provider={status?.provider} />
+        <EngineIndicator ok={engineOk} provider={status?.provider} llamaServer={llamaServer} />
         <span className="opacity-20">•</span>
         <ModelBadge
           modelId={modelId}

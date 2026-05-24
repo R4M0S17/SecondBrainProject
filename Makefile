@@ -1,4 +1,4 @@
-.PHONY: install test run lint lite engine engine-lite engine-code engine-deep package-backend package-macos package-windows
+.PHONY: install test smoke run lint lite engine engine-embed engine-lite engine-code engine-deep desktop-config desktop-launch desktop-icon desktop-app desktop-install package-backend package-macos package-windows
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -11,7 +11,10 @@ install:
 	$(VENV)/bin/pre-commit install
 
 test:
-	$(PYTHON) -m pytest tests/ -v
+	$(PYTHON) -m pytest tests/ -v --cov=core --cov-fail-under=80
+
+smoke:
+	bash scripts/smoke.sh
 
 run:
 	$(PYTHON) main.py
@@ -22,6 +25,9 @@ lite:
 
 engine:
 	./bin/start_engine.sh chat
+
+engine-embed:
+	./bin/start_engine.sh embed
 
 engine-lite:
 	set -a; . config/profiles/lite-8gb.env; set +a; \
@@ -37,6 +43,21 @@ lint:
 	$(VENV)/bin/black --check .
 	$(VENV)/bin/ruff check .
 	$(VENV)/bin/mypy core/
+
+# ── Desktop one-click launch (see docs/guides/DESKTOP_ONE_CLICK_LAUNCH.md) ───
+
+desktop-config:
+	bash scripts/write_desktop_config.sh
+
+desktop-launch:
+	bash scripts/cerebro_desktop_launcher.sh
+
+desktop-stop:
+	bash scripts/cerebro_desktop_stop.sh
+
+# Desktop .app build uses cerebro/ui/tray (icons + Tauri project live there).
+desktop-icon desktop-app desktop-install:
+	$(MAKE) -C cerebro $@
 
 # ── Packaging (Module 13) ─────────────────────────────────────────────────────
 

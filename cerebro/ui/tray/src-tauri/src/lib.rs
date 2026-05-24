@@ -1,9 +1,22 @@
+mod launcher;
+
 use tauri::{
     image::Image,
     Manager,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+#[tauri::command]
+fn restart_cerebro_services(app: tauri::AppHandle) -> Result<(), String> {
+    launcher::run_desktop_launcher(&app)
+}
+
+#[tauri::command]
+fn stop_cerebro_services(app: tauri::AppHandle) -> Result<(), String> {
+    launcher::run_desktop_stop(&app)
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,8 +24,27 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            restart_cerebro_services,
+            stop_cerebro_services
+        ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
+            let _ = window.hide();
+
+            if let Err(err) = launcher::run_desktop_launcher(app) {
+                let message = format!(
+                    "Cerebro — could not start backend\n\n{err}\n\nLogs: ~/.cerebro/logs/"
+                );
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let _ = handle
+                        .dialog()
+                        .message(message)
+                        .kind(MessageDialogKind::Error)
+                        .blocking_show();
+                });
+            }
 
             // Enable true macOS full-screen via the green button
             #[cfg(target_os = "macos")]
@@ -43,10 +75,10 @@ pub fn run() {
                 }
             })?;
 
-            // Ícono en la menubar → click izquierdo muestra/oculta la ventana
             let tray_icon = Image::from_path(
-                app.path().resource_dir().unwrap().join("icons/tray-icon.png")
-            ).unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
+                app.path().resource_dir().unwrap().join("icons/tray-icon.png"),
+            )
+            .unwrap_or_else(|_| app.default_window_icon().unwrap().clone());
 
             let _tray = TrayIconBuilder::new()
                 .icon(tray_icon)
@@ -71,6 +103,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            let _ = window.show();
+            let _ = window.set_focus();
 
             Ok(())
         })

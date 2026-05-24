@@ -70,23 +70,31 @@ if __name__ == "__main__":
 
     print("=== Cerebro Model Efficiency Testing ===\n")
     print("Available models:")
-    print("1. Llama-3.2-3B-Instruct-Q4_K_M (NEW - for efficiency testing)")
-    print("2. Qwen-3-4B (CURRENT - baseline)\n")
+    print("1. qwen  — Qwen2.5-Coder-3B-Instruct-Q4_K_M (default chat model)")
+    print("2. llama — Llama-3.2-3B-Instruct-Q4_K_M (legacy fallback)\n")
 
-    if len(sys.argv) > 1 and sys.argv[1] == "llama":
-        print("Downloading Llama-3.2-3B model...")
-        try:
-            model_path = download_model(
-                repo_id="hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF",
-                filename="llama-3.2-3b-instruct-q4_k_m.gguf",
-                output_dir=models_dir,
-            )
-            print(f"\n✓ Model ready at: {model_path}")
-            print("\nTo use this model, set:")
-            print(f'  export CEREBRO_LLAMACPP_MODEL="{model_path.name}"')
-        except Exception as e:
-            print(f"\n✗ Failed to download model: {e}")
-            sys.exit(1)
-    else:
-        print("Usage: python scripts/download_model.py [llama]")
-        print("\nExample: python scripts/download_model.py llama")
+    targets = {
+        "qwen": (
+            "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF",
+            "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
+        ),
+        "llama": (
+            "hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF",
+            "llama-3.2-3b-instruct-q4_k_m.gguf",
+        ),
+    }
+    choice = sys.argv[1] if len(sys.argv) > 1 else "qwen"
+    if choice not in targets:
+        print(f"Unknown model {choice!r}. Use: qwen | llama")
+        sys.exit(1)
+
+    repo_id, filename = targets[choice]
+    print(f"Downloading {filename}...")
+    try:
+        model_path = download_model(repo_id=repo_id, filename=filename, output_dir=models_dir)
+        print(f"\n✓ Model ready at: {model_path}")
+        print("\nTo use this model, set:")
+        print(f'  export CEREBRO_LLAMACPP_MODEL="{model_path.name}"')
+    except Exception as e:
+        print(f"\n✗ Failed to download model: {e}")
+        sys.exit(1)

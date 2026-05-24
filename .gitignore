@@ -22,6 +22,9 @@ build/
 *.bin
 models/
 
+# llama.cpp prompt-cache sidecar (runtime)
+bin/cache/
+
 # IDE
 .vscode/
 .idea/

@@ -38,6 +38,11 @@ class ShortTermStore:
         if len(self._messages) > self._max_messages:
             self._messages = self._messages[-self._max_messages :]
 
+    def drop_oldest(self, count: int) -> None:
+        if count <= 0:
+            return
+        self._messages = self._messages[count:]
+
     def push_tool_result(self, result: ToolResult) -> None:
         self._tool_results.append(result)
 

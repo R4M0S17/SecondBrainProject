@@ -354,3 +354,23 @@ def register_macos_tools(registry: ToolRegistry) -> None:
             },
         )
     )
+
+
+def register_math_tools(registry: ToolRegistry) -> None:
+    from core.tools.handlers.math import evaluate_math
+
+    registry.register(
+        ToolDefinition(
+            name="evaluate_math",
+            description=(
+                "Evaluate a deterministic numeric expression "
+                "(arithmetic, parentheses, power). Use for any math the user asks."
+            ),
+            handler=evaluate_math,
+            required_permission="tools.math.eval",
+            requires_confirmation=False,
+            scope=ToolScope.SANDBOXED,
+            audit_level=AuditLevel.METADATA,
+            parameters={"expression": "str — expresión numérica (ej: '17*23')"},
+        )
+    )

@@ -26,7 +26,7 @@ class ShortTermMemory:
 
 
 class ShortTermStore:
-    def __init__(self, max_messages: int = 30) -> None:
+    def __init__(self, max_messages: int = 35) -> None:
         self._max_messages = max_messages
         self._messages: list[Message] = []
         self._tool_results: list[ToolResult] = []
@@ -37,6 +37,11 @@ class ShortTermStore:
         self._messages.append(msg)
         if len(self._messages) > self._max_messages:
             self._messages = self._messages[-self._max_messages :]
+
+    def drop_oldest(self, count: int) -> None:
+        if count <= 0:
+            return
+        self._messages = self._messages[count:]
 
     def push_tool_result(self, result: ToolResult) -> None:
         self._tool_results.append(result)

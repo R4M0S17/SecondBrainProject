@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dev-capability",
+  "description": "Development-only permissions (not used in release builds — see tauri.release.conf.json)",
+  "windows": ["main"],
+  "permissions": [
+    "core:webview:allow-internal-toggle-devtools"
+  ]
+}
