@@ -1,6 +1,7 @@
 import { Component, useEffect, type ReactNode, type ErrorInfo } from "react";
 import { useWizardStore } from "./stores/wizard";
 import { useSystemStore } from "./stores/system";
+import { useServicesStore } from "./stores/services";
 import { useSettingsStore } from "./stores/settings";
 import { getWizardStatus } from "./api/client";
 import StartupGate from "./components/shared/StartupGate";
@@ -49,13 +50,14 @@ export default function App() {
 
   useEffect(() => {
     void (async () => {
+      await useServicesStore.getState().probeBackend();
       try {
         const status = await getWizardStatus();
         if (!status.is_first_launch) {
           complete();
         }
       } catch {
-        // Backend not running — skip wizard in dev
+        // Backend not running — still show main UI
         complete();
       }
       startPolling();

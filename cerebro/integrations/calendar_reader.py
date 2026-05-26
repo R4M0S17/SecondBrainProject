@@ -11,16 +11,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import platform
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Literal
 
+import dateparser
 from icalendar import Calendar as ICalendar
 from loguru import logger
+
+_AS_RECORD_SEP = "|||"
+_SKIPPED_CALENDAR_NAMES = frozenset(
+    {
+        "Birthdays",
+        "Cumpleaños",
+        "Siri Suggestions",
+        "Scheduled Reminders",
+        "Festivos en Guatemala",
+    }
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Domain types
@@ -70,7 +83,10 @@ def _merge_calendar_backend_results(
             if key not in seen:
                 seen.add(key)
                 deduped.append(ev)
-        return BackendResult(events=deduped, status="ok")
+        detail = ""
+        if any(p.status == "timeout" for p in partials):
+            detail = "partial_apple_timeout"
+        return BackendResult(events=deduped, status="ok", detail=detail)
 
     priority: tuple[BackendStatus, ...] = (
         "permission_denied",
@@ -183,6 +199,105 @@ def _ical_component_to_event(component) -> CalendarEvent | None:
 
 # JXA script: two-phase query.
 # Phase 1: whose() date filter for non-recurring future events (fast).
+# AppleScript read: JXA ``whose`` date ranges often return nothing on modern Calendar.app.
+_AS_FETCH_UPCOMING = """\
+tell application "Calendar"
+    set now to current date
+    set skipCal to {{{skip_list}}}
+    set out to ""
+    repeat with cal in calendars
+        set cName to name of cal
+        if skipCal contains cName then
+        else
+            try
+                repeat with ev in (every event of cal whose start date ≥ now)
+                    set t to summary of ev
+                    if t is missing value then set t to ""
+                    set out to out & t & "{sep}" & (start date of ev as string) & "{sep}" & (end date of ev as string) & linefeed
+                end repeat
+            end try
+        end if
+    end repeat
+    return out
+end tell
+"""
+
+
+def _local_tzinfo() -> tzinfo:
+    tz = datetime.now().astimezone().tzinfo
+    assert tz is not None
+    return tz
+
+
+def _parse_applescript_date_string(raw: str) -> datetime | None:
+    """Parse ``Saturday, 28 May 2026 at 3:00:00 PM`` from Calendar AppleScript."""
+    text = raw.replace("\u202f", " ").strip()
+    if not text:
+        return None
+    tz_name = getattr(_local_tzinfo(), "key", None)
+    settings: dict[str, object] = {}
+    if tz_name:
+        settings["TIMEZONE"] = tz_name
+    parsed = dateparser.parse(text, settings=settings)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_local_tzinfo())
+    return parsed.astimezone()
+
+
+def _fetch_upcoming_via_applescript(hours_ahead: int) -> tuple[list[CalendarEvent], str]:
+    """Return upcoming events using AppleScript (reliable) and filter window in Python."""
+    skip_list = ", ".join(f'"{n}"' for n in sorted(_SKIPPED_CALENDAR_NAMES))
+    script = _AS_FETCH_UPCOMING.format(sep=_AS_RECORD_SEP, skip_list=skip_list)
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=max(8, int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "18"))),
+        )
+    except subprocess.TimeoutExpired:
+        return [], "osascript timed out"
+    except Exception as exc:
+        return [], str(exc)
+
+    stderr = (result.stderr or "").strip()
+    if result.returncode != 0:
+        return [], stderr or f"exit {result.returncode}"
+
+    now = datetime.now().astimezone()
+    cutoff = now + timedelta(hours=hours_ahead)
+    events: list[CalendarEvent] = []
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(_AS_RECORD_SEP)
+        if len(parts) < 2:
+            continue
+        title = parts[0].strip()
+        start = _parse_applescript_date_string(parts[1])
+        if start is None or start < now or start > cutoff:
+            continue
+        end = start
+        if len(parts) >= 3:
+            parsed_end = _parse_applescript_date_string(parts[2])
+            if parsed_end is not None:
+                end = parsed_end
+        events.append(
+            CalendarEvent(
+                title=title,
+                start=start,
+                end=end,
+                description="",
+                location="",
+            )
+        )
+    events.sort(key=lambda e: e.start)
+    return events, ""
+
+
 # Phase 2: yearly recurring events (birthdays, anniversaries).
 #   Apple Calendar stores recurring events with their ORIGINAL startDate (e.g. 2021),
 #   so whose(startDate >= now) misses them entirely. We scan for FREQ=YEARLY events,
@@ -253,7 +368,11 @@ JSON.stringify(events);
 class AppleCalendarBackend:
     """Query Apple Calendar via osascript JavaScript for Automation (macOS only)."""
 
-    _OSASCRIPT_TIMEOUT_SEC = 5
+    _DEFAULT_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_TIMEOUT", "35"))
+    _FAST_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "12"))
+
+    def __init__(self, *, timeout_sec: int | None = None) -> None:
+        self._timeout_sec = timeout_sec if timeout_sec is not None else self._DEFAULT_TIMEOUT_SEC
 
     @staticmethod
     def _events_from_apple_json(data: list) -> list[CalendarEvent]:
@@ -278,45 +397,16 @@ class AppleCalendarBackend:
             logger.debug("AppleCalendarBackend is macOS-only; skipping on {}", platform.system())
             return BackendResult()
 
-        script = _JXA_TEMPLATE.format(hours_ahead=hours_ahead)
-        try:
-            result = subprocess.run(
-                ["osascript", "-l", "JavaScript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=self._OSASCRIPT_TIMEOUT_SEC,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "Apple Calendar osascript timed out after {}s", self._OSASCRIPT_TIMEOUT_SEC
-            )
-            return BackendResult(status="timeout", detail="osascript timed out")
-        except Exception as exc:
-            logger.warning("osascript execution failed: {}", exc)
-            return BackendResult(status="error", detail=str(exc))
-
-        stderr = (result.stderr or "").strip()
-        if result.returncode != 0:
-            logger.warning("osascript returned non-zero: {}", stderr)
-            st: BackendStatus = (
-                "permission_denied" if _stderr_suggests_automation_denied(stderr) else "error"
-            )
-            return BackendResult(status=st, detail=stderr or f"exit {result.returncode}")
-
-        raw = (result.stdout or "").strip()
-        if not raw:
-            return BackendResult()
-
-        try:
-            data = json.loads(raw)
-        except Exception as exc:
-            logger.warning("Failed to parse osascript JSON output: {}", exc)
-            return BackendResult(status="error", detail=str(exc))
-
-        if not isinstance(data, list):
-            return BackendResult(status="error", detail="unexpected JSON shape")
-
-        return BackendResult(events=self._events_from_apple_json(data), status="ok")
+        events, err = _fetch_upcoming_via_applescript(hours_ahead)
+        if err:
+            if "timed out" in err.lower():
+                logger.warning("Apple Calendar read timed out ({}h window)", hours_ahead)
+                return BackendResult(status="timeout", detail=err)
+            if _stderr_suggests_automation_denied(err):
+                return BackendResult(status="permission_denied", detail=err)
+            logger.warning("Apple Calendar read failed: {}", err[:200])
+            return BackendResult(status="error", detail=err)
+        return BackendResult(events=events, status="ok")
 
     async def get_upcoming_events_async(
         self, hours_ahead: int = 24, communicate_timeout: float = 3.0
@@ -324,52 +414,21 @@ class AppleCalendarBackend:
         if platform.system() != "Darwin":
             return BackendResult()
 
-        script = _JXA_TEMPLATE.format(hours_ahead=hours_ahead)
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "osascript",
-                "-l",
-                "JavaScript",
-                "-e",
-                script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except (FileNotFoundError, OSError) as exc:
-            return BackendResult(status="error", detail=str(exc))
-
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=communicate_timeout
+            events, err = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_upcoming_via_applescript, hours_ahead),
+                timeout=communicate_timeout,
             )
         except TimeoutError:
-            proc.kill()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except TimeoutError:
-                pass
             return BackendResult(status="timeout", detail="osascript communicate timeout")
 
-        stderr = (stderr_b or b"").decode(errors="replace").strip()
-        stdout = (stdout_b or b"").decode(errors="replace").strip()
-        if proc.returncode != 0:
-            st: BackendStatus = (
-                "permission_denied" if _stderr_suggests_automation_denied(stderr) else "error"
-            )
-            return BackendResult(status=st, detail=stderr or f"exit {proc.returncode}")
-
-        if not stdout:
-            return BackendResult()
-
-        try:
-            data = json.loads(stdout)
-        except Exception as exc:
-            return BackendResult(status="error", detail=str(exc))
-
-        if not isinstance(data, list):
-            return BackendResult(status="error", detail="unexpected JSON shape")
-
-        return BackendResult(events=self._events_from_apple_json(data), status="ok")
+        if err:
+            if "timed out" in err.lower():
+                return BackendResult(status="timeout", detail=err)
+            if _stderr_suggests_automation_denied(err):
+                return BackendResult(status="permission_denied", detail=err)
+            return BackendResult(status="error", detail=err)
+        return BackendResult(events=events, status="ok")
 
     def get_upcoming_events(self, hours_ahead: int = 24) -> list[CalendarEvent]:
         return self.get_upcoming_events_v2(hours_ahead=hours_ahead).events
@@ -379,18 +438,66 @@ class AppleCalendarBackend:
 # Apple Calendar writer (macOS only)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# String values are inserted as JSON literals (json.dumps) to prevent JS injection.
-_JXA_CREATE_TEMPLATE = """\
-var app = Application("Calendar");
-var cal = app.defaultCalendar();
-var ev = app.CalendarEvent({{
-    summary: {title},
-    startDate: new Date("{iso_start}"),
-    endDate: new Date("{iso_end}"),
-    description: {description}
-}});
-cal.events.push(ev);
-"ok";
+
+def _automation_denied(stderr: str) -> bool:
+    t = stderr.lower()
+    return bool(
+        re.search(r"\(-1743\)|\b1743\b", t)
+        or "not allowed" in t
+        or "isn't allowed to send" in t
+        or "not authorized" in t
+        or "privilege" in t
+    )
+
+
+def _parse_iso_to_local(iso: str) -> datetime:
+    normalized = iso.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is not None:
+        return dt.astimezone()
+    return dt
+
+
+_MONTHS_AS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _applescript_set_date_block(var_name: str, dt: datetime) -> str:
+    """Build AppleScript that sets a date via components (avoids broken ``date \"MM/DD/YYYY\"`` parsing)."""
+    local = dt.astimezone() if dt.tzinfo is not None else dt
+    month = _MONTHS_AS[local.month - 1]
+    return (
+        f"set {var_name} to current date\n"
+        f"set year of {var_name} to {local.year}\n"
+        f"set month of {var_name} to {month}\n"
+        f"set day of {var_name} to {local.day}\n"
+        f"set hours of {var_name} to {local.hour}\n"
+        f"set minutes of {var_name} to {local.minute}\n"
+        f"set seconds of {var_name} to 0"
+    )
+
+
+# AppleScript is reliable for Calendar writes; JXA ``CalendarEvent`` often returns -1708.
+_AS_CREATE_TEMPLATE = """\
+{start_block}
+{end_block}
+tell application "Calendar"
+    tell first calendar whose writable is true
+        make new event at end with properties {{summary:{title}, start date:startDate, end date:endDate, description:{description}}}
+    end tell
+end tell
 """
 
 
@@ -399,80 +506,144 @@ def create_apple_calendar_event(
     iso_start: str,
     iso_end: str,
     description: str = "",
-) -> bool:
-    """Create an event in the default Apple Calendar via osascript. Returns True on success."""
+) -> tuple[bool, str]:
+    """Create an event in the first writable Apple Calendar via osascript.
+
+    Returns:
+        (True, "") on success, (False, error_detail) on failure.
+    """
     if platform.system() != "Darwin":
         logger.warning("create_apple_calendar_event is macOS-only")
-        return False
+        return False, "macOS only"
 
-    script = _JXA_CREATE_TEMPLATE.format(
+    try:
+        start_dt = _parse_iso_to_local(iso_start)
+        end_dt = _parse_iso_to_local(iso_end)
+    except ValueError as exc:
+        logger.warning("create_apple_calendar_event invalid ISO dates: {}", exc)
+        return False, str(exc)
+
+    script = _AS_CREATE_TEMPLATE.format(
+        start_block=_applescript_set_date_block("startDate", start_dt),
+        end_block=_applescript_set_date_block("endDate", end_dt),
         title=json.dumps(title),
-        iso_start=iso_start,
-        iso_end=iso_end,
         description=json.dumps(description),
     )
     try:
         result = subprocess.run(
-            ["osascript", "-l", "JavaScript", "-e", script],
+            ["osascript", "-e", script],
             capture_output=True,
             text=True,
             timeout=10,
         )
     except Exception as exc:
         logger.warning("osascript create event failed: {}", exc)
-        return False
+        return False, str(exc)
 
     if result.returncode != 0:
-        logger.warning("osascript create event returned non-zero: {}", result.stderr.strip())
-        return False
+        err = (result.stderr or result.stdout or "").strip()
+        logger.warning("osascript create event returned non-zero: {}", err)
+        return False, err
 
-    return True
+    return True, ""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Apple Reminders writer (macOS only)
-# ──────────────────────────────────────────────────────────────────────────────
+def calendar_write_failure_hint(stderr: str) -> str:
+    """User-facing hint after a failed Calendar write (permission vs script/other)."""
+    if _automation_denied(stderr):
+        return (
+            "Revisa Ajustes → Privacidad y seguridad → Automatización: activa **Calendario** "
+            "para la app que ejecuta Python (Cerebro, Terminal o el ícono de Python)."
+        )
+    if "-1708" in stderr or "message not understood" in stderr.lower():
+        return "Error al hablar con la app Calendario (script). Reinicia Calendario y el backend."
+    return "Revisa permisos de Automatización para Calendario o reinicia la app Calendario."
 
-# String values are inserted as JSON literals (json.dumps) to prevent JS injection.
-_JXA_ADD_REMINDER_TEMPLATE = """\
-var app = Application("Reminders");
-var list = app.defaultList();
-list.reminders.push(app.Reminder({{
-    name: {title},
-    dueDate: new Date("{iso_datetime}"),
-    body: {notes}
-}}));
-"ok";
+
+_AS_DELETE_BY_TITLE_TEMPLATE = """\
+{day_start_block}
+{day_end_block}
+tell application "Calendar"
+    set removedCount to 0
+    set matchTitle to {title}
+    set needle to {needle}
+    repeat with cal in calendars
+        try
+            set theEvents to every event of cal whose summary contains needle
+            repeat with ev in theEvents
+                if summary of ev is matchTitle then
+                    set sd to start date of ev
+                    if sd ≥ dayStart and sd < dayEnd then
+                        delete ev
+                        set removedCount to removedCount + 1
+                    end if
+                end if
+            end repeat
+        end try
+    end repeat
+    return removedCount
+end tell
 """
 
 
-def add_apple_reminder(title: str, iso_datetime: str, notes: str = "") -> bool:
-    """Add a reminder to the default Apple Reminders list via osascript. Returns True on success."""
-    if platform.system() != "Darwin":
-        logger.warning("add_apple_reminder is macOS-only")
-        return False
+def _delete_search_window(
+    on_day: date | None,
+) -> tuple[datetime, datetime]:
+    """Inclusive start, exclusive end (local) for AppleScript event filtering."""
+    local = datetime.now().astimezone().tzinfo
+    if on_day is not None:
+        start = datetime.combine(on_day, datetime.min.time()).replace(tzinfo=local)
+        return start, start + timedelta(days=1)
+    now = datetime.now().astimezone()
+    return now - timedelta(days=1), now + timedelta(days=60)
 
-    script = _JXA_ADD_REMINDER_TEMPLATE.format(
+
+def delete_apple_calendar_event_by_title(
+    title: str,
+    *,
+    on_day: date | None = None,
+) -> int:
+    """Delete calendar events with an exact title (search uses contains, then exact match).
+
+    Returns count removed, -1 on error.
+    """
+    if platform.system() != "Darwin":
+        logger.warning("delete_apple_calendar_event_by_title is macOS-only")
+        return -1
+
+    title = title.strip()
+    if not title:
+        return 0
+
+    needle = title if len(title) >= 3 else title
+    day_start, day_end = _delete_search_window(on_day)
+    script = _AS_DELETE_BY_TITLE_TEMPLATE.format(
+        day_start_block=_applescript_set_date_block("dayStart", day_start),
+        day_end_block=_applescript_set_date_block("dayEnd", day_end),
         title=json.dumps(title),
-        iso_datetime=iso_datetime,
-        notes=json.dumps(notes),
+        needle=json.dumps(needle),
     )
     try:
         result = subprocess.run(
-            ["osascript", "-l", "JavaScript", "-e", script],
+            ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
         )
     except Exception as exc:
-        logger.warning("osascript add reminder failed: {}", exc)
-        return False
+        logger.warning("osascript delete calendar event failed: {}", exc)
+        return -1
 
     if result.returncode != 0:
-        logger.warning("osascript add reminder returned non-zero: {}", result.stderr.strip())
-        return False
+        logger.warning(
+            "osascript delete calendar event returned non-zero: {}", result.stderr.strip()
+        )
+        return -1
 
-    return True
+    try:
+        return int((result.stdout or "0").strip())
+    except ValueError:
+        return 0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -552,16 +723,16 @@ _JXA_CONTACTS_BIRTHDAYS = """\
 var ab = Application("Contacts");
 var people = ab.people();
 var out = [];
-people.forEach(function(p) {{
-    try {{
+people.forEach(function(p) {
+    try {
         var b = p.birthday();
-        if (b) {{
+        if (b) {
             var nm = "";
-            try {{ nm = p.name() || ""; }} catch(e1) {{ nm = ""; }}
-            out.push({{ name: String(nm), month: b.getMonth() + 1, day: b.getDate() }});
-        }}
-    }} catch(e) {{}}
-}});
+            try { nm = p.name() || ""; } catch(e1) { nm = ""; }
+            out.push({ name: String(nm), month: b.getMonth() + 1, day: b.getDate() });
+        }
+    } catch(e) {}
+});
 JSON.stringify(out);
 """
 
@@ -574,7 +745,7 @@ class BirthdayBackend:
     any calendar whose event titles look like birthdays (keywords or *Name's birthday*).
     """
 
-    _OSASCRIPT_TIMEOUT_SEC = 5
+    _OSASCRIPT_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_TIMEOUT", "35"))
 
     @staticmethod
     def _events_from_birthday_json(data: list) -> list[CalendarEvent]:
@@ -731,7 +902,7 @@ def _contacts_birthdays_json_to_events(
 class ContactsBirthdayBackend:
     """Upcoming birthdays from Contacts.app when Calendar has none (macOS only)."""
 
-    _OSASCRIPT_TIMEOUT_SEC = 5
+    _OSASCRIPT_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_TIMEOUT", "35"))
 
     def get_upcoming_events_v2(self, hours_ahead: int = 8760) -> BackendResult:
         if platform.system() != "Darwin":
@@ -885,13 +1056,17 @@ class CalendarReader:
         self,
         ics_path: str | None = None,
         use_apple_calendar: bool = False,
+        *,
+        include_birthday_backends: bool = False,
+        apple_timeout_sec: int | None = None,
     ) -> None:
         self._backends: list = []
         if ics_path:
             self._backends.append(ICalBackend(ics_path))
         if use_apple_calendar:
-            self._backends.append(AppleCalendarBackend())
-            self._backends.append(BirthdayChainBackend())
+            self._backends.append(AppleCalendarBackend(timeout_sec=apple_timeout_sec))
+            if include_birthday_backends:
+                self._backends.append(BirthdayChainBackend())
 
     def get_upcoming_events_v2(self, hours_ahead: int = 24) -> BackendResult:
         if not self._backends:

@@ -73,6 +73,20 @@ def test_calendar_fast_path_birthday_caps_at_three(tmp_path):
     assert "mostrando 3 de 8" in result
 
 
+def test_calendar_fast_path_birthday_proximos_four(tmp_path):
+    ics = tmp_path / "cal.ics"
+    _write_many_birthdays_ics(ics)
+    result = try_calendar_fast_path(
+        "lista los proximos 4 cumpleaños en mi calendario",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    # Should show exactly 4 bundled birthday lines (format: "\n- " prefix).
+    assert result.count("\n- ") == 4
+    assert "mostrando 4 de" in result
+
+
 def test_calendar_fast_path_birthday_solo_uno(tmp_path):
     ics = tmp_path / "cal.ics"
     _write_many_birthdays_ics(ics)
@@ -148,6 +162,114 @@ def test_calendar_fast_path_next_event_single(tmp_path):
     assert "Próximo evento" in result
     assert "First meeting" in result
     assert "Second meeting" not in result
+
+
+def test_calendar_fast_path_next_event_after_thursday(tmp_path):
+    """Regression: 'después del jueves' must skip events on that Thursday."""
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC)
+    days_until_thu = (3 - now.weekday()) % 7 or 7
+    thursday = (now + timedelta(days=days_until_thu)).replace(
+        hour=15, minute=0, second=0, microsecond=0
+    )
+    friday = thursday + timedelta(days=1)
+    friday = friday.replace(hour=10, minute=0)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("prueba1", thursday),
+                _vevent("post_jueves", friday),
+            ]
+        )
+    )
+    result = try_calendar_fast_path(
+        "y cual es el proximo evento despues del jueves?",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "post_jueves" in result
+    assert "prueba1" not in result
+    assert "después del" in result.lower() or "Próximo evento" in result
+
+
+def test_calendar_fast_path_events_on_day(tmp_path):
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC)
+    days_until_thu = (3 - now.weekday()) % 7 or 7
+    thursday = (now + timedelta(days=days_until_thu)).replace(
+        hour=11, minute=0, second=0, microsecond=0
+    )
+    friday = thursday + timedelta(days=1)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("solo jueves", thursday),
+                _vevent("solo viernes", friday.replace(hour=9)),
+            ]
+        )
+    )
+    result = try_calendar_fast_path(
+        "que tengo el jueves en el calendario?",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "solo jueves" in result
+    assert "solo viernes" not in result
+
+
+def test_calendar_fast_path_count_events(tmp_path):
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("A", now + timedelta(hours=2)),
+                _vevent("B", now + timedelta(hours=5)),
+            ]
+        )
+    )
+    result = try_calendar_fast_path(
+        "cuantos eventos tengo en las proximas 24 horas?",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "2 eventos" in result
+
+
+def test_calendar_fast_path_free_busy(tmp_path):
+    ics = tmp_path / "cal.ics"
+    _write_fixture_ics(ics, meeting_hours=4)
+    result = try_calendar_fast_path(
+        "estoy libre manana en el calendario?",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "libre" in result.lower() or "eventos" in result.lower()
+
+
+def test_calendar_fast_path_keyword_search(tmp_path):
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("Standup Alpha", now + timedelta(hours=3)),
+                _vevent("Other", now + timedelta(hours=6)),
+            ]
+        )
+    )
+    result = try_calendar_fast_path(
+        "busca algun evento llamado Standup en mi calendario",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "Standup Alpha" in result
+    assert "Other" not in result
 
 
 def test_calendar_fast_path_list_events_48h(tmp_path):
@@ -283,13 +405,8 @@ def test_calendar_reminder_fast_path_delete(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_runtime_reminder_fast_path_bypasses_llm(tmp_path, monkeypatch):
+async def test_runtime_reminder_llm_intent_queues_confirmation(tmp_path, monkeypatch):
     _write_fixture_ics(tmp_path / "cal.ics")
-
-    monkeypatch.setattr(
-        "core.agents.calendar_reminder_fast_path.add_reminder",
-        lambda title, when, notes="": f"Added reminder '{title}' due {when}.",
-    )
 
     agent_id = "general-v1"
     store = AgentStateStore(state_dir=str(tmp_path / "state"))
@@ -298,7 +415,11 @@ async def test_runtime_reminder_fast_path_bypasses_llm(tmp_path, monkeypatch):
     store.save(state)
 
     mock_chat = MagicMock()
-    mock_chat.complete = AsyncMock(return_value='{"action":"answer","answer":"parse fail"}')
+    mock_chat.complete = AsyncMock(
+        return_value=(
+            '{"intent":"add","title":"pruebaCalendario","datetime_str":"mañana a las 3pm"}'
+        )
+    )
     mock_registry = MagicMock(spec=ProviderRegistry)
     mock_registry.select_for_task = MagicMock(return_value="primary")
     mock_registry.get_chat = MagicMock(return_value=mock_chat)
@@ -314,9 +435,14 @@ async def test_runtime_reminder_fast_path_bypasses_llm(tmp_path, monkeypatch):
         tool_registry={},
     )
 
-    answer, _ = await runtime.run(
-        'crea un recordatorio mañana a las 3pm con nombre "pruebaCalendario"',
+    answer, final_state = await runtime.run(
+        'crea un recordatorio para mañana a las 3pm llamado "pruebaCalendario"',
         agent_id,
     )
-    mock_chat.complete.assert_not_called()
+    mock_chat.complete.assert_awaited_once()
     assert "pruebaCalendario" in answer
+    assert final_state.pending_tool_name == "add_reminder"
+    assert final_state.pending_tool_args == {
+        "title": "pruebaCalendario",
+        "datetime_str": "mañana a las 3pm",
+    }

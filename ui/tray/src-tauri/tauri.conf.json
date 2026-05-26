@@ -25,6 +25,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Cerebro",
         "width": 560,
         "height": 708,
@@ -35,7 +36,7 @@
         "titleBarStyle": "Overlay",
         "alwaysOnTop": false,
         "focus": true,
-        "visible": false,
+        "visible": true,
         "center": true,
         "visibleOnAllWorkspaces": false
       }

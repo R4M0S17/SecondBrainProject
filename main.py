@@ -69,6 +69,7 @@ def _paths_from_env(var_name: str, defaults: list[str]) -> list[str]:
 AUTHORIZED_READ_PATHS = _paths_from_env(
     "CEREBRO_AUTHORIZED_READ_PATHS",
     [
+        os.path.expanduser("~/Desktop"),
         os.path.expanduser("~/Desktop/Javier/SecondBrain"),
         CEREBRO_FILES_PATH,
     ],

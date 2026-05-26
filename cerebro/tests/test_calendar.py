@@ -512,9 +512,12 @@ from core.tools.handlers.calendar import add_reminder as handler_add_reminder
 
 def test_add_reminder_success():
     with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
-        with patch("core.tools.handlers.calendar.add_apple_reminder", return_value=True):
+        with patch(
+            "core.tools.handlers.calendar.create_apple_calendar_event", return_value=(True, "")
+        ):
             result = handler_add_reminder("Call doctor", "2026-05-20 09:00")
     assert "Call doctor" in result
+    assert "calendario" in result.lower()
     assert "Failed" not in result
 
 
@@ -527,24 +530,29 @@ def test_add_reminder_non_macos_returns_informative_message():
 
 def test_add_reminder_bad_date_returns_error():
     result = handler_add_reminder("Something", "not a date xyzzy")
-    assert "Could not parse" in result
+    assert "No pude interpretar" in result
     assert "not a date xyzzy" in result
 
 
 def test_add_reminder_osascript_failure_returns_error():
     with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
-        with patch("core.tools.handlers.calendar.add_apple_reminder", return_value=False):
+        with patch(
+            "core.tools.handlers.calendar.create_apple_calendar_event",
+            return_value=(False, "not allowed"),
+        ):
             result = handler_add_reminder("Fix bug", "2026-06-01 10:00")
-    assert "Failed" in result
+    assert "No pude crear" in result
     assert "Fix bug" in result
 
 
 def test_add_reminder_notes_passed_through():
     with patch("core.tools.handlers.calendar.platform.system", return_value="Darwin"):
-        with patch("core.tools.handlers.calendar.add_apple_reminder", return_value=True) as mock_fn:
+        with patch(
+            "core.tools.handlers.calendar.create_apple_calendar_event", return_value=(True, "")
+        ) as mock_fn:
             handler_add_reminder("Dentist", "2026-06-01 10:00", notes="bring X-rays")
     mock_fn.assert_called_once()
-    _, _, notes_arg = mock_fn.call_args[0]
+    _, _, _, notes_arg = mock_fn.call_args[0]
     assert notes_arg == "bring X-rays"
 
 

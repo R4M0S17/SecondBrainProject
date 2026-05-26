@@ -8,6 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "dev:free-port": "sh -c 'lsof -ti :1420 | xargs kill -9 2>/dev/null || true'",
+    "tauri:dev": "npm run dev:free-port && tauri dev",
     "tauri:build:release": "tauri build --config src-tauri/tauri.release.conf.json"
   },
   "dependencies": {

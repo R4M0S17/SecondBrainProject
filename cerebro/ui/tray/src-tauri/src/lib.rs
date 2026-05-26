@@ -5,7 +5,6 @@ use tauri::{
     Manager,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
 #[tauri::command]
@@ -30,21 +29,8 @@ pub fn run() {
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
-            let _ = window.hide();
 
-            if let Err(err) = launcher::run_desktop_launcher(app) {
-                let message = format!(
-                    "Cerebro — could not start backend\n\n{err}\n\nLogs: ~/.cerebro/logs/"
-                );
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    let _ = handle
-                        .dialog()
-                        .message(message)
-                        .kind(MessageDialogKind::Error)
-                        .blocking_show();
-                });
-            }
+            // Backend starts only when the user presses Turn on in the UI (restart_cerebro_services).
 
             // Enable true macOS full-screen via the green button
             #[cfg(target_os = "macos")]

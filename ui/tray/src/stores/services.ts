@@ -7,7 +7,10 @@ import { useSystemStore } from "./system";
 interface ServicesState {
   starting: boolean;
   stopping: boolean;
+  /** User-facing backend state; default off in the desktop app. */
+  servicesOff: boolean;
   error: string | null;
+  probeBackend: () => Promise<void>;
   turnOn: () => Promise<void>;
   turnOff: () => Promise<void>;
   clearError: () => void;
@@ -31,9 +34,21 @@ async function waitForBackend(): Promise<void> {
 export const useServicesStore = create<ServicesState>((set) => ({
   starting: false,
   stopping: false,
+  servicesOff: isTauriRuntime(),
   error: null,
 
   clearError: () => set({ error: null }),
+
+  probeBackend: async () => {
+    try {
+      await getHealth();
+      set({ servicesOff: false });
+      await useSystemStore.getState().refresh();
+    } catch {
+      set({ servicesOff: isTauriRuntime() });
+      useSystemStore.setState({ status: null, health: null, error: null });
+    }
+  },
 
   turnOn: async () => {
     set({ starting: true, error: null });
@@ -44,6 +59,7 @@ export const useServicesStore = create<ServicesState>((set) => ({
       await invoke("restart_cerebro_services");
       await waitForBackend();
       await useSystemStore.getState().refresh();
+      set({ servicesOff: false });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -59,6 +75,7 @@ export const useServicesStore = create<ServicesState>((set) => ({
       }
       await invoke("stop_cerebro_services");
       useSystemStore.setState({ status: null, health: null, error: null });
+      set({ servicesOff: true });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     } finally {

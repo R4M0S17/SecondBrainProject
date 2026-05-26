@@ -62,6 +62,7 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
     from core.tools.handlers.calendar import (
         add_reminder,
         create_calendar_event,
+        delete_reminder,
         get_upcoming_events,
         query_events,
         search_upcoming,
@@ -133,8 +134,8 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
         ToolDefinition(
             name="add_reminder",
             description=(
-                "Add a task/reminder to Apple Reminders app "
-                "(use for 'remind me to', 'don't forget', to-dos — not meetings)"
+                "Create a short timed reminder as an Apple Calendar event "
+                "(use for 'remind me to', 'crea un recordatorio', 'recuérdame' — not meetings)"
             ),
             handler=add_reminder,
             required_permission="tools.calendar.write",
@@ -145,6 +146,21 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
                 "title": "str — título del recordatorio",
                 "datetime_str": "str — fecha/hora en lenguaje natural o ISO (ej: 'next saturday', 'tomorrow at 9am')",
                 "notes": "str — notas opcionales",
+            },
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="delete_reminder",
+            description="Delete a calendar event by exact title (including reminder-style events)",
+            handler=delete_reminder,
+            required_permission="tools.calendar.write",
+            requires_confirmation=True,
+            scope=ToolScope.LOCAL,
+            audit_level=AuditLevel.FULL,
+            parameters={
+                "title": "str — título exacto del recordatorio a borrar",
+                "datetime_str": "str — opcional: día (ej. 'mañana') para acotar la búsqueda",
             },
         )
     )
@@ -232,10 +248,12 @@ def register_filesystem_tools(
             scope=ToolScope.LOCAL,
             audit_level=AuditLevel.METADATA,
             parameters={
-                "pattern": "str — patrón glob (ej: '*.py', 'report*', '**/*.md')",
+                "pattern": "str — patrón glob o nombre (ej: '*.py', 'report', 'README')",
                 "base_path": "str — directorio raíz de búsqueda (opcional)",
                 "extension": "str — filtrar por extensión (ej: '.py', '.md') (opcional)",
                 "max_results": "int — límite de resultados (default: 20)",
+                "name_contains": "str — subcadena en el nombre del archivo (opcional)",
+                "query_text": "str — buscar texto dentro del archivo (opcional)",
             },
         )
     )

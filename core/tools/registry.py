@@ -158,7 +158,10 @@ def register_calendar_tools(registry: ToolRegistry) -> None:
             requires_confirmation=True,
             scope=ToolScope.LOCAL,
             audit_level=AuditLevel.FULL,
-            parameters={"title": "str — título exacto del recordatorio a borrar"},
+            parameters={
+                "title": "str — título exacto del recordatorio a borrar",
+                "datetime_str": "str — opcional: día (ej. 'mañana') para acotar la búsqueda",
+            },
         )
     )
 
@@ -245,10 +248,12 @@ def register_filesystem_tools(
             scope=ToolScope.LOCAL,
             audit_level=AuditLevel.METADATA,
             parameters={
-                "pattern": "str — patrón glob (ej: '*.py', 'report*', '**/*.md')",
+                "pattern": "str — patrón glob o nombre (ej: '*.py', 'report', 'README')",
                 "base_path": "str — directorio raíz de búsqueda (opcional)",
                 "extension": "str — filtrar por extensión (ej: '.py', '.md') (opcional)",
                 "max_results": "int — límite de resultados (default: 20)",
+                "name_contains": "str — subcadena en el nombre del archivo (opcional)",
+                "query_text": "str — buscar texto dentro del archivo (opcional)",
             },
         )
     )

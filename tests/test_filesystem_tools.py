@@ -46,12 +46,13 @@ def test_search_files_max_results_respected(tmp_path):
     for i in range(10):
         (tmp_path / f"file{i}.txt").write_text("x")
     result = search_files("*", [str(tmp_path)], base_path=str(tmp_path), max_results=3)
-    assert result.count("\n") < 3  # ≤ 3 lines means ≤ 3 results
+    assert "Mostrando 3 de 10" in result
+    assert result.count("\n") == 3  # header + 2 newlines between 3 file lines
 
 
 def test_search_files_no_matches_returns_message(tmp_path):
     result = search_files("*.xyz", [str(tmp_path)], base_path=str(tmp_path))
-    assert "No files found" in result
+    assert "No se encontraron archivos" in result
 
 
 def test_search_files_rejects_unauthorized_base_path(tmp_path):
@@ -65,7 +66,7 @@ def test_search_files_rejects_unauthorized_base_path(tmp_path):
 
 def test_search_files_missing_directory_returns_message(tmp_path):
     result = search_files("*", [str(tmp_path)], base_path=str(tmp_path / "nonexistent"))
-    assert "not found" in result.lower() or "Directory not found" in result
+    assert "directorio no encontrado" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,14 @@ def test_write_file_via_partial_creates_file(tmp_path):
     msg = handler(path=target, content="hello phase 1")
     assert "Archivo escrito en:" in msg
     assert (tmp_path / "output.txt").read_text() == "hello phase 1"
+
+
+def test_write_file_relative_path_maps_into_authorized_root(tmp_path):
+    # Relative tool calls should still land in CerebroFiles (first authorized root).
+    handler = partial(write_file, authorized_paths=[str(tmp_path)])
+    msg = handler(path="rel_output.txt", content="hello relative")
+    assert "Archivo escrito en:" in msg
+    assert (tmp_path / "rel_output.txt").read_text() == "hello relative"
 
 
 # ---------------------------------------------------------------------------

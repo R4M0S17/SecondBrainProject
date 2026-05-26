@@ -4,7 +4,10 @@ Canonical technical docs live under **`docs/`** at the repository root (not unde
 
 | Area | Path | Contents |
 |------|------|----------|
+| **Project entry** | [`../README.md`](../README.md) | One-screen overview + links |
 | **Architecture & ops** | [`../CLAUDE.md`](../CLAUDE.md) | Stack overview, make targets, env vars, REST API sketch |
+| **Codebase map** | [`architecture/program-overview.md`](architecture/program-overview.md) | Full directory and module reference |
+| **Plans & roadmaps** | [`plans/README.md`](plans/README.md) | Stabilization, vision, feature specs, optimization |
 | **Connection checklist** | [`connection/progress.md`](connection/progress.md) | Backend ↔ frontend wiring modules and smoke-test notes |
 | **HTTP / API usage** | [`connection/api-guide.md`](connection/api-guide.md) | REST examples |
 | **Runbooks** | [`guides/8gb-mac-quickstart.md`](guides/8gb-mac-quickstart.md) · [`guides/FIX_CHAT_RUNTIME_WARNINGS.md`](guides/FIX_CHAT_RUNTIME_WARNINGS.md) · [`guides/howToRun.md`](guides/howToRun.md) · [`guides/running-es.md`](guides/running-es.md) · [`guides/llamacpp-run-guide.md`](guides/llamacpp-run-guide.md) | 8 GB Mac one-pager; embed/RAM/context-enricher warnings; English / Spanish startup; llama.cpp notes |
@@ -14,12 +17,19 @@ Canonical technical docs live under **`docs/`** at the repository root (not unde
 | **Model efficiency experiment** | [`testing/`](testing/) | PLAN, EXECUTION_GUIDE, QUICK_START, EXPERIMENTAL_SUMMARY |
 | **Pytest remediation (known failures)** | [`testing/PYTEST_REMEDIATION_PATH.md`](testing/PYTEST_REMEDIATION_PATH.md) | Ordered fixes for fleet monitor / phase7 args / planner parsing |
 | **Issues & playbook** | [`PROJECT_ISSUES_AND_SOLUTIONS.md`](PROJECT_ISSUES_AND_SOLUTIONS.md) | Long-form troubleshooting ledger |
+| **Incidents** | [`incidents/README.md`](incidents/README.md) | Calendar / llama.cpp bug write-ups |
+| **Manual QA** | [`../manual_tests/README.md`](../manual_tests/README.md) | Tray sessions, E2E fix notes, smoke reports |
 
-Supporting material elsewhere:
+### Plans (quick links)
 
-- **`features/`** — integration plans (e.g. Claude API, fleet orchestrator)
-- **`bugs/`** — incident write-ups and migration logs
-- **`roadmaps/`** — phased optimization notes
+| Document | Path |
+|----------|------|
+| Cerebro stabilization | [`plans/stabilization/fix-cerebro.md`](plans/stabilization/fix-cerebro.md) |
+| Session-1 follow-up | [`plans/stabilization/fix-plan-v2.md`](plans/stabilization/fix-plan-v2.md) |
+| ImplemeFIX | [`plans/stabilization/impleme-fix.md`](plans/stabilization/impleme-fix.md) · [implementation](plans/stabilization/impleme-fix-implementation.md) |
+| Future vision | [`plans/vision/future-cognitive-os.md`](plans/vision/future-cognitive-os.md) · [`ideas-future.md`](plans/vision/ideas-future.md) |
+| Feature specs | [`plans/features/`](plans/features/) |
+| Optimization roadmaps | [`plans/roadmaps/`](plans/roadmaps/) |
 
 Duplicate copies under **`cerebro/`** were removed on purpose; use this tree or [`cerebro/docs/README.md`](../cerebro/docs/README.md) for the short pointer.
 
@@ -132,4 +142,4 @@ Set in [`config/profiles/lite-8gb.env`](../config/profiles/lite-8gb.env) or expo
 | `CEREBRO_PROMPT_CACHE_PATH` | `bin/cache/chat.cache` | Prompt-cache sidecar path (Module 1) |
 | `CEREBRO_PROACTIVE_CONTEXT` | `false` in lite profile | macOS ambient context (osascript) |
 
-**Verification:** `make test` · `make smoke` (requires `make engine` + `make run`) · report in [`manual_tests/post_implemefix_smoke.md`](../manual_tests/post_implemefix_smoke.md).
+**Verification:** `make test` · `make smoke` (requires `make engine` + `make run`) · report in [`manual_tests/implemefix/post-smoke.md`](../manual_tests/implemefix/post-smoke.md).

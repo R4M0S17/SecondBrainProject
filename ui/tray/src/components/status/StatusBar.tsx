@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { updateConfig } from "../../api/client";
+import { useServicesStore } from "../../stores/services";
 import {
   useSystemStore,
   selectIsClaudeMode,
@@ -17,6 +18,7 @@ import FleetPanel from "./FleetPanel";
 
 export default function StatusBar() {
   const { status, health, fleetStatus, startPolling } = useSystemStore();
+  const servicesOff = useServicesStore((s) => s.servicesOff);
   const llamaServer = selectLlamaServerState(useSystemStore.getState());
   const swapInProgress = useSystemStore(selectSwapInProgress);
   const [fleetPanelOpen, setFleetPanelOpen] = useState(false);
@@ -62,7 +64,12 @@ export default function StatusBar() {
     >
       {/* Left group */}
       <div className="flex items-center gap-3">
-        <EngineIndicator ok={engineOk} provider={status?.provider} llamaServer={llamaServer} />
+        <EngineIndicator
+          ok={engineOk}
+          provider={status?.provider}
+          llamaServer={llamaServer}
+          servicesOff={servicesOff}
+        />
         <span className="opacity-20">•</span>
         <ModelBadge
           modelId={modelId}

@@ -1,5 +1,6 @@
 import { useRef, useState, KeyboardEvent, ChangeEvent } from "react";
 import { useChatStore } from "../../stores/chat";
+import { useServicesStore } from "../../stores/services";
 import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
 import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP } from "../../api/client";
 import CommandAutocomplete from "./CommandAutocomplete";
@@ -23,8 +24,10 @@ export default function InputArea() {
     setConversationId,
   } = useChatStore();
   const { refresh, setSwapEvent, status } = useSystemStore();
+  const servicesOff = useServicesStore((s) => s.servicesOff);
   const llamaServer = selectLlamaServerState(useSystemStore.getState());
   const isClaude = selectIsClaudeMode(status);
+  const inputDisabled = isLoading || servicesOff;
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -56,12 +59,7 @@ export default function InputArea() {
     const query = text.trim();
     if (!query || isLoading) return;
 
-    if (!isClaude && llamaServer === "down") {
-      addMessage({
-        role: "assistant",
-        content:
-          "El motor de inferencia no está disponible. Se está reintentando la conexión; espera unos segundos e inténtalo de nuevo.",
-      });
+    if (servicesOff) {
       return;
     }
 
@@ -233,11 +231,15 @@ export default function InputArea() {
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything…"
+          placeholder={
+            servicesOff
+              ? "Backend off — press Turn on to chat"
+              : "Ask anything…"
+          }
           rows={1}
           className="flex-1 bg-transparent border-none outline-none resize-none text-[14px] leading-[20px] text-[#e5e0ed] placeholder:text-[#8b8fa8] custom-scrollbar py-2 px-2 h-[44px]"
           aria-label="Chat input"
-          disabled={isLoading}
+          disabled={inputDisabled}
         />
 
         {isLoading ? (
@@ -254,7 +256,7 @@ export default function InputArea() {
         ) : (
           <button
             onClick={() => void send()}
-            disabled={!text.trim()}
+            disabled={!text.trim() || servicesOff}
             className={`w-[44px] h-[44px] rounded flex items-center justify-center transition-colors active:opacity-80 ${
               text.trim()
                 ? "bg-[#94a3b8] hover:bg-[#6b7a90] text-[#0f1117]"

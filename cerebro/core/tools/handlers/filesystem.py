@@ -9,6 +9,26 @@ from loguru import logger
 
 READ_FILE_MAX_BYTES = 8192
 SEARCH_FILES_MAX_LINE_CHARS = 200
+SEARCH_FILES_MAX_SCAN_FOR_CONTENT = 250
+SEARCH_FILES_CONTENT_READ_BYTES = 256 * 1024
+
+_SKIP_SEARCH_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        "target",
+        ".cursor",
+        "htmlcov",
+    }
+)
 _READ_TRUNCATION_HINT = (
     "[Archivo truncado: {shown}/{total} bytes. "
     "Pídeme una sección específica con read_file_range si necesitas más.]"
@@ -79,8 +99,12 @@ def read_file(path: str, authorized_paths: list[str]) -> str:
 
 
 def write_file(path: str, content: str, authorized_paths: list[str]) -> str:
-    _require_authorized_path(path, authorized_paths, operation="escribir en")
-    p = Path(path)
+    p = Path(path).expanduser()
+    # If the model/tool sends a relative path (e.g. "nota.txt"), place it inside
+    # the first authorized root so "create file without path" works again.
+    if not p.is_absolute() and authorized_paths:
+        p = Path(authorized_paths[0]) / p.name
+    _require_authorized_path(str(p), authorized_paths, operation="escribir en")
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -113,50 +137,175 @@ def list_directory(path: str, authorized_paths: list[str]) -> list[str]:
     return [str(child) for child in sorted(p.iterdir())]
 
 
+def _normalize_glob_pattern(pattern: str) -> str:
+    """Turn a bare name like ``report`` into ``*report*`` for rglob."""
+    p = (pattern or "*").strip()
+    if not p:
+        return "*"
+    if any(ch in p for ch in "*?[]"):
+        return p
+    return f"*{p}*"
+
+
+def _normalize_extension(extension: str | None) -> str | None:
+    if not extension:
+        return None
+    ext = extension.strip().lower()
+    if not ext:
+        return None
+    return ext if ext.startswith(".") else f".{ext}"
+
+
+def _path_in_skipped_tree(path: Path) -> bool:
+    return any(part in _SKIP_SEARCH_DIRS for part in path.parts)
+
+
+def _format_search_line(path: Path) -> str:
+    try:
+        stat = path.stat()
+        modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+        size_kb = stat.st_size / 1024
+        line = f"{path}  ({size_kb:.1f} KB, modificado {modified})"
+    except OSError:
+        line = str(path)
+    if len(line) > SEARCH_FILES_MAX_LINE_CHARS:
+        return line[: SEARCH_FILES_MAX_LINE_CHARS - 3] + "..."
+    return line
+
+
+def _search_roots(
+    authorized_paths: list[str],
+    base_path: str | None,
+) -> list[Path]:
+    if base_path:
+        root = Path(base_path).expanduser().resolve()
+        _require_authorized_path(str(root), authorized_paths, operation="buscar en")
+        return [root]
+    return [Path(p).expanduser().resolve() for p in authorized_paths]
+
+
+def _collect_name_matches(
+    roots: list[Path],
+    *,
+    pattern: str,
+    authorized_paths: list[str],
+    extension: str | None,
+    name_contains: str | None,
+) -> list[Path]:
+    glob_pat = _normalize_glob_pattern(pattern)
+    name_lower = name_contains.lower() if name_contains else None
+    ext = _normalize_extension(extension)
+    found: list[Path] = []
+
+    for root in roots:
+        if not root.exists():
+            continue
+        if not root.is_dir():
+            if root.is_file() and validate_path(str(root), authorized_paths):
+                found.append(root)
+            continue
+        try:
+            candidates = root.rglob(glob_pat)
+        except OSError:
+            continue
+        for path in candidates:
+            if not path.is_file():
+                continue
+            if _path_in_skipped_tree(path):
+                continue
+            if ext and path.suffix.lower() != ext:
+                continue
+            if name_lower and name_lower not in path.name.lower():
+                continue
+            if not validate_path(str(path), authorized_paths):
+                continue
+            found.append(path)
+    return found
+
+
+def _filter_by_content(paths: list[Path], query_text: str, *, max_hits: int) -> list[Path]:
+    needle = query_text.strip().lower()
+    if not needle:
+        return paths
+    hits: list[Path] = []
+    scanned = 0
+    for path in paths:
+        if len(hits) >= max_hits:
+            break
+        if scanned >= SEARCH_FILES_MAX_SCAN_FOR_CONTENT:
+            break
+        scanned += 1
+        try:
+            blob = path.read_bytes()[:SEARCH_FILES_CONTENT_READ_BYTES]
+        except OSError:
+            continue
+        if needle in blob.decode("utf-8", errors="ignore").lower():
+            hits.append(path)
+    return hits
+
+
 def search_files(
     pattern: str,
     authorized_paths: list[str],
     base_path: str | None = None,
     extension: str | None = None,
     max_results: int = 20,
+    name_contains: str | None = None,
+    query_text: str | None = None,
 ) -> str:
-    """Recursively search for files matching pattern within authorized paths.
+    """Search authorized folders by glob, name substring, extension, and optional text inside files."""
+    if not authorized_paths:
+        return "Error: no hay carpetas autorizadas para lectura (CEREBRO_AUTHORIZED_READ_PATHS)."
 
-    Returns formatted list with size and modification date for each match.
-    """
-    start = Path(base_path or authorized_paths[0]).expanduser().resolve()
-    _require_authorized_path(str(start), authorized_paths, operation="buscar en")
-    if not start.exists():
-        return f"Directory not found: {start}"
+    roots = _search_roots(authorized_paths, base_path)
+    missing = [str(r) for r in roots if not r.exists()]
+    if missing and len(missing) == len(roots):
+        return f"Directorio no encontrado: {missing[0]}"
 
-    ext = extension.lower() if extension else None
-    matches: list[str] = []
-    for p in start.rglob(pattern):
-        if not p.is_file():
-            continue
-        if ext and p.suffix.lower() != ext:
-            continue
-        if not validate_path(str(p), authorized_paths):
-            continue
+    existing_roots = [r for r in roots if r.exists()]
+    if not existing_roots:
+        return f"Directorio no encontrado: {roots[0]}"
+
+    roots_label = ", ".join(str(r) for r in existing_roots)
+    cap = max(1, min(int(max_results), 100))
+
+    matches = _collect_name_matches(
+        existing_roots,
+        pattern=pattern,
+        authorized_paths=authorized_paths,
+        extension=extension,
+        name_contains=name_contains,
+    )
+
+    if query_text and query_text.strip():
+        matches = _filter_by_content(matches, query_text, max_hits=cap * 3)
+
+    def _mtime_key(path: Path) -> float:
         try:
-            stat = p.stat()
-            modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-            size_kb = stat.st_size / 1024
-            line = f"{p}  ({size_kb:.1f} KB, modified {modified})"
-            if len(line) > SEARCH_FILES_MAX_LINE_CHARS:
-                line = line[: SEARCH_FILES_MAX_LINE_CHARS - 3] + "..."
-            matches.append(line)
+            return path.stat().st_mtime
         except OSError:
-            line = str(p)
-            if len(line) > SEARCH_FILES_MAX_LINE_CHARS:
-                line = line[: SEARCH_FILES_MAX_LINE_CHARS - 3] + "..."
-            matches.append(line)
-        if len(matches) >= max_results:
-            break
+            return 0.0
 
-    if not matches:
-        return f"No files found matching '{pattern}' in {start}"
-    return "\n".join(matches)
+    matches.sort(key=_mtime_key, reverse=True)
+    total_found = len(matches)
+    shown = matches[:cap]
+    lines = [_format_search_line(p) for p in shown]
+
+    if not lines:
+        parts = [f"patrón '{pattern}'"]
+        if name_contains:
+            parts.append(f"nombre contiene '{name_contains}'")
+        if extension:
+            parts.append(f"extensión '{extension}'")
+        if query_text and query_text.strip():
+            parts.append(f"texto '{query_text.strip()}'")
+        detail = ", ".join(parts)
+        return f"No se encontraron archivos ({detail}) en: {roots_label}"
+
+    header = ""
+    if total_found > len(shown):
+        header = f"Mostrando {len(shown)} de {total_found} (límite {cap}):\n"
+    return header + "\n".join(lines)
 
 
 def create_python_file(filename: str, code: str, authorized_paths: list[str]) -> str:

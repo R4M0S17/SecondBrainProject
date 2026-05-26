@@ -1,18 +1,16 @@
 import { useServicesStore } from "../../stores/services";
-import { useSystemStore } from "../../stores/system";
 
 export default function ServiceControls() {
-  const { status, health } = useSystemStore();
-  const { starting, stopping, error, turnOn, turnOff, clearError } = useServicesStore();
+  const { starting, stopping, servicesOff, error, turnOn, turnOff, clearError } =
+    useServicesStore();
 
-  const servicesUp = Boolean(status?.engine_ok && health);
   const busy = starting || stopping;
 
   return (
     <div className="flex items-center gap-1.5 shrink-0 normal-case tracking-normal">
       <button
         type="button"
-        disabled={busy || servicesUp}
+        disabled={busy || !servicesOff}
         onClick={() => {
           clearError();
           void turnOn();
@@ -24,7 +22,7 @@ export default function ServiceControls() {
       </button>
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || servicesOff}
         onClick={() => {
           clearError();
           void turnOff();

@@ -31,7 +31,7 @@ SECOND_TURN_TARGET_S = float(os.environ.get("CEREBRO_SMOKE_SECOND_TURN_MAX_S", "
 RAM_TARGET_RATIO = float(os.environ.get("CEREBRO_SMOKE_RAM_MAX_RATIO", "0.60"))
 REPORT_PATH = os.environ.get(
     "CEREBRO_SMOKE_REPORT",
-    str(ROOT / "manual_tests" / "post_implemefix_smoke.md"),
+    str(ROOT / "manual_tests" / "implemefix" / "post-smoke.md"),
 )
 
 _WARNINGS: list[str] = []

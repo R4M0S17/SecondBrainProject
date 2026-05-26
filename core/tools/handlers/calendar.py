@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import os
 import platform
-from datetime import UTC, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 
 import dateparser
 
+from core.agents.calendar_query_parse import (
+    CalendarDateFilter,
+    extract_calendar_date_filter,
+    filter_events_by_date,
+    scope_phrase_for_filter,
+)
 from integrations.calendar_reader import (
     BackendResult,
     CalendarEvent,
     CalendarReader,
+    calendar_write_failure_hint,
     create_apple_calendar_event,
     delete_apple_calendar_event_by_title,
 )
@@ -27,6 +34,47 @@ _FAST_APPLE_TIMEOUT = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "
 _REMINDER_EVENT_DURATION_MINS = 30
 
 _ICS_PATH = os.path.expanduser(os.getenv("CEREBRO_ICS", "~/.cerebro/calendar.ics"))
+
+
+def _local_tz() -> tzinfo:
+    tz = datetime.now().astimezone().tzinfo
+    assert tz is not None
+    return tz
+
+
+def _parse_event_datetime(datetime_str: str) -> datetime | None:
+    """Parse natural language datetimes as local wall-clock time (not UTC)."""
+    local = _local_tz()
+    tz_name = getattr(local, "key", None)
+    settings: dict[str, object] = {
+        "PREFER_DATES_FROM": "future",
+        "RETURN_AS_TIMEZONE_AWARE": True,
+    }
+    if tz_name:
+        settings["TIMEZONE"] = tz_name
+
+    parsed = dateparser.parse(datetime_str, settings=settings)
+    if parsed is None:
+        parsed = dateparser.parse(datetime_str, settings={"PREFER_DATES_FROM": "future"})
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local)
+    return parsed.astimezone(local)
+
+
+def _format_local_event_time(dt: datetime) -> str:
+    local = dt.astimezone(_local_tz())
+    return local.strftime("%A %d de %B de %Y, %H:%M")
+
+
+def _day_from_datetime_str(datetime_str: str) -> date | None:
+    if not datetime_str.strip():
+        return None
+    parsed = _parse_event_datetime(datetime_str)
+    if parsed is None:
+        return None
+    return parsed.date()
 
 
 def _use_apple_calendar() -> bool:
@@ -43,6 +91,8 @@ def format_merged_calendar_result(
     *,
     max_events: int = 0,
     total_before_limit: int | None = None,
+    scope_label: str = "",
+    count_only: bool = False,
 ) -> str:
     """Turn merged BackendResult into user-facing Spanish text (Phase 4)."""
     if result.status == "permission_denied":
@@ -76,7 +126,15 @@ def format_merged_calendar_result(
             f"(Archivo .ics no encontrado: {result.detail})"
         )
     if not result.events:
+        if scope_label:
+            return f"Fecha y hora actual: {now_str}\nSin eventos {scope_label}."
         return f"Fecha y hora actual: {now_str}\nSin eventos en las próximas {hours_ahead} horas."
+
+    if count_only:
+        n = len(result.events)
+        word = "evento" if n == 1 else "eventos"
+        scope = f" {scope_label}" if scope_label else f" en las próximas {hours_ahead} horas"
+        return f"Fecha y hora actual: {now_str}\nTienes {n} {word}{scope}."
 
     partial_note = ""
     if result.detail == "partial_apple_timeout":
@@ -84,8 +142,12 @@ def format_merged_calendar_result(
             "\n(Apple Calendar no respondió a tiempo; se muestran eventos de otras fuentes.)"
         )
 
+    scope_suffix = f" ({scope_label})" if scope_label else ""
     if max_events == 1 and len(result.events) == 1:
-        header = f"Fecha y hora actual: {now_str}\nPróximo evento en tu calendario:"
+        if scope_label:
+            header = f"Fecha y hora actual: {now_str}\nPróximo evento {scope_label}:"
+        else:
+            header = f"Fecha y hora actual: {now_str}\nPróximo evento en tu calendario:"
     elif (
         max_events > 0
         and total_before_limit is not None
@@ -93,10 +155,13 @@ def format_merged_calendar_result(
     ):
         header = (
             f"Fecha y hora actual: {now_str}\n"
-            f"Eventos próximos (mostrando {len(result.events)}; próximas {hours_ahead}h):"
+            f"Eventos próximos{scope_suffix} (mostrando {len(result.events)}; próximas {hours_ahead}h):"
         )
     else:
-        header = f"Fecha y hora actual: {now_str}\nEventos próximos (próximas {hours_ahead}h):"
+        header = (
+            f"Fecha y hora actual: {now_str}\n"
+            f"Eventos próximos{scope_suffix} (próximas {hours_ahead}h):"
+        )
     lines = [header + partial_note]
     for ev in result.events:
         fmt = "%Y-%m-%d %H:%M %Z" if ev.start.tzinfo else "%Y-%m-%d %H:%M"
@@ -115,6 +180,9 @@ def get_upcoming_events(
     *,
     max_events: int = 0,
     fast_apple: bool = True,
+    date_filter: CalendarDateFilter | None = None,
+    count_only: bool = False,
+    free_busy: bool = False,
 ) -> str:
     """Return a formatted list of upcoming calendar events.
 
@@ -123,6 +191,9 @@ def get_upcoming_events(
         ics_path: Override the .ics file path (for testing).
         max_events: Cap listed events (0 = no cap). Use 1 for "próximo evento".
         fast_apple: Shorter osascript timeout; skips birthday-only backends.
+        date_filter: Optional after/before/on day window parsed from the user query.
+        count_only: Return only a count of matching events.
+        free_busy: Answer whether the user is free in the scoped window.
     """
     path = ics_path or _ICS_PATH
     apple_timeout = _FAST_APPLE_TIMEOUT if fast_apple and _use_apple_calendar() else None
@@ -133,6 +204,9 @@ def get_upcoming_events(
         apple_timeout_sec=apple_timeout,
     )
     result = reader.get_upcoming_events_v2(hours_ahead=hours_ahead)
+    if result.events and date_filter is not None:
+        filtered = filter_events_by_date(result.events, date_filter)
+        result = BackendResult(events=filtered, status=result.status, detail=result.detail)
     total = len(result.events)
     if max_events > 0 and result.events:
         result = BackendResult(
@@ -142,8 +216,52 @@ def get_upcoming_events(
         )
     now = datetime.now().astimezone()
     now_str = now.strftime("%A %d de %B de %Y, %H:%M %Z")
+    scope_label = scope_phrase_for_filter(date_filter)
+    if free_busy and date_filter is not None:
+        return _format_free_busy(result, now_str, scope_label)
     return format_merged_calendar_result(
-        result, hours_ahead, now_str, max_events=max_events, total_before_limit=total
+        result,
+        hours_ahead,
+        now_str,
+        max_events=max_events,
+        total_before_limit=total,
+        scope_label=scope_label,
+        count_only=count_only,
+    )
+
+
+def _format_free_busy(result: BackendResult, now_str: str, scope_label: str) -> str:
+    if result.status in ("permission_denied", "timeout", "error", "no_calendar"):
+        return format_merged_calendar_result(result, 0, now_str, scope_label=scope_label)
+    if not result.events:
+        return f"Fecha y hora actual: {now_str}\nSí, estás libre {scope_label}."
+    lines = [f"Fecha y hora actual: {now_str}\nNo, tienes eventos {scope_label}:"]
+    for ev in result.events:
+        fmt = "%Y-%m-%d %H:%M %Z" if ev.start.tzinfo else "%Y-%m-%d %H:%M"
+        lines.append(f"- {ev.title} a las {ev.start.strftime(fmt)}")
+    return "\n".join(lines)
+
+
+def get_upcoming_events_for_query(
+    query: str,
+    hours_ahead: int = 24,
+    ics_path: str | None = None,
+    *,
+    max_events: int = 0,
+    fast_apple: bool = True,
+    count_only: bool = False,
+    free_busy: bool = False,
+) -> str:
+    """Like get_upcoming_events but parses after/before/on anchors from the query text."""
+    date_filter = extract_calendar_date_filter(query)
+    return get_upcoming_events(
+        hours_ahead=hours_ahead,
+        ics_path=ics_path,
+        max_events=max_events,
+        fast_apple=fast_apple,
+        date_filter=date_filter,
+        count_only=count_only,
+        free_busy=free_busy,
     )
 
 
@@ -192,13 +310,21 @@ def limit_keyword_event_matches(
     if not events:
         return []
     sorted_ev = sorted(events, key=lambda ev: ev.start)
+
+    # Strict mode: negative max_results means "obey exactly N requested",
+    # even when multiple events fall on the same day.
+    strict = max_results < 0
+    if strict:
+        max_results = abs(max_results)
+
     if max_results <= 0:
         return sorted_ev
+
     if max_results == 1:
         return sorted_ev[:1]
     first_day = sorted_ev[0].start.date()
     same_day = [ev for ev in sorted_ev if ev.start.date() == first_day]
-    if len(same_day) > 1:
+    if not strict and len(same_day) > 1:
         return same_day
     return sorted_ev[:max_results]
 
@@ -281,15 +407,12 @@ def create_calendar_event(
         duration_mins: Duration in minutes (default 60).
         description: Optional event description.
     """
-    start = dateparser.parse(datetime_str, settings={"PREFER_DATES_FROM": "future"})
+    start = _parse_event_datetime(datetime_str)
     if start is None:
         return (
             f"Could not parse '{datetime_str}' as a date/time. "
             "Please try a more specific format like 'Monday at 3pm' or '2026-05-20 15:00'."
         )
-
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=UTC)
 
     end = start + timedelta(minutes=duration_mins)
     iso_start = start.isoformat()
@@ -301,12 +424,12 @@ def create_calendar_event(
             f"Would have created: '{title}' at {iso_start} for {duration_mins} min."
         )
 
-    success = create_apple_calendar_event(title, iso_start, iso_end, description)
+    success, err = create_apple_calendar_event(title, iso_start, iso_end, description)
     if not success:
-        return f"Failed to create event '{title}' in Apple Calendar. Check that Calendar has Automation permission."
+        hint = calendar_write_failure_hint(err)
+        return f"No pude crear el evento '{title}' en Calendario. {hint}"
 
-    fmt = "%A, %B %-d at %-I:%M %p"
-    return f"Created event '{title}' on {start.strftime(fmt)} ({duration_mins} min)."
+    return f"Created event '{title}' on {_format_local_event_time(start)} ({duration_mins} min)."
 
 
 def add_reminder(title: str, datetime_str: str, notes: str = "") -> str:
@@ -319,15 +442,12 @@ def add_reminder(title: str, datetime_str: str, notes: str = "") -> str:
         datetime_str: Natural language or ISO date/time (e.g. "next saturday", "tomorrow at 9am").
         notes: Optional description on the calendar event.
     """
-    start = dateparser.parse(datetime_str, settings={"PREFER_DATES_FROM": "future"})
+    start = _parse_event_datetime(datetime_str)
     if start is None:
         return (
             f"No pude interpretar '{datetime_str}' como fecha/hora. "
             "Prueba un formato como 'mañana a las 3pm' o '2026-05-20 15:00'."
         )
-
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=UTC)
 
     end = start + timedelta(minutes=_REMINDER_EVENT_DURATION_MINS)
     iso_start = start.isoformat()
@@ -339,25 +459,23 @@ def add_reminder(title: str, datetime_str: str, notes: str = "") -> str:
             f"Se habría creado el recordatorio '{title}' el {iso_start}."
         )
 
-    success = create_apple_calendar_event(title, iso_start, iso_end, notes)
+    success, err = create_apple_calendar_event(title, iso_start, iso_end, notes)
     if not success:
-        return (
-            f"No pude crear el recordatorio '{title}' en Calendario. "
-            "Revisa permisos de Automatización para Calendar."
-        )
+        hint = calendar_write_failure_hint(err)
+        return f"No pude crear el recordatorio '{title}' en Calendario. {hint}"
 
-    fmt = "%A %d de %B de %Y, %H:%M %Z"
     return (
         f"Recordatorio '{title}' añadido al calendario para el "
-        f"{start.strftime(fmt)} (duración {_REMINDER_EVENT_DURATION_MINS} min)."
+        f"{_format_local_event_time(start)} (duración {_REMINDER_EVENT_DURATION_MINS} min)."
     )
 
 
-def delete_reminder(title: str) -> str:
-    """Delete a calendar event by exact title on the default Apple Calendar.
+def delete_reminder(title: str, datetime_str: str = "") -> str:
+    """Delete a calendar event by exact title on Apple Calendar.
 
     Args:
         title: Event title to remove (recordatorios se guardan como eventos).
+        datetime_str: Optional day window (e.g. 'mañana') when the user specifies which day.
     """
     if platform.system() != "Darwin":
         return (
@@ -365,7 +483,8 @@ def delete_reminder(title: str) -> str:
             f"Se habría borrado el evento '{title}'."
         )
 
-    removed = delete_apple_calendar_event_by_title(title)
+    on_day = _day_from_datetime_str(datetime_str)
+    removed = delete_apple_calendar_event_by_title(title, on_day=on_day)
     if removed == 0:
         return f"No encontré ningún evento llamado '{title}' en Calendario."
     if removed < 0:

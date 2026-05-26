@@ -12,7 +12,7 @@
 | **6 — Filesystem** | `CEREBRO_AUTHORIZED_*_PATHS`; `PathNotAuthorizedError` surfaced to chat |
 | **3 — Embeddings** | `CEREBRO_EMBEDDINGS_BACKEND=local` → `sentence-transformers` (~120 MB), no embed server |
 | **2 — Model** | Default chat GGUF → `Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf`, `--temp 0.5` |
-| **7 — Smoke** | `make smoke` + [`manual_tests/post_implemefix_smoke.md`](../../manual_tests/post_implemefix_smoke.md) |
+| **7 — Smoke** | `make smoke` + [`manual_tests/implemefix/post-smoke.md`](../../manual_tests/implemefix/post-smoke.md) |
 
 If you see logs like this when sending a message in Cerebro:
 

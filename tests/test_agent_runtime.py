@@ -283,7 +283,7 @@ async def test_runtime_aborts_on_duplicate_tool_call(tmp_path):
 # _parse_llm_response — robustness for small / Qwen3 models
 # ──────────────────────────────────────────────────────────────────────────────
 
-from core.agents.runtime import _parse_llm_response
+from core.agents.runtime import _normalize_tool_args, _parse_llm_response
 
 _SAMPLE_TOOLS = frozenset(
     {
@@ -394,12 +394,26 @@ def test_parse_invalid_tool_shortcut_falls_back_to_friendly_answer():
     assert "reformular" in args["answer"]
 
 
-def test_parse_malformed_json_returns_friendly_fallback():
+def test_parse_unquoted_tool_name_repaired():
     raw = '{"action": "tool", "tool": create_python_file, "args": {"filename": "hello.py"}}'
-    action, tool, args = _parse_llm_response(raw)
-    assert action == "answer"
-    assert tool is None
-    assert not args["answer"].strip().startswith("{")
+    action, tool, args = _parse_llm_response(
+        raw, known_tools=_SAMPLE_TOOLS | {"create_python_file"}
+    )
+    assert action == "tool"
+    assert tool == "create_python_file"
+    assert args == {"filename": "hello.py"}
+
+
+def test_parse_unquoted_add_reminder():
+    raw = (
+        '{"action": "tool", "tool": add_reminder, '
+        '"args": {"title": "prueba1", "datetime_str": "mañana a las 3pm"}}'
+    )
+    action, tool, args = _parse_llm_response(raw, known_tools=_SAMPLE_TOOLS | {"add_reminder"})
+    assert action == "tool"
+    assert tool == "add_reminder"
+    assert args["title"] == "prueba1"
+    assert "mañana" in args["datetime_str"]
 
 
 def test_parse_fence_with_trailing_whitespace_on_closing_line():
@@ -414,6 +428,14 @@ def test_parse_answer_field_with_embedded_fence_stripped():
     action, _, args = _parse_llm_response(raw)
     assert action == "answer"
     assert args["answer"] == "Hola"
+
+
+def test_normalize_add_reminder_arg_aliases():
+    args = _normalize_tool_args(
+        "add_reminder",
+        {"nombre": "prueba1", "fecha": "mañana a las 3pm"},
+    )
+    assert args == {"title": "prueba1", "datetime_str": "mañana a las 3pm"}
 
 
 def test_parse_unknown_tool_name_with_known_tools_set():
@@ -483,7 +505,7 @@ async def test_search_files_tool_reached_when_authorized(tmp_path):
         tool_registry={"search_files": fake_search_files},
     )
 
-    answer, _ = await runtime.run("Busca archivos Python", agent_id)
+    answer, _ = await runtime.run("Usa la herramienta search_files con pattern *.py", agent_id)
 
     assert handler_called, "search_files handler was not called"
     assert isinstance(answer, str) and len(answer) > 0

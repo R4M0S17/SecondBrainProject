@@ -71,3 +71,38 @@ CEREBRO_LLAMACPP_SIMPLE=true         # false = ModelManager multi-server model s
 CEREBRO_DB=~/.cerebro/db
 CEREBRO_STATE=~/.cerebro/state
 ```
+
+## Modularidad y cambios seguros (leer antes de programar)
+
+El backend **es modular por dominio**, pero el **router central** acopla features. Calendario y archivos están estables vía fast paths + handlers; no asumir cambios aislados sin tests.
+
+### Capas (añadir features aquí, no en un monolito)
+| Capa | Rol | Rutas típicas |
+|------|-----|----------------|
+| Handlers | Lógica de herramienta | `core/tools/handlers/calendar.py`, `filesystem.py` |
+| Fast paths | Atajo sin LLM (regex/intent) | `*_fast_path.py`, `file_write_calendar_fusion.py` |
+| Runtime | Orden de evaluación + LangGraph | `core/agents/runtime.py` |
+| Agentes | Tools permitidas por perfil | `core/agents/specialized.py` |
+| Tests | Regresión por módulo | `tests/test_calendar*.py`, `tests/test_file_*.py` |
+
+### Orden del pipeline (`runtime.run` / stream) — primero match gana
+1. math → 2. file write (+ fusión calendario→archivo) → 3. reminder LLM → 4. calendar → 5. file search → 6. grafo LLM + tools
+
+**Riesgo principal:** regex/intents nuevos que se solapan (ej. “busca archivos del calendario”) desvían al fast path equivocado. No reordenar pasos sin revisar impacto.
+
+### Espejo `core/` ↔ `cerebro/core/`
+Existen **dos copias** del backend. Si solo editas una, la otra ruta de arranque parece “rota”. Mantener ambas sincronizadas o editar solo la que usa `make run` / `main.py` del entorno activo.
+
+### Antes de tocar código
+1. Feature nueva → **módulo nuevo** o handler; hook mínimo en `runtime.py` (un `try_*`, sin refactor masivo).
+2. Evitar cambiar `specialized.py` / orden de fast paths salvo necesidad; si cambias, correr tests de calendario + archivos.
+3. Tras el cambio: `make test tests/test_calendar_fast_path.py tests/test_file_write_calendar_fusion.py tests/test_filesystem_tools.py tests/test_file_search_fast_path.py -q`
+4. Cambios globales (env, modelo, `watched_folders`) afectan todo el chat, no solo la feature.
+
+### Features estables (no romper sin regresión explícita)
+- Calendario: lectura fast path, recordatorios, export a archivo (`file_write_calendar_fusion`)
+- Archivos: `write_file` fast path, generación de contenido, confirmación en UI
+- Búsqueda: `search_files` multi-root; ver `docs/plans/features/file-search-multi-root.md` para ampliar Desktop/Documents
+
+### Regla práctica
+Modular **sí** a nivel de handlers/fast paths; **no** a nivel de “cualquier edit en `runtime.py` es seguro”. Cambio pequeño + tests + mismas frases E2E del manual test.

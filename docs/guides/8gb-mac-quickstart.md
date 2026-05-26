@@ -85,4 +85,4 @@ Paste the full output into a new issue. For missing chat GGUF files, the doctor 
 
 ---
 
-See also: [`docs/README.md`](../README.md), root [`CLAUDE.md`](../../CLAUDE.md), and [`FIX_CEREBRO.md`](../../FIX_CEREBRO.md) for the full remediation plan.
+See also: [`docs/README.md`](../README.md), root [`CLAUDE.md`](../../CLAUDE.md), and [`docs/plans/stabilization/fix-cerebro.md`](../../docs/plans/stabilization/fix-cerebro.md) for the full remediation plan.

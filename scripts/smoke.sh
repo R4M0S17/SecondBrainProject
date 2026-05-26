@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HTTP smoke tests for Cerebro (manual_tests/test_1.md regression matrix).
+# HTTP smoke tests for Cerebro (manual_tests/implemefix/session-1.md regression matrix).
 # Requires: make engine && make run (in other terminals).
 set -euo pipefail
 

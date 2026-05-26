@@ -44,6 +44,8 @@ CALENDAR_TOOLS: list[str] = [
     "search_upcoming",
     "create_calendar_event",
     "add_reminder",
+    "delete_reminder",
+    "write_file",
     # Phase 3: desktop notification after creating events
     "send_notification",
 ]
@@ -67,6 +69,7 @@ GENERAL_TOOLS: list[str] = [
     "search_upcoming",
     "create_calendar_event",
     "add_reminder",
+    "delete_reminder",
     "search_documents",
     "spotlight_search",
     "list_directory",
@@ -160,13 +163,15 @@ def make_calendar_profile() -> AgentProfile:
                 "- query_events: buscar por palabra clave en una ventana de horas\n"
                 "- search_upcoming: búsqueda por días hacia adelante\n"
                 "- create_calendar_event: reuniones, citas, bloquear tiempo\n"
-                "- add_reminder: recordatorios y tareas con fecha\n"
+                "- add_reminder: recordatorios como evento corto en Calendario (no app Recordatorios)\n"
                 "- search_documents: búsqueda en documentos indexados\n"
                 "- send_notification: aviso de escritorio tras crear eventos\n\n"
                 "Ejemplo consulta:\n"
                 '{"action": "tool", "tool": "get_upcoming_events", "args": {"hours_ahead": 48}}\n'
                 "Ejemplo crear evento:\n"
                 '{"action": "tool", "tool": "create_calendar_event", "args": {"title": "Reunión equipo", "datetime_str": "next monday at 3pm", "duration_mins": 60}}\n'
+                "Ejemplo crear recordatorio:\n"
+                '{"action": "tool", "tool": "add_reminder", "args": {"title": "Llamar al médico", "datetime_str": "mañana a las 3pm"}}\n'
                 "Responde de forma clara y en el idioma del usuario."
             )
         },
@@ -178,6 +183,8 @@ def make_calendar_profile() -> AgentProfile:
 def make_general_profile() -> AgentProfile:
     now = _now()
     _general_extra = (
+        "Si el usuario pide crear un recordatorio (cualquier redacción), usa add_reminder con "
+        "title y datetime_str (día y hora en lenguaje natural). "
         "Si el usuario pregunta por la fecha, hora, eventos, cumpleaños, recordatorios o "
         "cualquier dato que cambie con el tiempo, USA herramientas — NO inventes la respuesta. "
         'Para "qué día es hoy" o "qué hora es" mira la línea FECHA Y HORA ACTUAL del prompt. '

@@ -19,6 +19,8 @@ ContentSource = Literal["literal", "fenced", "spec"]
 
 _FILENAME = r"[\w][\w.\-]*(?:\.\w{1,12})?"
 _ABS_PATH = r"(?:~|/)[^\s\"']+\.\w{1,12}"
+# ASCII + Spanish curly quotes around filenames in chat UI.
+_QUOTE = r"[\"'“”‘’]"
 
 _INVALID_FILENAMES = frozenset(
     {"de", "un", "el", "la", "los", "las", "texto", "ejemplo", "archivo"}
@@ -29,21 +31,27 @@ _ES_CREATE_RE = re.compile(
     rf"(?:crea|crear|escribe|escribir|guarda|guardar)\s+"
     rf"(?:un\s+)?(?:archivo|fichero)\s+"
     rf"(?:(?:llamado|de\s+nombre|nombrado)\s+)?"
-    rf"[\"']?(?P<filename>{_FILENAME})[\"']?"
-    rf"\s+(?:con\s+)?(?:contenido|el\s+texto|texto)(?:\s+de)?\s+(?P<content>.+?)\s*$",
+    rf"{_QUOTE}?(?P<filename>{_FILENAME}){_QUOTE}?"
+    # User language is often: "crea un archivo X con una función..." (sin "contenido"/"texto").
+    # We treat that as the file body/spec.
+    rf"\s+(?:con\s+)?"
+    rf"(?:(?:contenido|el\s+contenido|el\s+texto|texto)(?:\s+de)?\s+)?"
+    rf"(?P<content>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
 _ES_CREATE_SHORT_RE = re.compile(
     rf"(?:crea|crear)\s+(?:un\s+)?(?:archivo|fichero)\s+"
-    rf"[\"']?(?P<filename>{_FILENAME})[\"']?"
-    rf"\s+con\s+(?:contenido|el\s+texto)(?:\s+de)?\s+(?P<content>.+?)\s*$",
+    rf"{_QUOTE}?(?P<filename>{_FILENAME}){_QUOTE}?"
+    rf"\s+con\s+"
+    rf"(?:(?:contenido|el\s+contenido|el\s+texto|texto)(?:\s+de)?\s+)?"
+    rf"(?P<content>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
 _EN_CREATE_RE = re.compile(
     rf"(?:write|create|save)\s+(?:a\s+)?file\s+"
-    rf"(?:called|named)\s+[\"']?(?P<filename>{_FILENAME})[\"']?"
+    rf"(?:called|named)\s+{_QUOTE}?(?P<filename>{_FILENAME}){_QUOTE}?"
     rf"\s+(?:with\s+)?(?:content\s+|the\s+word\s+|containing\s+)?(?P<content>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
@@ -56,18 +64,36 @@ _EXPLICIT_WRITE_RE = re.compile(
 
 _CREAR_PATH_RE = re.compile(
     rf"(?:crea|crear)\s+(?P<path>{_ABS_PATH}|{_FILENAME})\s+"
-    rf"con\s+(?:contenido|el\s+texto)(?:\s+de)?\s+(?P<content>.+?)\s*$",
+    rf"con\s+"
+    rf"(?:(?:contenido|el\s+contenido|el\s+texto|texto)(?:\s+de)?\s+)?"
+    rf"(?P<content>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
 _PATH_CONTENT_RE = re.compile(
-    rf"(?P<path>{_ABS_PATH}|{_FILENAME})\s+con\s+(?:contenido|el\s+texto)(?:\s+de)?\s+(?P<content>.+?)\s*$",
+    rf"(?P<path>{_ABS_PATH}|{_FILENAME})\s+con\s+"
+    rf"(?:(?:contenido|el\s+contenido|el\s+texto|texto)(?:\s+de)?\s+)?"
+    rf"(?P<content>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_ES_CREATE_CALENDAR_RE = re.compile(
+    rf"(?:crea|crear|escribe|escribir|guarda|guardar)\s+"
+    rf"(?:un\s+)?(?:archivo|fichero)\s+"
+    rf"(?:(?:llamado|de\s+nombre|nombrado)\s+)?"
+    rf"{_QUOTE}?(?P<filename>{_FILENAME}){_QUOTE}?"
+    rf"\s+(?:con\s+)?"
+    # Calendar-backed export requests are commonly written as:
+    # "crea un archivo X con los proximos cumpleaños en mi calendario"
+    # so we allow missing "contenido" keyword, but only when calendar keywords appear.
+    rf"(?=(?:.|\n)*\b(?:cumpleaños|cumpleaño|cumple|birthday|anniversary|calendario|agenda)\b)"
+    rf"(?P<content>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
 _USA_WRITE_RE = re.compile(
     rf"write_file\s+para\s+crear\s+(?P<path>{_ABS_PATH}|{_FILENAME})\s+"
-    rf"con\s+contenido(?:\s+de)?\s+(?P<content>.+?)\s*$",
+    rf"con\s+(?:(?:contenido)(?:\s+de)?\s+)?(?P<content>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -79,9 +105,31 @@ _QUOTED_CONTENT_RE = re.compile(
 _FENCED_CODE_RE = re.compile(r"```(?:\w+)?\s*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
 
 _SPEC_HINT_RE = re.compile(
-    r"\b(programa|script|c[oó]digo|funci[oó]n|recursi[oó]n|fibonacci|"
+    r"\b("
+    r"programa|script|c[oó]digo|funci[oó]n|recursi[oó]n|fibonacci|"
+    r"recet[ao]s?|panqueques?|crepes?|cocinar|"
+    r"tabla(?:s)?|verdad|matem[aá]tica|discreta|l[oó]gica|"
+    r"videojuegos?|playstation|ps\d|nombres?|mujer(?:es)?|hombre(?:s)?|inventad[oa]s?|"
+    r"lista|listado|ejemplos?|ideas?|"
+    r"cumplea(?:ñ|n)os|cumplea(?:ñ|n)o|cumpleannos|cumpleanos|cumpleaños|cumpleaño|cumple|"
     r"implementa|usando|que\s+calcule|que\s+haga|en\s+python|en\s+javascript|"
-    r"secuencia\s+de|archivo\s+python)\b",
+    r"secuencia\s+de|archivo\s+python"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Meta-instructions captured by the parser (not file bytes).
+_INSTRUCTION_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"(?:en\s+)?(?:donde|el\s+cual)\s+(?:escribas|escribes|escribir|pon(?:gas|ga)|incluyas|incluya)|"
+    r"en\s+el\s+que\s+(?:escribas|escribes)|"
+    r"que\s+(?:contenga|tenga|incluya)\s+"
+    r")",
+    re.IGNORECASE,
+)
+
+_QUANTITY_NOUN_RE = re.compile(
+    r"^(?:solamente\s+|solo\s+)?\d+\s+\w+",
     re.IGNORECASE,
 )
 
@@ -95,6 +143,7 @@ _PATTERNS: list[re.Pattern[str]] = [
     _USA_WRITE_RE,
     _CREAR_PATH_RE,
     _PATH_CONTENT_RE,
+    _ES_CREATE_CALENDAR_RE,
     _ES_CREATE_RE,
     _ES_CREATE_SHORT_RE,
     _EN_CREATE_RE,
@@ -109,6 +158,7 @@ class FileWriteIntent:
     content_source: ContentSource = "literal"
     content_spec: str = ""
     generated: bool = False
+    filled_from: str = ""
 
     def with_content(self, content: str, *, source: ContentSource = "literal") -> FileWriteIntent:
         return FileWriteIntent(
@@ -118,6 +168,7 @@ class FileWriteIntent:
             content_source=source,
             content_spec=self.content_spec,
             generated=True,
+            filled_from=self.filled_from,
         )
 
 
@@ -140,11 +191,12 @@ def authorized_write_paths() -> list[str]:
 
 
 def _clean_content(raw: str) -> str:
-    text = raw.strip().strip("\"'").strip()
+    # Strip both ASCII quotes and common Spanish curly quotes.
+    text = raw.strip().strip("\"'“”‘’").strip()
     text = re.sub(r"[.?!]+\s*$", "", text).strip()
     m = _QUOTED_CONTENT_RE.match(text)
     if m:
-        return m.group(1).strip().strip("\"'")
+        return m.group(1).strip().strip("\"'“”‘’")
     return text
 
 
@@ -160,18 +212,77 @@ def _looks_like_source_code(text: str) -> bool:
     return bool(_SOURCE_CODE_RE.search(text))
 
 
+def _normalize_spec_text(text: str) -> str:
+    """Strip leading instructional wrappers so generation gets a clean brief."""
+    out = text.strip()
+    out = _INSTRUCTION_PREFIX_RE.sub("", out).strip()
+    out = re.sub(r"^(?:solamente|solo)\s+", "", out, flags=re.IGNORECASE).strip()
+    return out
+
+
+def _looks_like_finished_literal(text: str) -> bool:
+    """True when the captured fragment is plausibly the final file body."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # Multi-line structured content (tables, lists, recipes with steps).
+    if "\n" in stripped and len(stripped) > 40:
+        return True
+    # Truth-table style rows.
+    if re.search(r"\b[TF01]\b.*\b[TF01]\b", stripped) or "|" in stripped:
+        return True
+    # Comma-separated list of short items the user likely pasted verbatim.
+    if "," in stripped and not _QUANTITY_NOUN_RE.match(stripped):
+        if _SPEC_HINT_RE.search(stripped):
+            return False
+        parts = [p.strip() for p in stripped.split(",") if p.strip()]
+        if len(parts) >= 2 and all(2 < len(p) <= 32 for p in parts):
+            return True
+    # Very short exact literals the user likely meant verbatim.
+    if len(stripped) <= 48 and not _SPEC_HINT_RE.search(stripped):
+        if not re.search(
+            r"\b(con|para|usando|inventad|escrib|genera|tabla|lista|videojuego|nombre)\b",
+            stripped,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
 def is_content_specification(text: str, filename: str) -> bool:
     """True when the user describes what to write instead of supplying literal bytes."""
-    if _looks_like_source_code(text):
+    cleaned = _clean_content(text)
+    if _looks_like_source_code(cleaned):
         return False
-    if _SPEC_HINT_RE.search(text):
+    if _looks_like_finished_literal(cleaned):
+        return False
+    if _SPEC_HINT_RE.search(cleaned):
         return True
-    if re.search(r"\b(de un|de una)\s+(programa|script|c[oó]digo)\b", text, re.IGNORECASE):
+    if _INSTRUCTION_PREFIX_RE.match(cleaned):
+        return True
+    if _QUANTITY_NOUN_RE.match(cleaned):
+        return True
+    if re.search(r"\b(de un|de una)\s+(programa|script|c[oó]digo)\b", cleaned, re.IGNORECASE):
+        return True
+    if re.search(
+        r"\b(pequeñ[ao]|breve|simple|completa?|detallad[ao])\s+",
+        cleaned,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\bpara\s+(cocinar|matem[aá]tica|discreta|python|javascript)\b", cleaned, re.IGNORECASE
+    ):
         return True
     ext = Path(filename).suffix.lower()
-    if ext in (".py", ".js", ".ts", ".java", ".go", ".rs") and len(text) > 40:
-        if not _looks_like_source_code(text) and _SPEC_HINT_RE.search(text + " " + filename):
+    if ext in (".py", ".js", ".ts", ".java", ".go", ".rs") and len(cleaned) > 40:
+        if not _looks_like_source_code(cleaned) and _SPEC_HINT_RE.search(cleaned + " " + filename):
             return True
+    # Default for create-file intents: short directive phrases are specs, not bytes.
+    if len(cleaned) < 120 and re.search(
+        r"\b(con|para|donde|escrib|inventad|genera|incluy)\b", cleaned, re.IGNORECASE
+    ):
+        return True
     return False
 
 
@@ -182,7 +293,8 @@ def classify_file_content(raw: str, filename: str) -> tuple[str, ContentSource, 
     if fenced is not None:
         return fenced, "fenced", ""
     if is_content_specification(cleaned, filename):
-        return cleaned, "spec", cleaned
+        spec = _normalize_spec_text(cleaned) or cleaned
+        return spec, "spec", spec
     return cleaned, "literal", ""
 
 
@@ -241,6 +353,7 @@ def _intent_from_match(m: re.Match[str], write_roots: list[str]) -> FileWriteInt
         filename=Path(resolved).name,
         content_source=source,
         content_spec=spec,
+        filled_from="",
     )
 
 

@@ -14,8 +14,22 @@ from loguru import logger
 
 from core.agents.calendar_fast_path import try_calendar_fast_path
 from core.agents.conversation_store import ConversationStore
+from core.agents.file_content_generator import generate_file_content
+from core.agents.file_search_fast_path import try_file_search_fast_path
+from core.agents.file_write_calendar_fusion import (
+    is_calendar_backed_file_content,
+    try_file_write_calendar_fusion,
+)
 from core.agents.file_write_fast_path import FileWriteIntent, try_file_write_fast_path
+from core.agents.llm_parse_utils import extract_json_object, repair_tool_json, strip_markdown_fences
 from core.agents.math_fast_path import try_pure_math_fast_path
+from core.agents.reminder_intent_resolver import (
+    ReminderIntent,
+    extract_reminder_intent,
+    heuristic_parse_reminder,
+    is_reminder_write_query,
+    resolve_reminder_intent,
+)
 from core.agents.session_policy import (
     apply_conversation_to_agent_state,
     hydrate_short_term,
@@ -213,15 +227,62 @@ def _date_preamble() -> str:
     )
 
 
+def _reminder_write_prompt_extra(query: str, tool_defs: list[ToolDefinition]) -> str:
+    names = {td.name for td in tool_defs}
+    if "add_reminder" not in names or not is_reminder_write_query(query):
+        return ""
+    return (
+        "\n\nRECORDATORIO (petición detectada):\n"
+        "El usuario quiere crear o borrar un recordatorio en Calendario (evento corto, no app Recordatorios).\n"
+        "Para CREAR usa add_reminder con JSON exacto:\n"
+        '{"action": "tool", "tool": "add_reminder", "args": {"title": "<nombre>", '
+        '"datetime_str": "<día y hora en lenguaje natural, ej. mañana a las 3pm>"}}\n'
+        "Para BORRAR usa delete_reminder con title exacto y datetime_str si menciona el día (ej. mañana).\n"
+        "datetime_str debe incluir día Y hora. No inventes fechas: usa la petición del usuario.\n"
+    )
+
+
+def _normalize_tool_args(tool_name: str | None, args: dict) -> dict:
+    if not tool_name or not args:
+        return args
+    out = dict(args)
+    if tool_name == "add_reminder":
+        alias_map = {
+            "name": "title",
+            "nombre": "title",
+            "titulo": "title",
+            "título": "title",
+            "when": "datetime_str",
+            "fecha": "datetime_str",
+            "date": "datetime_str",
+            "time": "datetime_str",
+            "hora": "datetime_str",
+            "datetime": "datetime_str",
+        }
+        for src, dst in alias_map.items():
+            if src in out and dst not in out:
+                out[dst] = out.pop(src)
+    elif tool_name == "delete_reminder":
+        for src in ("name", "nombre", "titulo", "título"):
+            if src in out and "title" not in out:
+                out["title"] = out.pop(src)
+        for src in ("when", "fecha", "date", "day", "día"):
+            if src in out and "datetime_str" not in out:
+                out["datetime_str"] = out.pop(src)
+    return out
+
+
 def _build_system_prompt(
     agent_state: AgentState,
     context: AssembledContext,
     tool_defs: list[ToolDefinition],
     ambient_context: str = "",
+    query: str = "",
 ) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
     instructions = agent_state.profile.preferences.get("instructions", "")
+    instructions += _reminder_write_prompt_extra(query, tool_defs)
 
     if tool_defs:
         detail_lines = []
@@ -267,55 +328,16 @@ def _build_stream_system_prompt(
     )
 
 
-_FENCE_BLOCK_RE = re.compile(r"^```(?:json|JSON)?\s*\n(.*)\n```\s*$", re.DOTALL)
-
-
 def _strip_markdown_fences(text: str) -> str:
-    """Remove markdown code fences; tolerate trailing whitespace on the closing fence."""
-    stripped = text.strip()
-    match = _FENCE_BLOCK_RE.match(stripped)
-    if match:
-        return match.group(1).strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if not lines:
-        return stripped
-    first = lines[0].strip()
-    if first.lower() in ("```json", "```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip().startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
+    return strip_markdown_fences(text)
 
 
 def _extract_json_object(text: str) -> str | None:
-    """Return the first balanced `{...}` object, respecting JSON string literals."""
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
+    return extract_json_object(text)
+
+
+def _repair_tool_json(text: str) -> str:
+    return repair_tool_json(text)
 
 
 def _looks_like_failed_json(text: str) -> bool:
@@ -356,8 +378,13 @@ def _parse_llm_response(
     try:
         data = json.loads(json_text)
     except json.JSONDecodeError:
-        logger.warning("LLM JSON parse failed: {}", text[:500])
-        return "answer", None, _parse_fallback_answer()
+        repaired = repair_tool_json(json_text)
+        try:
+            data = json.loads(repaired)
+            logger.debug("LLM JSON repaired successfully")
+        except json.JSONDecodeError:
+            logger.warning("LLM JSON parse failed: {}", text[:500])
+            return "answer", None, _parse_fallback_answer()
 
     if not isinstance(data, dict):
         logger.warning("LLM JSON root is not an object: {}", type(data).__name__)
@@ -516,10 +543,12 @@ class AgentRuntime:
         conversation_id: str | None,
         answer: str,
         agent_state: AgentState,
+        *,
+        warning: str = "calendar_fast_path",
     ) -> AgentState:
         """Persist a calendar tool answer without calling the LLM."""
         mark_skip_context_enricher()
-        append_inference_warnings(["calendar_fast_path"])
+        append_inference_warnings([warning])
         self._state_store.save(agent_state)
         short_term = self._context_builder._short_term
         short_term.push_message({"role": "user", "content": query})
@@ -529,6 +558,60 @@ class AgentRuntime:
 
     def _try_math_fast_path(self, query: str, agent_state: AgentState) -> str | None:
         return try_pure_math_fast_path(query, list(agent_state.profile.authorized_tools or []))
+
+    def _tools_for_file_write(self, agent_state: AgentState) -> list[str]:
+        """Agent tools plus write_file when registered (export-to-file fusion)."""
+        tools = list(agent_state.profile.authorized_tools or [])
+        if (
+            self._tool_registry
+            and "write_file" in self._tool_registry
+            and "write_file" not in tools
+        ):
+            tools.append("write_file")
+        return tools
+
+    async def _resolve_file_write_intent(
+        self, query: str, agent_state: AgentState
+    ) -> FileWriteIntent | None:
+        """Parse file-write intent; calendar fusion or LLM generation when needed."""
+        if self._tool_registry and "write_file" not in self._tool_registry:
+            return None
+        tools = self._tools_for_file_write(agent_state)
+        fused = try_file_write_calendar_fusion(query, tools)
+        if fused is not None:
+            append_inference_warnings(["file_write_calendar_fusion"])
+            return fused
+
+        intent = try_file_write_fast_path(query, tools, write_roots=None)
+        if intent is not None:
+            blob = (getattr(intent, "content_spec", None) or intent.content or "").strip()
+            if is_calendar_backed_file_content(blob):
+                logger.warning(
+                    "calendar file-export fusion failed; refusing literal description as file body"
+                )
+                return None
+
+        content_source = getattr(intent, "content_source", "literal") if intent else None
+        if intent is None or content_source != "spec":
+            return intent
+
+        from core.inference.registry import TaskHint
+
+        provider_name = self._registry.select_for_task(TaskHint.CHAT)
+        chat = self._registry.get_chat(provider_name)
+        try:
+            generated = await generate_file_content(
+                user_query=query,
+                filename=intent.filename,
+                content_spec=getattr(intent, "content_spec", None) or intent.content,
+                chat=chat,
+            )
+        except Exception as exc:
+            logger.warning("file content generation failed: {}", exc)
+            return None
+
+        append_inference_warnings(["file_write_content_generated"])
+        return intent.with_content(generated, source="literal")
 
     def _finish_file_write_fast_path(
         self,
@@ -543,11 +626,18 @@ class AgentRuntime:
         agent_state.pending_tool_name = "write_file"
         agent_state.pending_tool_args = {"path": intent.path, "content": intent.content}
         answer = _L("confirm.tool_pause", tool_name="write_file")
+        if getattr(intent, "filled_from", "") == "calendar":
+            generated_note = "\n(Contenido obtenido del calendario.)"
+        elif getattr(intent, "generated", False):
+            generated_note = "\n(Contenido generado a partir de tu descripción.)"
+        else:
+            generated_note = ""
         answer += (
             f"\n\nArchivo: `{intent.filename}`\n"
             f"Ruta: `{intent.path}`\n"
             f"Contenido ({len(intent.content)} caracteres): "
             f"{intent.content[:120]}{'…' if len(intent.content) > 120 else ''}"
+            f"{generated_note}"
         )
         self._state_store.save(agent_state)
         short_term = self._context_builder._short_term
@@ -555,13 +645,85 @@ class AgentRuntime:
         self.save_conversation_session(conversation_id, agent_state)
         return answer, agent_state
 
-    def _try_file_write_fast_path(
-        self, query: str, agent_state: AgentState
-    ) -> FileWriteIntent | None:
-        return try_file_write_fast_path(query, list(agent_state.profile.authorized_tools or []))
-
     def _try_calendar_fast_path(self, query: str, agent_state: AgentState) -> str | None:
         return try_calendar_fast_path(query, list(agent_state.profile.authorized_tools or []))
+
+    async def _try_reminder_llm_resolve(
+        self, query: str, agent_state: AgentState
+    ) -> tuple[str, AgentState] | None:
+        """Use a focused LLM call to extract reminder title/datetime from free-form text."""
+        authorized = list(agent_state.profile.authorized_tools or [])
+        write_tools = {"add_reminder", "delete_reminder"}
+        if authorized and not set(authorized) & write_tools:
+            return None
+        if not is_reminder_write_query(query):
+            return None
+
+        from core.inference.registry import TaskHint
+
+        provider_name = self._registry.select_for_task(TaskHint.CHAT)
+        chat = self._registry.get_chat(provider_name)
+        temporal = _now_human()
+        llm_intent: ReminderIntent | None = None
+        try:
+            llm_intent = await extract_reminder_intent(
+                query, chat, current_date=temporal["current_date"]
+            )
+        except Exception as exc:
+            logger.warning("reminder LLM extract failed: {}", exc)
+
+        intent = resolve_reminder_intent(query, llm_intent=llm_intent)
+        if intent is None:
+            intent = heuristic_parse_reminder(query)
+        if intent is None or intent.action == "none":
+            return None
+
+        if intent.action == "add":
+            if authorized and "add_reminder" not in authorized:
+                return None
+            tool_name = "add_reminder"
+            tool_args = {"title": intent.title, "datetime_str": intent.datetime_str}
+        elif intent.action == "delete":
+            if authorized and "delete_reminder" not in authorized:
+                return None
+            tool_name = "delete_reminder"
+            tool_args = {"title": intent.title}
+            if intent.datetime_str:
+                tool_args["datetime_str"] = intent.datetime_str
+        else:
+            return None
+
+        mark_skip_context_enricher()
+        append_inference_warnings(["reminder_llm_intent"])
+        agent_state.pending_tool_name = tool_name
+        agent_state.pending_tool_args = tool_args
+        answer = _L("confirm.tool_pause", tool_name=tool_name)
+        answer += f"\n\n**{intent.title}**"
+        if intent.datetime_str and intent.action == "add":
+            answer += f"\nCuándo: {intent.datetime_str}"
+        elif intent.datetime_str and intent.action == "delete":
+            answer += f"\nDía: {intent.datetime_str}"
+        self._state_store.save(agent_state)
+        return answer, agent_state
+
+    def _try_file_search_fast_path(self, query: str, agent_state: AgentState) -> str | None:
+        return try_file_search_fast_path(query, list(agent_state.profile.authorized_tools or []))
+
+    def _finish_file_search_fast_path(
+        self,
+        query: str,
+        conversation_id: str | None,
+        answer: str,
+        agent_state: AgentState,
+    ) -> AgentState:
+        mark_skip_context_enricher()
+        append_inference_warnings(["file_search_fast_path"])
+        self._state_store.save(agent_state)
+        short_term = self._context_builder._short_term
+        short_term.push_message({"role": "user", "content": query})
+        short_term.push_message({"role": "assistant", "content": answer})
+        self.save_conversation_session(conversation_id, agent_state)
+        return agent_state
 
     # ---------------------------------------------------------------------- #
     # Public entry point
@@ -638,6 +800,21 @@ class AgentRuntime:
             )
             return fast_answer, final_state
 
+        file_intent = await self._resolve_file_write_intent(query, agent_state)
+        if file_intent is not None:
+            return self._finish_file_write_fast_path(
+                query, conversation_id, file_intent, agent_state
+            )
+
+        reminder_result = await self._try_reminder_llm_resolve(query, agent_state)
+        if reminder_result is not None:
+            answer, agent_state = reminder_result
+            short_term = self._context_builder._short_term
+            short_term.push_message({"role": "user", "content": query})
+            short_term.push_message({"role": "assistant", "content": answer})
+            self.save_conversation_session(conversation_id, agent_state)
+            return answer, agent_state
+
         calendar_answer = self._try_calendar_fast_path(query, agent_state)
         if calendar_answer is not None:
             final_state = self._finish_calendar_fast_path(
@@ -645,11 +822,12 @@ class AgentRuntime:
             )
             return calendar_answer, final_state
 
-        file_intent = self._try_file_write_fast_path(query, agent_state)
-        if file_intent is not None:
-            return self._finish_file_write_fast_path(
-                query, conversation_id, file_intent, agent_state
+        file_search_answer = self._try_file_search_fast_path(query, agent_state)
+        if file_search_answer is not None:
+            final_state = self._finish_file_search_fast_path(
+                query, conversation_id, file_search_answer, agent_state
             )
+            return file_search_answer, final_state
 
         initial: _RunState = {
             "agent_state": _state_to_dict(agent_state),
@@ -715,6 +893,26 @@ class AgentRuntime:
             yield StreamRunComplete(answer=fast_answer, final_state=final_state)
             return
 
+        file_intent = await self._resolve_file_write_intent(query, agent_state)
+        if file_intent is not None:
+            answer, final_state = self._finish_file_write_fast_path(
+                query, conversation_id, file_intent, agent_state
+            )
+            yield answer
+            yield StreamRunComplete(answer=answer, final_state=final_state)
+            return
+
+        reminder_result = await self._try_reminder_llm_resolve(query, agent_state)
+        if reminder_result is not None:
+            answer, agent_state = reminder_result
+            short_term = self._context_builder._short_term
+            short_term.push_message({"role": "user", "content": query})
+            short_term.push_message({"role": "assistant", "content": answer})
+            self.save_conversation_session(conversation_id, agent_state)
+            yield answer
+            yield StreamRunComplete(answer=answer, final_state=agent_state)
+            return
+
         calendar_answer = self._try_calendar_fast_path(query, agent_state)
         if calendar_answer is not None:
             final_state = self._finish_calendar_fast_path(
@@ -724,13 +922,13 @@ class AgentRuntime:
             yield StreamRunComplete(answer=calendar_answer, final_state=final_state)
             return
 
-        file_intent = self._try_file_write_fast_path(query, agent_state)
-        if file_intent is not None:
-            answer, final_state = self._finish_file_write_fast_path(
-                query, conversation_id, file_intent, agent_state
+        file_search_answer = self._try_file_search_fast_path(query, agent_state)
+        if file_search_answer is not None:
+            final_state = self._finish_file_search_fast_path(
+                query, conversation_id, file_search_answer, agent_state
             )
-            yield answer
-            yield StreamRunComplete(answer=answer, final_state=final_state)
+            yield file_search_answer
+            yield StreamRunComplete(answer=file_search_answer, final_state=final_state)
             return
 
         state: _RunState = {
@@ -844,7 +1042,9 @@ class AgentRuntime:
             )
             and t in self._tool_definitions
         ]
-        system_prompt = _build_system_prompt(agent_state, assembled, tool_defs, ambient_context)
+        system_prompt = _build_system_prompt(
+            agent_state, assembled, tool_defs, ambient_context, query=state["query"]
+        )
         sync_prompt_cache(
             system_prompt,
             [td.name for td in tool_defs],
@@ -968,7 +1168,7 @@ class AgentRuntime:
 
     async def _tool_node(self, state: _RunState) -> dict:
         tool_name = state["next_tool_name"]
-        tool_args = state["next_tool_args"] or {}
+        tool_args = _normalize_tool_args(tool_name, state["next_tool_args"] or {})
 
         if self._requires_confirmation(tool_name):
             return {
