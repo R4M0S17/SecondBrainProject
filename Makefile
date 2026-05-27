@@ -13,6 +13,9 @@ install:
 test:
 	$(PYTHON) -m pytest tests/ -v --cov=core --cov-fail-under=80
 
+test-stable:
+	$(PYTHON) -m pytest tests/test_stable_fast_paths.py tests/test_file_write_fast_path.py tests/test_file_write_calendar_fusion.py tests/test_calendar_fast_path.py tests/test_file_search_fast_path.py tests/test_math_fast_path.py -v -m "not live" --tb=short
+
 smoke:
 	bash scripts/smoke.sh
 

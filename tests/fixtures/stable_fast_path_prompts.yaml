@@ -1,0 +1,141 @@
+# Stable Fast Path Prompts Fixture
+# 
+# Each entry defines a test case for validating fast path routing and content generation.
+# Used by test_stable_fast_paths.py to ensure file write and calendar fast paths work correctly
+# without requiring llama.cpp or any external inference backends.
+#
+# Schema:
+#   prompt: str — user's query
+#   expected_fast_path: str — which fast path should handle this (file_write, file_write_calendar_fusion, calendar_read, none)
+#   expected_content_source: str — "spec" (LLM generates content) or "literal" (content extracted from prompt)
+#   must_contain: list[str] — optional; substrings that must appear in generated content
+#   must_not_contain: list[str] — optional; substrings that should NOT appear
+#   description: str — optional; explanation for the test case
+
+file_write_simple_literal:
+  - prompt: "crea un archivo ejemplo.txt con contenido Hola"
+    expected_fast_path: "file_write"
+    expected_content_source: "literal"
+    must_contain: ["Hola"]
+    description: "Basic Spanish file write with literal content"
+
+  - prompt: "Write a file called test.txt with the word hello"
+    expected_fast_path: "file_write"
+    expected_content_source: "literal"
+    must_contain: ["hello"]
+    description: "Basic English file write with literal content"
+
+  - prompt: 'crea un archivo nota.txt con el contenido de "hola desde escritorio"'
+    expected_fast_path: "file_write"
+    expected_content_source: "literal"
+    must_contain: ["hola desde escritorio"]
+    description: "Spanish file write with quoted content"
+
+file_write_spec_generation:
+  - prompt: "crea un archivo pruebacodigo.txt con un programa python usando recursion para la secuencia de fibonacci"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["fibonacci", "def"]
+    must_not_contain: ["crea un archivo"]
+    description: "File write with spec requiring code generation (fibonacci)"
+
+  - prompt: "crea un archivo truthtable.txt con una tabla de la verdad para matematica discreta"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["tabla", "verdad"]
+    must_not_contain: ["crea un archivo"]
+    description: "File write with spec requiring truth table generation"
+
+  - prompt: "crea un archivo juegos.txt con 3 videojuegos de playstation"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["playstation"]
+    must_not_contain: ["3 videojuegos"]
+    description: "File write with spec requiring game list generation"
+
+  - prompt: "crea un archivo receta.txt con una receta de pizza casera con masa fina para 2 personas"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["pizza", "receta"]
+    must_not_contain: ["crea un archivo"]
+    description: "File write with spec requiring recipe generation"
+
+file_write_calendar_fusion:
+  - prompt: "crea un archivo calendarioprueba.txt con los 3 proximos cumpleaños en mi calendario"
+    expected_fast_path: "file_write_calendar_fusion"
+    expected_content_source: "calendar"
+    description: "File write fused with calendar data (upcoming birthdays)"
+
+  - prompt: "crea un archivo proximos_eventos.txt con los eventos del calendario para la próxima semana"
+    expected_fast_path: "file_write_calendar_fusion"
+    expected_content_source: "calendar"
+    description: "File write fused with calendar data (upcoming events)"
+
+  - prompt: "escribe en archivo mis_proximos_eventos.txt la lista de lo que tengo en calendario"
+    expected_fast_path: "file_write_calendar_fusion"
+    expected_content_source: "calendar"
+    description: "File write fused with calendar data (all upcoming events)"
+
+calendar_read_simple:
+  - prompt: "¿Qué tengo en el calendario?"
+    expected_fast_path: "calendar_read"
+    description: "Simple calendar read query"
+
+  - prompt: "¿Qué tengo en el calendario en las próximas 24 horas?"
+    expected_fast_path: "calendar_read"
+    description: "Calendar read with time constraint (24 hours)"
+
+  - prompt: "¿Cuál es mi próximo cumpleaños?"
+    expected_fast_path: "calendar_read"
+    description: "Calendar read for birthdays"
+
+  - prompt: "lista los proximos 4 cumpleaños en mi calendario"
+    expected_fast_path: "calendar_read"
+    description: "Calendar read for multiple birthdays with count"
+
+  - prompt: "cual es el proximo cumpleaños en mi calendario? dime solo uno"
+    expected_fast_path: "calendar_read"
+    description: "Calendar read for single birthday"
+
+  - prompt: "¿Qué tengo el miércoles?"
+    expected_fast_path: "calendar_read"
+    description: "Calendar read for specific day of week"
+
+file_search_simple:
+  - prompt: "busca archivos con nombre *.txt"
+    expected_fast_path: "file_search"
+    description: "File search by pattern"
+
+  - prompt: "encuentra archivos que contengan TODO"
+    expected_fast_path: "file_search"
+    description: "File search by content pattern"
+
+  - prompt: "¿Cuál fue el último archivo que modifiqué?"
+    expected_fast_path: "file_search"
+    description: "File search for recent files"
+
+no_fast_path:
+  - prompt: "Explícame cómo funciona la programación orientada a objetos"
+    expected_fast_path: "none"
+    description: "General question requiring LLM reasoning"
+
+  - prompt: "¿Cuál es la capital de Francia?"
+    expected_fast_path: "none"
+    description: "Trivia question not matching any fast path"
+
+  - prompt: "Ayúdame a entender este código Python: def foo(x): return x * 2"
+    expected_fast_path: "none"
+    description: "Code analysis question"
+
+math_fast_path:
+  - prompt: "¿Cuánto es 2 + 2?"
+    expected_fast_path: "math"
+    description: "Simple arithmetic"
+
+  - prompt: "5 * 4"
+    expected_fast_path: "math"
+    description: "Simple multiplication"
+
+  - prompt: "¿Cuánto es 10 * 5 - 3?"
+    expected_fast_path: "math"
+    description: "Complex arithmetic expression"

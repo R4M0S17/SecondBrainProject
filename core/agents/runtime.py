@@ -14,6 +14,7 @@ from loguru import logger
 
 from core.agents.calendar_fast_path import try_calendar_fast_path
 from core.agents.conversation_store import ConversationStore
+from core.agents.fast_path_router import FastPathResult, FastPathRouter
 from core.agents.file_content_generator import generate_file_content
 from core.agents.file_search_fast_path import try_file_search_fast_path
 from core.agents.file_write_calendar_fusion import (
@@ -490,6 +491,7 @@ class AgentRuntime:
         self._enricher = enricher
         self._conv_store = conversation_store
         self._active_conversation_id: str | None = None
+        self._fast_path_router = FastPathRouter(self._registry, self._tool_registry)
         self._graph = self._build_graph()
 
     def prepare_conversation(self, conversation_id: str | None, agent_id: str) -> None:
@@ -725,6 +727,75 @@ class AgentRuntime:
         self.save_conversation_session(conversation_id, agent_state)
         return agent_state
 
+    def _finish_reminder_fast_path(
+        self,
+        query: str,
+        conversation_id: str | None,
+        result: FastPathResult,
+        agent_state: AgentState,
+    ) -> tuple[str, AgentState]:
+        """Persist a reminder confirmation and pause for tool approval."""
+        mark_skip_context_enricher()
+        append_inference_warnings(list(result.warnings))
+        if (
+            result.answer is None
+            or result.pending_tool_name is None
+            or result.pending_tool_args is None
+        ):
+            raise ValueError("reminder fast path result is incomplete")
+        agent_state.pending_tool_name = result.pending_tool_name
+        agent_state.pending_tool_args = result.pending_tool_args
+        self._state_store.save(agent_state)
+        short_term = self._context_builder._short_term
+        short_term.push_message({"role": "user", "content": query})
+        short_term.push_message({"role": "assistant", "content": result.answer})
+        self.save_conversation_session(conversation_id, agent_state)
+        return result.answer, agent_state
+
+    def _apply_fast_path_result(
+        self,
+        query: str,
+        conversation_id: str | None,
+        result: FastPathResult,
+        agent_state: AgentState,
+    ) -> tuple[str, AgentState]:
+        if result.kind == "math":
+            if result.warnings:
+                append_inference_warnings(list(result.warnings))
+            final_state = self._finish_math_fast_path(
+                query, conversation_id, result.answer or "", agent_state
+            )
+            return result.answer or "", final_state
+
+        if result.kind == "file_write":
+            if result.warnings:
+                append_inference_warnings(list(result.warnings))
+            if result.file_write_intent is None:
+                raise ValueError("file_write fast path result is incomplete")
+            return self._finish_file_write_fast_path(
+                query, conversation_id, result.file_write_intent, agent_state
+            )
+
+        if result.kind == "reminder":
+            return self._finish_reminder_fast_path(query, conversation_id, result, agent_state)
+
+        if result.kind == "calendar_read":
+            warning = result.warnings[0] if result.warnings else "calendar_fast_path"
+            final_state = self._finish_calendar_fast_path(
+                query, conversation_id, result.answer or "", agent_state, warning=warning
+            )
+            return result.answer or "", final_state
+
+        if result.kind == "file_search":
+            if result.warnings:
+                append_inference_warnings(list(result.warnings))
+            final_state = self._finish_file_search_fast_path(
+                query, conversation_id, result.answer or "", agent_state
+            )
+            return result.answer or "", final_state
+
+        raise ValueError(f"unknown fast path kind: {result.kind}")
+
     # ---------------------------------------------------------------------- #
     # Public entry point
     # ---------------------------------------------------------------------- #
@@ -793,41 +864,11 @@ class AgentRuntime:
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
 
-        fast_answer = self._try_math_fast_path(query, agent_state)
-        if fast_answer is not None:
-            final_state = self._finish_math_fast_path(
-                query, conversation_id, fast_answer, agent_state
+        fast_path_result = await self._fast_path_router.try_all(query, agent_state)
+        if fast_path_result is not None:
+            return self._apply_fast_path_result(
+                query, conversation_id, fast_path_result, agent_state
             )
-            return fast_answer, final_state
-
-        file_intent = await self._resolve_file_write_intent(query, agent_state)
-        if file_intent is not None:
-            return self._finish_file_write_fast_path(
-                query, conversation_id, file_intent, agent_state
-            )
-
-        reminder_result = await self._try_reminder_llm_resolve(query, agent_state)
-        if reminder_result is not None:
-            answer, agent_state = reminder_result
-            short_term = self._context_builder._short_term
-            short_term.push_message({"role": "user", "content": query})
-            short_term.push_message({"role": "assistant", "content": answer})
-            self.save_conversation_session(conversation_id, agent_state)
-            return answer, agent_state
-
-        calendar_answer = self._try_calendar_fast_path(query, agent_state)
-        if calendar_answer is not None:
-            final_state = self._finish_calendar_fast_path(
-                query, conversation_id, calendar_answer, agent_state
-            )
-            return calendar_answer, final_state
-
-        file_search_answer = self._try_file_search_fast_path(query, agent_state)
-        if file_search_answer is not None:
-            final_state = self._finish_file_search_fast_path(
-                query, conversation_id, file_search_answer, agent_state
-            )
-            return file_search_answer, final_state
 
         initial: _RunState = {
             "agent_state": _state_to_dict(agent_state),
@@ -884,51 +925,13 @@ class AgentRuntime:
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
 
-        fast_answer = self._try_math_fast_path(query, agent_state)
-        if fast_answer is not None:
-            final_state = self._finish_math_fast_path(
-                query, conversation_id, fast_answer, agent_state
-            )
-            yield fast_answer
-            yield StreamRunComplete(answer=fast_answer, final_state=final_state)
-            return
-
-        file_intent = await self._resolve_file_write_intent(query, agent_state)
-        if file_intent is not None:
-            answer, final_state = self._finish_file_write_fast_path(
-                query, conversation_id, file_intent, agent_state
+        fast_path_result = await self._fast_path_router.try_all(query, agent_state)
+        if fast_path_result is not None:
+            answer, final_state = self._apply_fast_path_result(
+                query, conversation_id, fast_path_result, agent_state
             )
             yield answer
             yield StreamRunComplete(answer=answer, final_state=final_state)
-            return
-
-        reminder_result = await self._try_reminder_llm_resolve(query, agent_state)
-        if reminder_result is not None:
-            answer, agent_state = reminder_result
-            short_term = self._context_builder._short_term
-            short_term.push_message({"role": "user", "content": query})
-            short_term.push_message({"role": "assistant", "content": answer})
-            self.save_conversation_session(conversation_id, agent_state)
-            yield answer
-            yield StreamRunComplete(answer=answer, final_state=agent_state)
-            return
-
-        calendar_answer = self._try_calendar_fast_path(query, agent_state)
-        if calendar_answer is not None:
-            final_state = self._finish_calendar_fast_path(
-                query, conversation_id, calendar_answer, agent_state
-            )
-            yield calendar_answer
-            yield StreamRunComplete(answer=calendar_answer, final_state=final_state)
-            return
-
-        file_search_answer = self._try_file_search_fast_path(query, agent_state)
-        if file_search_answer is not None:
-            final_state = self._finish_file_search_fast_path(
-                query, conversation_id, file_search_answer, agent_state
-            )
-            yield file_search_answer
-            yield StreamRunComplete(answer=file_search_answer, final_state=final_state)
             return
 
         state: _RunState = {

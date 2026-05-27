@@ -106,3 +106,23 @@ Existen **dos copias** del backend. Si solo editas una, la otra ruta de arranque
 
 ### Regla práctica
 Modular **sí** a nivel de handlers/fast paths; **no** a nivel de “cualquier edit en `runtime.py` es seguro”. Cambio pequeño + tests + mismas frases E2E del manual test.
+
+### Fast paths estables — documentación congelada (Fase 1 ✅)
+
+Antes de editar file write, calendario o el orden en `runtime.py`, leer:
+
+- [`docs/architecture/fast-paths.md`](docs/architecture/fast-paths.md) — orden del pipeline
+- [`docs/architecture/stable-prompts.md`](docs/architecture/stable-prompts.md) — prompts que no deben romperse
+- [`docs/architecture/adding-a-fast-path.md`](docs/architecture/adding-a-fast-path.md) — checklist para features nuevas
+
+**Regresión obligatoria** al tocar módulos estables (`file_write_*`, `file_write_calendar_fusion`, `calendar_fast_path`, orden en `runtime.py`):
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_file_write_fast_path.py \
+  tests/test_file_write_calendar_fusion.py \
+  tests/test_calendar_fast_path.py \
+  tests/test_file_search_fast_path.py
+```
+
+(Fase 2 añadirá `make test-stable` con la misma suite + fixtures YAML.)

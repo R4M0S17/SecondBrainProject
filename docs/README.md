@@ -7,6 +7,8 @@ Canonical technical docs live under **`docs/`** at the repository root (not unde
 | **Project entry** | [`../README.md`](../README.md) | One-screen overview + links |
 | **Architecture & ops** | [`../CLAUDE.md`](../CLAUDE.md) | Stack overview, make targets, env vars, REST API sketch |
 | **Codebase map** | [`architecture/program-overview.md`](architecture/program-overview.md) | Full directory and module reference |
+| **Fast paths (stable)** | [`architecture/fast-paths.md`](architecture/fast-paths.md) · [`stable-prompts.md`](architecture/stable-prompts.md) · [`adding-a-fast-path.md`](architecture/adding-a-fast-path.md) | Pipeline order, regression prompts, checklist for new features |
+| **Fast path evolution plan** | [`architecture/fast-path-evolution-plan.md`](architecture/fast-path-evolution-plan.md) | Phased plan: docs, test-stable, router refactor |
 | **Plans & roadmaps** | [`plans/README.md`](plans/README.md) | Stabilization, vision, feature specs, optimization |
 | **Connection checklist** | [`connection/progress.md`](connection/progress.md) | Backend ↔ frontend wiring modules and smoke-test notes |
 | **HTTP / API usage** | [`connection/api-guide.md`](connection/api-guide.md) | REST examples |
