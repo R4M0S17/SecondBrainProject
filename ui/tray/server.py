@@ -486,6 +486,33 @@ def _build_metadata(
     )
 
 
+def _build_augmented_question(
+    question: str,
+    attachments: list[FileAttachment] | None,
+) -> str:
+    if not attachments:
+        return question
+
+    context_parts = ["[Attached Files Context]"]
+    for att in attachments:
+        if att.type == "image":
+            context_parts.append(
+                f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
+            )
+        else:
+            context_parts.append(
+                f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
+            )
+    context_parts.append("[Instruction]")
+    context_parts.append(
+        "La pregunta del usuario se refiere al contenido de los archivos adjuntos. "
+        "Usa ese contenido para responder."
+    )
+    context_parts.append("[User Question]")
+    context_parts.append(question)
+    return "\n\n".join(context_parts)
+
+
 def _meta_to_model(meta: ResponseMetadata) -> ResponseMetadataModel:
     pending: PendingToolModel | None = None
     if meta.pending_tool:
@@ -528,26 +555,8 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             detail="Runtime not initialized. Start the llama.cpp server and reload.",
         )
 
-    # Build augmented question containing attachments for LLM context only (used both for routing and runtime)
-    augmented_question = req.question
-    if getattr(req, "attachments", None):
-        context_parts = ["[Attached Files Context]"]
-        for att in req.attachments:
-            if att.type == "image":
-                context_parts.append(
-                    f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
-                )
-            else:
-                context_parts.append(
-                    f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
-                )
-        context_parts.append("[User Question]")
-        context_parts.append(req.question)
-        augmented_question = "\n\n".join(context_parts)
-
     if req.agent == "auto":
-        # Use augmented question for routing so attachments influence agent selection
-        route = await app_state.router.route_with_llm(augmented_question)
+        route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
         query_text = route.query
     else:
@@ -591,22 +600,7 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             pass
 
     start = time.perf_counter()
-    # Build augmented question containing attachments for LLM context only
-    augmented_question = query_text
-    if getattr(req, "attachments", None):
-        context_parts = ["[Attached Files Context]"]
-        for att in req.attachments:
-            if att.type == "image":
-                context_parts.append(
-                    f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
-                )
-            else:
-                context_parts.append(
-                    f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
-                )
-        context_parts.append("[User Question]")
-        context_parts.append(query_text)
-        augmented_question = "\n\n".join(context_parts)
+    augmented_question = _build_augmented_question(query_text, req.attachments)
 
     try:
         answer, final_state = await app_state.runtime.run(
@@ -667,17 +661,6 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
             detail="Runtime not initialized. Start the llama.cpp server and reload.",
         )
 
-    if req.agent == "auto":
-        route = await app_state.router.route_with_llm(req.question)
-        agent_id = route.agent_id
-        query_text = route.query
-    else:
-        agent_id = req.agent
-        query_text = req.question
-
-    app_state.active_agent_id = agent_id
-    app_state.metrics.set_active_agent(agent_id)
-
     model_name = "phi3:mini"
     provider_name = "unknown"
     warnings: list[str] = []
@@ -693,35 +676,23 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
         except Exception:
             warnings.append("provider_fallback")
 
-    stream_conv_id = req.conversation_id
-    if stream_conv_id is None or app_state.conv_store.get(stream_conv_id) is None:
-        stream_conv_id = app_state.conv_store.create(agent_id)
-
-    # Build augmented question for streaming endpoint (LLM context only)
-    augmented_question = req.question
-    if getattr(req, "attachments", None):
-        context_parts = ["[Attached Files Context]"]
-        for att in req.attachments:
-            if att.type == "image":
-                context_parts.append(
-                    f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
-                )
-            else:
-                context_parts.append(
-                    f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
-                )
-        context_parts.append("[User Question]")
-        context_parts.append(req.question)
-        augmented_question = "\n\n".join(context_parts)
-
     if req.agent == "auto":
-        # Use augmented question for routing so attachments influence agent selection
-        route = await app_state.router.route_with_llm(augmented_question)
+        route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
         query_text = route.query
     else:
         agent_id = req.agent
         query_text = req.question
+
+    app_state.active_agent_id = agent_id
+    app_state.metrics.set_active_agent(agent_id)
+
+    stream_conv_id = req.conversation_id
+    if stream_conv_id is None or app_state.conv_store.get(stream_conv_id) is None:
+        stream_conv_id = app_state.conv_store.create(agent_id)
+
+    # Build augmented question for streaming endpoint (LLM context only)
+    augmented_question = _build_augmented_question(query_text, req.attachments)
 
     # Phase 2: always use runtime.run() (tool loop) for /query/stream so live-data
     # questions invoke tools; token streaming is simulated from the final answer.
