@@ -352,8 +352,8 @@ class TestFileSearchFastPath:
     def test_file_search_queries_trigger_fast_path(self, query):
         """File search queries should be detected."""
         result = try_file_search_fast_path(query, GENERAL_TOOLS)
-        # File search might return None if tools aren't available, but should at least not error
-        assert result is None or isinstance(result, dict)  # Should not raise
+        # File search might return None if tools aren't available, or a string result from search_files
+        assert result is None or isinstance(result, str)  # Should not raise
 
     @pytest.mark.parametrize(
         "query",
@@ -365,8 +365,8 @@ class TestFileSearchFastPath:
     def test_non_search_queries_skip_fast_path(self, query):
         """Queries about searching (not doing a search) should be skipped."""
         result = try_file_search_fast_path(query, GENERAL_TOOLS)
-        # These should return None or skip gracefully
-        assert result is None or isinstance(result, dict)  # Should not raise
+        # These should return None or a string result from search_files
+        assert result is None or isinstance(result, str)  # Should not raise
 
 
 # ============================================================================
