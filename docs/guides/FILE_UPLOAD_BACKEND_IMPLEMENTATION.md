@@ -321,6 +321,26 @@ Update `InputArea.tsx` to upload attached files right before calling the query e
 
 ---
 
+### STEP 6: Server-side validation, size limits, and safety (DONE)
+
+> Implementation: Added strict server-side validation in the upload endpoint to enforce allowed MIME-types, per-file size limit (10 MB), and total upload size limit (30 MB). Upload stream is monitored while copying to a secure temporary file to fail fast on oversized payloads. The endpoint returns 413 (Payload Too Large) when limits are exceeded.
+
+What was changed in the backend:
+
+- Added MAX_SINGLE_FILE_BYTES = 10 * 1024 * 1024 (10 MB) and MAX_TOTAL_UPLOAD_BYTES = 30 * 1024 * 1024 (30 MB).
+- Enforced allowed MIME types to match frontend supported list (images, PDFs, text, docx).
+- Streamed file copy into a NamedTemporaryFile while tracking bytes copied; aborts and cleans up when limits are exceeded.
+- Returns concise HTTP errors (400 for invalid type/processing errors, 413 for size limits).
+
+### STEP 7: Tests and documentation (DONE)
+
+> Implementation: Added unit tests for the upload endpoint and updated this guide to mark steps complete.
+
+What was added:
+
+- tests/test_file_upload_endpoint.py — verifies successful processing (with a patched processor) and oversized-file rejection.
+- Documentation updated: STEP 6 and STEP 7 marked DONE and implementation details recorded.
+
 ## 🧪 Integration Verification Points
 
 To ensure the file upload functionality is 100% correct, perform the following validation steps:

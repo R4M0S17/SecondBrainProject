@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import json
 import os
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -22,7 +23,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Security, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Security,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
@@ -35,6 +46,7 @@ from core.inference.inference_warnings import clear_inference_warnings, consume_
 from core.inference.ram_preflight import RAM_WARNING_CRITICAL, collect_ram_warnings
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
+from core.tools.handlers.upload import process_uploaded_file
 from ui.tray.wizard import recommend_lite_profile
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -110,10 +122,18 @@ class ToolConfirmRequest(BaseModel):
     decision: Literal["approve", "deny"]
 
 
+class FileAttachment(BaseModel):
+    filename: str
+    mime_type: str
+    content: str  # Contains raw text for docs/PDFs, or base64 for images
+    type: str  # "pdf", "image", "text", or "unknown"
+
+
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     agent: str = GENERAL_AGENT_ID
     conversation_id: str | None = None
+    attachments: list[FileAttachment] | None = None
 
 
 class QueryResponse(BaseModel):
@@ -363,6 +383,94 @@ app.add_middleware(
 api = APIRouter(prefix="/api")
 
 
+# Dedicated secure file upload endpoint (STEP 1 implementation)
+@api.post("/files/upload")
+async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
+    """Upload and pre-process documents/images safely.
+
+    Reuses existing core.tools.handlers.upload extraction logic.
+
+    Adds server-side validation and size limits to prevent abuse and DB bloat.
+    """
+    # Limits
+    MAX_SINGLE_FILE_BYTES = 10 * 1024 * 1024  # 10 MB per file
+    MAX_TOTAL_UPLOAD_BYTES = 30 * 1024 * 1024  # 30 MB total per request
+
+    ALLOWED_MIMES = {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+        "text/plain",
+        "text/csv",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    }
+
+    parsed_attachments: list[dict[str, Any]] = []
+    total_bytes = 0
+
+    for file in files:
+        # Basic content-type whitelist
+        if file.content_type and file.content_type not in ALLOWED_MIMES:
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported file type: {file.content_type}"
+            )
+
+        # Create a safe temporary file matching the suffix of the original upload
+        suffix = Path(file.filename).suffix if file.filename else ""
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                temp_path = tmp.name
+                # Stream file into temp file and enforce per-file + total limits
+                while True:
+                    chunk = file.file.read(8192)
+                    if not chunk:
+                        break
+                    tmp.write(chunk)
+                    total_bytes += len(chunk)
+
+                    if total_bytes > MAX_TOTAL_UPLOAD_BYTES:
+                        # Clean up and respond with 413
+                        raise HTTPException(status_code=413, detail="Total upload size exceeded")
+
+                    if tmp.tell() > MAX_SINGLE_FILE_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File '{file.filename or 'unknown'}' exceeds single-file size limit",
+                        )
+                tmp.flush()
+
+            # Reuses the existing high-quality tool validator & processor
+            result = process_uploaded_file(
+                temp_path,
+                authorized_paths=app_state.authorized_read_paths,
+            )
+
+            if isinstance(result, dict) and "error" in result:
+                raise HTTPException(status_code=400, detail=result["error"])
+
+            parsed_attachments.append(
+                {
+                    "filename": file.filename or "unknown",
+                    "mime_type": result.get("metadata", {}).get(
+                        "mime_type", "application/octet-stream"
+                    ),
+                    "content": result.get("content"),
+                    "type": result.get("type", "unknown"),
+                }
+            )
+
+        finally:
+            # Guarantee temporary file is deleted immediately from disk
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    return parsed_attachments
+
+
 def _build_metadata(
     total_latency_ms: float,
     model_name: str,
@@ -465,9 +573,26 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             pass
 
     start = time.perf_counter()
+    # Build augmented question containing attachments for LLM context only
+    augmented_question = query_text
+    if getattr(req, "attachments", None):
+        context_parts = ["[Attached Files Context]"]
+        for att in req.attachments:
+            if att.type == "image":
+                context_parts.append(
+                    f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
+                )
+            else:
+                context_parts.append(
+                    f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
+                )
+        context_parts.append("[User Question]")
+        context_parts.append(query_text)
+        augmented_question = "\n\n".join(context_parts)
+
     try:
         answer, final_state = await app_state.runtime.run(
-            query_text, agent_id, conversation_id=conv_id
+            augmented_question, agent_id, conversation_id=conv_id
         )
     except Exception as exc:
         logger.exception("Runtime error during /query")
@@ -503,7 +628,13 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     meta_model = _meta_to_model(meta)
 
     try:
-        app_state.conv_store.append(conv_id, req.question, answer, meta_model.model_dump())
+        history_question = req.question
+        if getattr(req, "attachments", None):
+            filenames = ", ".join(
+                att.filename for att in req.attachments if getattr(att, "filename", None)
+            )
+            history_question = f"{req.question}\n\n[Attached files: {filenames}]"
+        app_state.conv_store.append(conv_id, history_question, answer, meta_model.model_dump())
     except Exception:
         logger.exception("Failed to persist conversation turn for {}", conv_id)
 
@@ -548,6 +679,23 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
     if stream_conv_id is None or app_state.conv_store.get(stream_conv_id) is None:
         stream_conv_id = app_state.conv_store.create(agent_id)
 
+    # Build augmented question for streaming endpoint (LLM context only)
+    augmented_question = query_text
+    if getattr(req, "attachments", None):
+        context_parts = ["[Attached Files Context]"]
+        for att in req.attachments:
+            if att.type == "image":
+                context_parts.append(
+                    f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
+                )
+            else:
+                context_parts.append(
+                    f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
+                )
+        context_parts.append("[User Question]")
+        context_parts.append(query_text)
+        augmented_question = "\n\n".join(context_parts)
+
     # Phase 2: always use runtime.run() (tool loop) for /query/stream so live-data
     # questions invoke tools; token streaming is simulated from the final answer.
     pre_trace_len = 0
@@ -578,7 +726,7 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
             final_state = None
             live_streamed = False
             async for chunk in app_state.runtime.run_streaming(
-                query_text, agent_id, conversation_id=stream_conv_id
+                augmented_question, agent_id, conversation_id=stream_conv_id
             ):
                 if isinstance(chunk, StreamRunComplete):
                     final_state = chunk.final_state
@@ -633,7 +781,15 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
         meta_model = _meta_to_model(meta)
 
         try:
-            app_state.conv_store.append(stream_conv_id, query_text, answer, meta_model.model_dump())
+            history_question = query_text
+            if getattr(req, "attachments", None):
+                filenames = ", ".join(
+                    att.filename for att in req.attachments if getattr(att, "filename", None)
+                )
+                history_question = f"{query_text}\n\n[Attached files: {filenames}]"
+            app_state.conv_store.append(
+                stream_conv_id, history_question, answer, meta_model.model_dump()
+            )
         except Exception:
             logger.exception("Failed to persist streaming (tools) turn for {}", stream_conv_id)
 
