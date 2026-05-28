@@ -2,13 +2,21 @@ import { useRef, useState, KeyboardEvent, ChangeEvent } from "react";
 import { useChatStore } from "../../stores/chat";
 import { useServicesStore } from "../../stores/services";
 import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
-import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP } from "../../api/client";
+import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles } from "../../api/client";
 import CommandAutocomplete from "./CommandAutocomplete";
+import type { FileAttachment } from "../../api/types";
+
+interface UploadedFile {
+  file: File;
+  preview: string;
+}
 
 export default function InputArea() {
   const [text, setText] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
     addMessage,
@@ -75,7 +83,16 @@ export default function InputArea() {
     setShowAutocomplete(false);
     if (textareaRef.current) textareaRef.current.style.height = "44px";
 
-    addMessage({ role: "user", content: query });
+    // Build message content with file info
+    let messageContent = query;
+    const rawFilesToUpload = uploadedFiles.map((uf) => uf.file);
+    if (uploadedFiles.length > 0) {
+      const fileNames = uploadedFiles.map((uf) => uf.file.name).join(", ");
+      messageContent = `${query}\n\n[Attached files: ${fileNames}]`;
+    }
+
+    addMessage({ role: "user", content: messageContent });
+    clearAllFiles();
     setLoading(true);
 
     const ctrl = new AbortController();
@@ -85,6 +102,12 @@ export default function InputArea() {
     let hasPendingConfirm = false;
 
     try {
+      // 2. Upload and pre-process files via the secure backend endpoint
+      let attachments: FileAttachment[] = [];
+      if (rawFilesToUpload.length > 0) {
+        attachments = await uploadFiles(rawFilesToUpload);
+      }
+
       if (activeAgent === "calendar") {
         // Calendar agent uses tool execution which requires the non-streaming path.
         // Fake streaming UX by replaying the answer character-by-character.
@@ -93,6 +116,7 @@ export default function InputArea() {
             question: query,
             agent: AGENT_ID_MAP[activeAgent],
             conversation_id: conversationId ?? undefined,
+            attachments: attachments.length > 0 ? attachments : undefined,
           },
           ctrl.signal,
         );
@@ -147,6 +171,7 @@ export default function InputArea() {
             question: query,
             agent: AGENT_ID_MAP[activeAgent],
             conversation_id: conversationId ?? undefined,
+            attachments: attachments.length > 0 ? attachments : undefined,
           },
           (token) => appendToken(assistantId, token),
           ctrl.signal,
@@ -228,8 +253,86 @@ export default function InputArea() {
     textareaRef.current?.focus();
   };
 
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const supportedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "image/webp",
+      "application/pdf",
+      "text/plain",
+      "text/csv",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
+    ];
+
+    const validFiles = files.filter((file) => supportedTypes.includes(file.type));
+    
+    const newFiles = validFiles.map((file) => ({
+      file,
+      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
+    }));
+
+    setUploadedFiles((prev) => [...prev, ...newFiles]);
+    
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setUploadedFiles((prev) => {
+      const updated = [...prev];
+      if (updated[index].preview) {
+        URL.revokeObjectURL(updated[index].preview);
+      }
+      updated.splice(index, 1);
+      return updated;
+    });
+  };
+
+  const clearAllFiles = () => {
+    uploadedFiles.forEach((uf) => {
+      if (uf.preview) URL.revokeObjectURL(uf.preview);
+    });
+    setUploadedFiles([]);
+  };
+
   return (
     <div className="bg-[#1c1b23] border-t border-[#242736] p-3 shrink-0">
+      {/* File preview area */}
+      {uploadedFiles.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {uploadedFiles.map((uf, idx) => (
+            <div
+              key={idx}
+              className="relative bg-[#242736] border border-[#344152] rounded p-2 flex items-center gap-2 text-xs text-[#e5e0ed]"
+            >
+              {uf.preview ? (
+                <img src={uf.preview} alt={uf.file.name} className="w-12 h-12 rounded object-cover" />
+              ) : (
+                <div className="w-12 h-12 bg-[#1c1b23] rounded flex items-center justify-center text-[#8b8fa8]">
+                  📄
+                </div>
+              )}
+              <div className="flex flex-col flex-1 min-w-0">
+                <span className="truncate font-medium">{uf.file.name}</span>
+                <span className="text-[#8b8fa8]">{(uf.file.size / 1024).toFixed(1)} KB</span>
+              </div>
+              <button
+                onClick={() => removeFile(idx)}
+                className="ml-1 text-[#8b8fa8] hover:text-[#e5e0ed] transition-colors"
+                aria-label="Remove file"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="relative flex items-end gap-2 bg-[#201f27] border border-[#242736] rounded p-1 focus-within:border-[#94a3b8] transition-colors">
         {/* Command autocomplete */}
         {showAutocomplete && (
@@ -251,6 +354,32 @@ export default function InputArea() {
           aria-label="Chat input"
           disabled={inputDisabled}
         />
+
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,.pdf,.txt,.csv,.doc,.docx"
+          onChange={handleFileSelect}
+          className="hidden"
+          aria-label="File upload"
+        />
+
+        {/* File upload button */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={inputDisabled}
+          className="w-[44px] h-[44px] bg-[#242736] text-[#8b8fa8] rounded flex items-center justify-center transition-colors hover:bg-[#344152] hover:text-[#e5e0ed] active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="Upload files"
+          title="Upload files (images, PDFs, documents)"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </button>
 
         {isLoading ? (
           <button
