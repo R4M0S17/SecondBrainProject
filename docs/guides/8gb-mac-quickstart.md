@@ -2,6 +2,8 @@
 
 One-page path to a working Cerebro on a memory-constrained Mac (for example MacBook Pro M1 with 8 GB unified RAM).
 
+> Nota: Desarrollo en un MacBook Pro M1 (8 GB). En mi experiencia, con los modelos actuales funciona muy bien; tiempos de respuesta observados ≈ 20–40 segundos.
+
 ## 1. Install once
 
 From the repository root:

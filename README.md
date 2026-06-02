@@ -75,3 +75,7 @@ Notas:
 - Algunos modelos piden aceptación de licencia y requieren login en Hugging Face (usa `huggingface-cli login`).
 - Para descargas repetidas o modelos grandes se recomienda usar `scripts/download_model.py` incluido en este repositorio o seguir `docs/testing/QUICK_START.md`.
 
+Nota de desarrollo:
+- Este repositorio se está desarrollando en un MacBook Pro M1 (8 GB RAM). Ha estado funcionando muy bien con los modelos actuales; los tiempos de respuesta observados son de aproximadamente 20–40 segundos en este hardware.
+
+

@@ -2,6 +2,8 @@
 
 ## TL;DR: Run Tests in 3 Steps
 
+> Nota: Desarrollo y pruebas en un MacBook Pro M1 con 8 GB RAM. Con los modelos actuales la app responde en ~20–40s.
+
 ### Step 1: Baseline (Qwen - Current Model)
 ```bash
 # Terminal 1: Start inference engine
