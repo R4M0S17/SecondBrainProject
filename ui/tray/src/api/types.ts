@@ -43,10 +43,18 @@ export interface ResponseMetadata {
   selection_rationale?: string;
 }
 
+export interface FileAttachment {
+  filename: string;
+  mime_type: string;
+  content: string; // raw text for docs/PDFs or base64 for images
+  type: string; // "pdf" | "image" | "text" | "unknown"
+}
+
 export interface QueryRequest {
   question: string;
   agent?: string;
   conversation_id?: string;
+  attachments?: FileAttachment[];
 }
 
 export interface QueryResponse {

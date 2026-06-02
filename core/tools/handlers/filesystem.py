@@ -80,6 +80,10 @@ def _require_authorized_path(
 
 
 def read_file(path: str, authorized_paths: list[str]) -> str:
+    """
+    Read entire file content (up to READ_FILE_MAX_BYTES).
+    Safe: validates path authorization + handles encoding errors.
+    """
     _require_authorized_path(path, authorized_paths, operation="leer")
     p = Path(path)
     if not p.exists():
@@ -89,13 +93,76 @@ def read_file(path: str, authorized_paths: list[str]) -> str:
     try:
         raw = p.read_bytes()
     except OSError as exc:
+        logger.error("read_file OSError: {}", exc)
         return f"Error reading file: {exc}"
+
     total = len(raw)
     if total <= READ_FILE_MAX_BYTES:
         return raw.decode("utf-8", errors="replace")
+
     text = raw[:READ_FILE_MAX_BYTES].decode("utf-8", errors="replace")
     hint = _READ_TRUNCATION_HINT.format(shown=READ_FILE_MAX_BYTES, total=total)
     return f"{text}\n{hint}"
+
+
+def read_file_range(
+    path: str,
+    authorized_paths: list[str],
+    start_byte: int = 0,
+    end_byte: int | None = None,
+) -> str:
+    """
+    Read a specific byte range from a file (useful for large files).
+
+    Args:
+        path: File path
+        authorized_paths: List of authorized root paths
+        start_byte: Start offset (default: 0)
+        end_byte: End offset (default: start + MAX_BYTES). If None, reads from start to end.
+
+    Returns:
+        Text content or error message
+    """
+    _require_authorized_path(path, authorized_paths, operation="leer")
+    p = Path(path)
+    if not p.exists():
+        return f"Error: file not found: {path}"
+    if not p.is_file():
+        return f"Error: not a file: {path}"
+
+    try:
+        raw = p.read_bytes()
+    except OSError as exc:
+        logger.error("read_file_range OSError: {}", exc)
+        return f"Error reading file: {exc}"
+
+    total = len(raw)
+
+    # Validate range
+    if start_byte < 0 or start_byte >= total:
+        return f"Error: start_byte {start_byte} out of range [0, {total})"
+
+    if end_byte is None:
+        end_byte = min(start_byte + READ_FILE_MAX_BYTES, total)
+    elif end_byte > total:
+        end_byte = total
+    elif end_byte <= start_byte:
+        return f"Error: end_byte {end_byte} must be > start_byte {start_byte}"
+
+    chunk = raw[start_byte:end_byte]
+    text = chunk.decode("utf-8", errors="replace")
+
+    # Show range info
+    header = f"[Bytes {start_byte:,}–{end_byte:,} of {total:,}]\n"
+
+    if end_byte < total:
+        hint = (
+            f"\n[Truncado: mostrando {end_byte - start_byte:,} de {total - start_byte:,} bytes restantes. "
+            f"Usa read_file_range con start_byte={end_byte} para obtener más.]"
+        )
+        return header + text + hint
+
+    return header + text
 
 
 def write_file(path: str, content: str, authorized_paths: list[str]) -> str:

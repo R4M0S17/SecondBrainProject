@@ -186,6 +186,7 @@ def register_filesystem_tools(
         search_files,
         write_file,
     )
+    from core.tools.handlers.upload import handle_file_upload
 
     registry.register(
         ToolDefinition(
@@ -297,6 +298,20 @@ def register_filesystem_tools(
             scope=ToolScope.LOCAL,
             audit_level=AuditLevel.FULL,
             parameters={"path": "str — ruta absoluta al archivo a eliminar"},
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="upload_file",
+            description="Process an uploaded file (PDF, image, or text) and extract its content for AI analysis",
+            handler=partial(handle_file_upload, authorized_paths=authorized_read_paths),
+            required_permission="tools.fs.read",
+            requires_confirmation=False,
+            scope=ToolScope.LOCAL,
+            audit_level=AuditLevel.METADATA,
+            parameters={
+                "file_path": "str — ruta absoluta al archivo cargado (PDF, imagen o texto)"
+            },
         )
     )
 

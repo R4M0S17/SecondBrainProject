@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock
@@ -28,8 +29,14 @@ class _RunStreamingMock:
         self.final_state = final_state
         self.calls: list[tuple] = []
 
-    async def __call__(self, query: str, agent_id: str, conversation_id: str | None = None):
-        self.calls.append((query, agent_id, conversation_id))
+    async def __call__(
+        self,
+        query: str,
+        agent_id: str,
+        conversation_id: str | None = None,
+        intent_query: str | None = None,
+    ):
+        self.calls.append((query, agent_id, conversation_id, intent_query))
         yield self.answer
         yield StreamRunComplete(answer=self.answer, final_state=self.final_state)
 
@@ -45,6 +52,7 @@ def reset_state(tmp_path):
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
     app_state.ram_monitor = RamMonitor()
+    app_state.model_manager = None
     app_state.llama_health_monitor = None
     yield
     app_state.runtime = None
@@ -55,6 +63,7 @@ def reset_state(tmp_path):
     app_state._config = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
     app_state.ram_monitor = RamMonitor()
+    app_state.model_manager = None
     app_state.llama_health_monitor = None
 
 
@@ -73,6 +82,33 @@ def mock_runtime():
     rt.run_streaming = rt._run_streaming_mock
     app_state.runtime = rt
     return rt
+
+
+@pytest.mark.asyncio
+async def test_lifespan_does_not_block_on_model_manager_start(monkeypatch):
+    monkeypatch.setattr(
+        "core.observability.macos_perms.probe_calendar_permission",
+        AsyncMock(return_value="unknown"),
+    )
+
+    started = asyncio.Event()
+
+    class SlowModelManager:
+        async def start(self):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def stop(self):
+            return None
+
+    app_state.model_manager = SlowModelManager()
+    app_state.llama_health_monitor = None
+
+    async def _enter_lifespan():
+        async with app.router.lifespan_context(app):
+            await asyncio.wait_for(started.wait(), timeout=0.2)
+
+    await asyncio.wait_for(_enter_lifespan(), timeout=0.5)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -252,6 +288,35 @@ async def test_query_returns_runtime_answer(client, mock_runtime):
     async with client as c:
         resp = await c.post("/api/query", json={"question": "¿Cuál es la respuesta?"})
     assert resp.json()["answer"] == "La respuesta es 42."
+
+
+@pytest.mark.asyncio
+async def test_query_with_attachments_includes_attachment_text_in_runtime_query(
+    client, mock_runtime
+):
+    attachment = {
+        "filename": "notes.txt",
+        "mime_type": "text/plain",
+        "content": "El proyecto usa FastAPI para la API y React para el frontend.",
+        "type": "text",
+    }
+    async with client as c:
+        resp = await c.post(
+            "/api/query",
+            json={
+                "question": "¿De qué trata el archivo?",
+                "agent": "general-v1",
+                "attachments": [attachment],
+            },
+        )
+
+    assert resp.status_code == 200
+    call_args = mock_runtime.run.call_args
+    assert call_args is not None
+    augmented_query = call_args.args[0]
+    assert "FastAPI" in augmented_query
+    assert "notes.txt" in augmented_query
+    assert call_args.kwargs["intent_query"] == "¿De qué trata el archivo?"
 
 
 @pytest.mark.asyncio

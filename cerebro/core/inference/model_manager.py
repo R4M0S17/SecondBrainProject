@@ -79,19 +79,26 @@ class ModelManager:
         return f"http://127.0.0.1:{_EMBED_PORT}"
 
     async def start(self) -> None:
-        model_path = _MODELS_DIR / _ROUTER_MODEL
-        self._router_proc = self._launch(str(model_path), _ROUTER_PORT, _ROUTER_CTX)
-        logger.info("Waiting for router (SmolLM2) on port {}", _ROUTER_PORT)
-        await self._wait_healthy(_ROUTER_PORT)
-        logger.info("Router ready at {}", self.router_url)
+        try:
+            model_path = _MODELS_DIR / _ROUTER_MODEL
+            self._router_proc = self._launch(str(model_path), _ROUTER_PORT, _ROUTER_CTX)
+            logger.info("Waiting for router (SmolLM2) on port {}", _ROUTER_PORT)
+            await self._wait_healthy(_ROUTER_PORT)
+            logger.info("Router ready at {}", self.router_url)
 
-        embed_path = _MODELS_DIR / _EMBED_MODEL
-        self._embed_proc = self._launch_embed(str(embed_path), _EMBED_PORT, _EMBED_CTX)
-        logger.info("Waiting for embedding server (Jina) on port {}", _EMBED_PORT)
-        await self._wait_healthy(_EMBED_PORT)
-        logger.info("Embedding server ready at {}", self.embed_url)
+            embed_path = _MODELS_DIR / _EMBED_MODEL
+            self._embed_proc = self._launch_embed(str(embed_path), _EMBED_PORT, _EMBED_CTX)
+            logger.info("Waiting for embedding server (Jina) on port {}", _EMBED_PORT)
+            await self._wait_healthy(_EMBED_PORT)
+            logger.info("Embedding server ready at {}", self.embed_url)
 
-        self._watchdog_task = asyncio.create_task(self._watchdog())
+            self._watchdog_task = asyncio.create_task(self._watchdog())
+        except asyncio.CancelledError:
+            await self.stop()
+            raise
+        except Exception:
+            await self.stop()
+            raise
 
     async def stop(self) -> None:
         if self._watchdog_task:

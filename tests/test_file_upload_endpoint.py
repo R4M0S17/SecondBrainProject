@@ -12,13 +12,7 @@ def client():
 
 
 @pytest.mark.asyncio
-async def test_files_upload_endpoint_processes_and_returns_json(client, monkeypatch):
-    # Patch the processor to avoid heavy dependencies during unit tests
-    def _fake_processor(path, authorized_paths=None):
-        return {"metadata": {"mime_type": "text/plain"}, "content": "hello", "type": "text"}
-
-    monkeypatch.setattr("ui.tray.server.process_uploaded_file", _fake_processor)
-
+async def test_files_upload_endpoint_processes_and_returns_json(client):
     async with client as c:
         files = {"files": ("test.txt", b"hello world", "text/plain")}
         resp = await c.post("/api/files/upload", files=files)
@@ -28,6 +22,7 @@ async def test_files_upload_endpoint_processes_and_returns_json(client, monkeypa
     assert isinstance(data, list)
     assert data[0]["filename"] == "test.txt"
     assert data[0]["mime_type"] == "text/plain"
+    assert "hello world" in data[0]["content"]
 
 
 @pytest.mark.asyncio

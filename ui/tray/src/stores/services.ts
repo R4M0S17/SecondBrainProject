@@ -18,15 +18,39 @@ interface ServicesState {
 
 const HEALTH_POLL_MS = 2000;
 const HEALTH_POLL_MAX = 90;
+const HEALTH_REQUEST_TIMEOUT_MS = 4000;
 
-async function waitForBackend(): Promise<void> {
+function toError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(typeof error === "string" ? error : String(error));
+}
+
+async function getHealthWithTimeout(): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HEALTH_REQUEST_TIMEOUT_MS);
+  try {
+    await getHealth(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function waitForBackend(getLauncherError?: () => Error | null): Promise<void> {
   for (let i = 0; i < HEALTH_POLL_MAX; i++) {
+    const launcherError = getLauncherError?.();
+    if (launcherError) {
+      throw launcherError;
+    }
     try {
-      await getHealth();
+      await getHealthWithTimeout();
       return;
     } catch {
       await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
     }
+  }
+  const launcherError = getLauncherError?.();
+  if (launcherError) {
+    throw launcherError;
   }
   throw new Error("Backend did not respond in time. See ~/.cerebro/logs/");
 }
@@ -41,7 +65,7 @@ export const useServicesStore = create<ServicesState>((set) => ({
 
   probeBackend: async () => {
     try {
-      await getHealth();
+      await getHealthWithTimeout();
       set({ servicesOff: false });
       await useSystemStore.getState().refresh();
     } catch {
@@ -56,12 +80,16 @@ export const useServicesStore = create<ServicesState>((set) => ({
       if (!isTauriRuntime()) {
         throw new Error("Turn on from Terminal: make desktop-launch");
       }
-      await invoke("restart_cerebro_services");
-      await waitForBackend();
-      await useSystemStore.getState().refresh();
+      let launcherError: Error | null = null;
+      const launcherPromise = invoke("restart_cerebro_services").catch((err) => {
+        launcherError = toError(err);
+      });
+      await waitForBackend(() => launcherError);
+      void launcherPromise;
+      void useSystemStore.getState().refresh();
       set({ servicesOff: false });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      set({ error: toError(e).message });
     } finally {
       set({ starting: false });
     }
@@ -77,7 +105,7 @@ export const useServicesStore = create<ServicesState>((set) => ({
       useSystemStore.setState({ status: null, health: null, error: null });
       set({ servicesOff: true });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      set({ error: toError(e).message });
     } finally {
       set({ stopping: false });
     }

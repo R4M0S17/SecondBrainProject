@@ -1,5 +1,6 @@
 import { ApiError } from "./errors";
 import type {
+  FileAttachment,
   QueryRequest,
   QueryResponse,
   ResponseMetadata,
@@ -28,6 +29,24 @@ export const AGENT_ID_MAP: Record<AgentId, string> = {
 };
 
 const BASE = "http://localhost:7842";
+
+export async function uploadFiles(files: File[]): Promise<FileAttachment[]> {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+
+  const res = await fetch(`${BASE}/api/files/upload`, {
+    method: "POST",
+    headers: { ..._authHeaders() }, // Do NOT set Content-Type; browser will set boundary
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new ApiError(res.status, errorText || "File upload failed");
+  }
+
+  return res.json() as Promise<FileAttachment[]>;
+}
 
 function _authHeaders(): Record<string, string> {
   const key = import.meta.env.VITE_CEREBRO_KEY as string | undefined;
@@ -142,8 +161,8 @@ export async function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/api/status");
 }
 
-export async function getHealth(): Promise<HealthResponse> {
-  return request<HealthResponse>("/api/health");
+export async function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  return request<HealthResponse>("/api/health", { signal });
 }
 
 export async function startIndex(paths: string[]): Promise<IndexResponse> {

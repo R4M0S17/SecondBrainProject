@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import json
 import os
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -22,7 +23,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Security, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Security,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
@@ -35,6 +46,7 @@ from core.inference.inference_warnings import clear_inference_warnings, consume_
 from core.inference.ram_preflight import RAM_WARNING_CRITICAL, collect_ram_warnings
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
+from core.tools.handlers.upload import process_uploaded_file
 from ui.tray.wizard import recommend_lite_profile
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -110,16 +122,50 @@ class ToolConfirmRequest(BaseModel):
     decision: Literal["approve", "deny"]
 
 
+class FileAttachment(BaseModel):
+    filename: str
+    mime_type: str
+    content: str
+    type: str
+
+
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     agent: str = GENERAL_AGENT_ID
     conversation_id: str | None = None
+    attachments: list[FileAttachment] | None = None
 
 
 class QueryResponse(BaseModel):
     answer: str
     metadata: ResponseMetadataModel
     conversation_id: str
+
+
+def _build_augmented_question(question: str, attachments: list[FileAttachment] | None) -> str:
+    if not attachments:
+        return question
+
+    parts = [question, "", "ARCHIVOS ADJUNTOS:"]
+    for attachment in attachments:
+        content = attachment.content.strip()
+        if not content:
+            continue
+        limit = 20000 if attachment.type == "image" else 12000
+        if len(content) > limit:
+            content = content[:limit] + "\n[Truncated attachment content]"
+        parts.append(
+            f"- {attachment.filename} ({attachment.mime_type}, {attachment.type})\n" f"{content}"
+        )
+
+    parts.extend(
+        [
+            "",
+            "Usa el contenido de los archivos adjuntos como contexto principal para responder.",
+            "No inventes detalles que no estén en los archivos.",
+        ]
+    )
+    return "\n".join(parts)
 
 
 class IndexRequest(BaseModel):
@@ -320,6 +366,15 @@ async def _verify_api_key(key: str | None = Security(_API_KEY_HEADER)) -> None:
         )
 
 
+async def _start_component_in_background(name: str, starter) -> None:
+    try:
+        await starter()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("{} failed to start", name)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -330,16 +385,32 @@ async def lifespan(app: FastAPI):
         logger.exception("macOS calendar permission probe failed")
         app_state.macos_permissions["calendar"] = "unknown"
 
+    startup_tasks: list[asyncio.Task[Any]] = []
     if app_state.model_manager is not None:
-        try:
-            await app_state.model_manager.start()
-        except Exception:
-            logger.exception("ModelManager failed to start — model swapping disabled")
+        startup_tasks.append(
+            asyncio.create_task(
+                _start_component_in_background("ModelManager", app_state.model_manager.start)
+            )
+        )
 
     if app_state.llama_health_monitor is not None:
-        await app_state.llama_health_monitor.start()
+        startup_tasks.append(
+            asyncio.create_task(
+                _start_component_in_background(
+                    "LlamaServerHealthMonitor", app_state.llama_health_monitor.start
+                )
+            )
+        )
 
     yield
+
+    for task in startup_tasks:
+        task.cancel()
+    for task in startup_tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     if app_state.llama_health_monitor is not None:
         await app_state.llama_health_monitor.stop()
@@ -361,6 +432,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 api = APIRouter(prefix="/api")
+
+
+@api.post("/files/upload")
+async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
+    max_single_file_bytes = 10 * 1024 * 1024
+    max_total_upload_bytes = 30 * 1024 * 1024
+    allowed_mimes = {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+        "text/plain",
+        "text/csv",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    }
+
+    parsed_attachments: list[dict[str, Any]] = []
+    total_bytes = 0
+
+    for file in files:
+        if file.content_type and file.content_type not in allowed_mimes:
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported file type: {file.content_type}"
+            )
+
+        suffix = Path(file.filename).suffix if file.filename else ""
+        temp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                temp_path = tmp.name
+                while True:
+                    chunk = file.file.read(8192)
+                    if not chunk:
+                        break
+                    tmp.write(chunk)
+                    total_bytes += len(chunk)
+                    if total_bytes > max_total_upload_bytes:
+                        raise HTTPException(status_code=413, detail="Total upload size exceeded")
+                    if tmp.tell() > max_single_file_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File '{file.filename or 'unknown'}' exceeds single-file size limit",
+                        )
+                tmp.flush()
+
+            result = process_uploaded_file(
+                temp_path,
+                authorized_paths=app_state.authorized_read_paths,
+                enforce_authorization=False,
+            )
+            if isinstance(result, dict) and "error" in result:
+                raise HTTPException(status_code=400, detail=result["error"])
+
+            parsed_attachments.append(
+                {
+                    "filename": file.filename or "unknown",
+                    "mime_type": result.get("metadata", {}).get(
+                        "mime_type", "application/octet-stream"
+                    ),
+                    "content": result.get("content", ""),
+                    "type": result.get("type", "unknown"),
+                }
+            )
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+    return parsed_attachments
 
 
 def _build_metadata(
@@ -423,10 +567,12 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     if req.agent == "auto":
         route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
-        query_text = route.query
+        intent_query = route.query
     else:
         agent_id = req.agent
-        query_text = req.question
+        intent_query = req.question
+
+    query_text = _build_augmented_question(req.question, req.attachments)
 
     app_state.active_agent_id = agent_id
     app_state.metrics.set_active_agent(agent_id)
@@ -467,7 +613,7 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     start = time.perf_counter()
     try:
         answer, final_state = await app_state.runtime.run(
-            query_text, agent_id, conversation_id=conv_id
+            query_text, agent_id, conversation_id=conv_id, intent_query=intent_query
         )
     except Exception as exc:
         logger.exception("Runtime error during /query")
@@ -503,7 +649,7 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     meta_model = _meta_to_model(meta)
 
     try:
-        app_state.conv_store.append(conv_id, req.question, answer, meta_model.model_dump())
+        app_state.conv_store.append(conv_id, query_text, answer, meta_model.model_dump())
     except Exception:
         logger.exception("Failed to persist conversation turn for {}", conv_id)
 
@@ -521,10 +667,12 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
     if req.agent == "auto":
         route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
-        query_text = route.query
+        intent_query = route.query
     else:
         agent_id = req.agent
-        query_text = req.question
+        intent_query = req.question
+
+    query_text = _build_augmented_question(req.question, req.attachments)
 
     app_state.active_agent_id = agent_id
     app_state.metrics.set_active_agent(agent_id)
@@ -578,7 +726,10 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
             final_state = None
             live_streamed = False
             async for chunk in app_state.runtime.run_streaming(
-                query_text, agent_id, conversation_id=stream_conv_id
+                query_text,
+                agent_id,
+                conversation_id=stream_conv_id,
+                intent_query=intent_query,
             ):
                 if isinstance(chunk, StreamRunComplete):
                     final_state = chunk.final_state
@@ -659,10 +810,12 @@ async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
     if req.agent == "auto":
         route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
-        query_text = route.query
+        intent_query = route.query
     else:
         agent_id = req.agent
-        query_text = req.question
+        intent_query = req.question
+
+    query_text = _build_augmented_question(req.question, req.attachments)
 
     app_state.active_agent_id = agent_id
     app_state.metrics.set_active_agent(agent_id)
@@ -680,7 +833,10 @@ async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
             is_complex = app_state.planner.is_complex_task(query_text)
             if not is_complex:
                 answer, final_state = await app_state.runtime.run(
-                    query_text, agent_id, conversation_id=plan_conv_id
+                    query_text,
+                    agent_id,
+                    conversation_id=plan_conv_id,
+                    intent_query=intent_query,
                 )
                 yield f"data: {json.dumps({'step': 0, 'description': query_text[:100], 'total': 1})}\n\n"
                 words = answer.split(" ")
@@ -697,7 +853,10 @@ async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
                     yield f"data: {json.dumps({'step': step_idx, 'description': step_text[:100], 'total': total_steps})}\n\n"
 
                     answer, final_state = await app_state.runtime.run(
-                        step_text, agent_id, conversation_id=plan_conv_id
+                        step_text,
+                        agent_id,
+                        conversation_id=plan_conv_id,
+                        intent_query=intent_query,
                     )
 
                     # Stream tokens for this step's answer

@@ -29,6 +29,7 @@ GENERAL_AGENT_ID = "general-v1"
 ACADEMIC_TOOLS: list[str] = [
     "search_documents",
     "read_file",
+    "upload_file",
     "write_file",
     "create_note",
     # Phase 1 & 3: filesystem read + Notes/Spotlight
@@ -52,6 +53,7 @@ CALENDAR_TOOLS: list[str] = [
 CODE_TOOLS: list[str] = [
     "search_documents",
     "read_file",
+    "upload_file",
     "execute_python",
     # Phase 1 & 2: filesystem + script execution
     "create_python_file",
@@ -77,6 +79,7 @@ GENERAL_TOOLS: list[str] = [
     "search_notes",
     "write_file",
     "read_file",
+    "upload_file",
     "evaluate_math",
 ]
 

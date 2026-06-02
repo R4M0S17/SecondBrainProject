@@ -2,6 +2,7 @@ import { useRef, useState, KeyboardEvent, ChangeEvent } from "react";
 import { useChatStore } from "../../stores/chat";
 import { useServicesStore } from "../../stores/services";
 import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
+import { ApiError } from "../../api/errors";
 import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles } from "../../api/client";
 import CommandAutocomplete from "./CommandAutocomplete";
 import type { FileAttachment } from "../../api/types";
@@ -9,6 +10,88 @@ import type { FileAttachment } from "../../api/types";
 interface UploadedFile {
   file: File;
   preview: string;
+}
+
+const TEXT_MIME_TYPES = new Set([
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/json",
+  "text/x-python",
+  "text/javascript",
+  "text/typescript",
+  "text/x-java",
+  "text/x-c",
+  "text/x-cpp",
+  "text/yaml",
+  "text/xml",
+]);
+
+const TEXT_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".csv",
+  ".json",
+  ".py",
+  ".js",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".html",
+  ".css",
+  ".xml",
+  ".yaml",
+  ".yml",
+]);
+
+function hasExtension(file: File, extensions: Set<string>): boolean {
+  const lowerName = file.name.toLowerCase();
+  for (const ext of extensions) {
+    if (lowerName.endsWith(ext)) return true;
+  }
+  return false;
+}
+
+function isTextLikeFile(file: File): boolean {
+  return TEXT_MIME_TYPES.has(file.type) || file.type.startsWith("text/") || hasExtension(file, TEXT_EXTENSIONS);
+}
+
+function isImageLikeFile(file: File): boolean {
+  return file.type.startsWith("image/");
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      resolve(value.includes(",") ? value.split(",", 2)[1] ?? "" : value);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function buildLocalAttachment(file: File): Promise<FileAttachment | null> {
+  if (isTextLikeFile(file)) {
+    return {
+      filename: file.name,
+      mime_type: file.type || "text/plain",
+      content: await file.text(),
+      type: "text",
+    };
+  }
+
+  if (isImageLikeFile(file)) {
+    return {
+      filename: file.name,
+      mime_type: file.type,
+      content: await readFileAsDataUrl(file),
+      type: "image",
+    };
+  }
+
+  return null;
 }
 
 export default function InputArea() {
@@ -85,7 +168,6 @@ export default function InputArea() {
 
     // Build message content with file info
     let messageContent = query;
-    const rawFilesToUpload = uploadedFiles.map((uf) => uf.file);
     if (uploadedFiles.length > 0) {
       const fileNames = uploadedFiles.map((uf) => uf.file.name).join(", ");
       messageContent = `${query}\n\n[Attached files: ${fileNames}]`;
@@ -102,10 +184,27 @@ export default function InputArea() {
     let hasPendingConfirm = false;
 
     try {
-      // 2. Upload and pre-process files via the secure backend endpoint
       let attachments: FileAttachment[] = [];
-      if (rawFilesToUpload.length > 0) {
-        attachments = await uploadFiles(rawFilesToUpload);
+      const localAttachments = (
+        await Promise.all(uploadedFiles.map((uf) => buildLocalAttachment(uf.file)))
+      ).filter((att): att is FileAttachment => att !== null);
+
+      const filesToUpload = uploadedFiles
+        .map((uf) => uf.file)
+          .filter((file) => !isTextLikeFile(file) && !isImageLikeFile(file));
+
+      attachments = [...localAttachments];
+
+      if (filesToUpload.length > 0) {
+        try {
+          const remoteAttachments = await uploadFiles(filesToUpload);
+          attachments = [...attachments, ...remoteAttachments];
+        } catch (e: unknown) {
+          const apiErr = e instanceof ApiError ? e : null;
+          if (apiErr?.status !== 404 || attachments.length === 0) {
+            throw e;
+          }
+        }
       }
 
       if (activeAgent === "calendar") {

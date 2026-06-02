@@ -787,26 +787,32 @@ class AgentRuntime:
         short_term.push_message({"role": "assistant", "content": full_answer})
 
     async def run(
-        self, query: str, agent_id: str, conversation_id: str | None = None
+        self,
+        query: str,
+        agent_id: str,
+        conversation_id: str | None = None,
+        intent_query: str | None = None,
     ) -> tuple[str, AgentState]:
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
 
-        fast_answer = self._try_math_fast_path(query, agent_state)
+        route_query = intent_query or query
+
+        fast_answer = self._try_math_fast_path(route_query, agent_state)
         if fast_answer is not None:
             final_state = self._finish_math_fast_path(
                 query, conversation_id, fast_answer, agent_state
             )
             return fast_answer, final_state
 
-        file_intent = await self._resolve_file_write_intent(query, agent_state)
+        file_intent = await self._resolve_file_write_intent(route_query, agent_state)
         if file_intent is not None:
             return self._finish_file_write_fast_path(
                 query, conversation_id, file_intent, agent_state
             )
 
-        reminder_result = await self._try_reminder_llm_resolve(query, agent_state)
+        reminder_result = await self._try_reminder_llm_resolve(route_query, agent_state)
         if reminder_result is not None:
             answer, agent_state = reminder_result
             short_term = self._context_builder._short_term
@@ -815,14 +821,14 @@ class AgentRuntime:
             self.save_conversation_session(conversation_id, agent_state)
             return answer, agent_state
 
-        calendar_answer = self._try_calendar_fast_path(query, agent_state)
+        calendar_answer = self._try_calendar_fast_path(route_query, agent_state)
         if calendar_answer is not None:
             final_state = self._finish_calendar_fast_path(
                 query, conversation_id, calendar_answer, agent_state
             )
             return calendar_answer, final_state
 
-        file_search_answer = self._try_file_search_fast_path(query, agent_state)
+        file_search_answer = self._try_file_search_fast_path(route_query, agent_state)
         if file_search_answer is not None:
             final_state = self._finish_file_search_fast_path(
                 query, conversation_id, file_search_answer, agent_state
@@ -871,7 +877,11 @@ class AgentRuntime:
         return answer, final_state
 
     async def run_streaming(
-        self, query: str, agent_id: str, conversation_id: str | None = None
+        self,
+        query: str,
+        agent_id: str,
+        conversation_id: str | None = None,
+        intent_query: str | None = None,
     ) -> AsyncIterator[str | StreamRunComplete]:
         """Run the tool loop, yielding answer-field tokens when the model replies directly.
 
@@ -884,7 +894,9 @@ class AgentRuntime:
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
 
-        fast_answer = self._try_math_fast_path(query, agent_state)
+        route_query = intent_query or query
+
+        fast_answer = self._try_math_fast_path(route_query, agent_state)
         if fast_answer is not None:
             final_state = self._finish_math_fast_path(
                 query, conversation_id, fast_answer, agent_state
@@ -893,7 +905,7 @@ class AgentRuntime:
             yield StreamRunComplete(answer=fast_answer, final_state=final_state)
             return
 
-        file_intent = await self._resolve_file_write_intent(query, agent_state)
+        file_intent = await self._resolve_file_write_intent(route_query, agent_state)
         if file_intent is not None:
             answer, final_state = self._finish_file_write_fast_path(
                 query, conversation_id, file_intent, agent_state
@@ -902,7 +914,7 @@ class AgentRuntime:
             yield StreamRunComplete(answer=answer, final_state=final_state)
             return
 
-        reminder_result = await self._try_reminder_llm_resolve(query, agent_state)
+        reminder_result = await self._try_reminder_llm_resolve(route_query, agent_state)
         if reminder_result is not None:
             answer, agent_state = reminder_result
             short_term = self._context_builder._short_term
@@ -913,7 +925,7 @@ class AgentRuntime:
             yield StreamRunComplete(answer=answer, final_state=agent_state)
             return
 
-        calendar_answer = self._try_calendar_fast_path(query, agent_state)
+        calendar_answer = self._try_calendar_fast_path(route_query, agent_state)
         if calendar_answer is not None:
             final_state = self._finish_calendar_fast_path(
                 query, conversation_id, calendar_answer, agent_state
@@ -922,7 +934,7 @@ class AgentRuntime:
             yield StreamRunComplete(answer=calendar_answer, final_state=final_state)
             return
 
-        file_search_answer = self._try_file_search_fast_path(query, agent_state)
+        file_search_answer = self._try_file_search_fast_path(route_query, agent_state)
         if file_search_answer is not None:
             final_state = self._finish_file_search_fast_path(
                 query, conversation_id, file_search_answer, agent_state

@@ -858,13 +858,18 @@ class AgentRuntime:
         short_term.push_message({"role": "assistant", "content": full_answer})
 
     async def run(
-        self, query: str, agent_id: str, conversation_id: str | None = None
+        self,
+        query: str,
+        agent_id: str,
+        conversation_id: str | None = None,
+        intent_query: str | None = None,
     ) -> tuple[str, AgentState]:
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
 
-        fast_path_result = await self._fast_path_router.try_all(query, agent_state)
+        route_query = intent_query or query
+        fast_path_result = await self._fast_path_router.try_all(route_query, agent_state)
         if fast_path_result is not None:
             return self._apply_fast_path_result(
                 query, conversation_id, fast_path_result, agent_state
@@ -912,7 +917,11 @@ class AgentRuntime:
         return answer, final_state
 
     async def run_streaming(
-        self, query: str, agent_id: str, conversation_id: str | None = None
+        self,
+        query: str,
+        agent_id: str,
+        conversation_id: str | None = None,
+        intent_query: str | None = None,
     ) -> AsyncIterator[str | StreamRunComplete]:
         """Run the tool loop, yielding answer-field tokens when the model replies directly.
 
@@ -925,7 +934,8 @@ class AgentRuntime:
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
 
-        fast_path_result = await self._fast_path_router.try_all(query, agent_state)
+        route_query = intent_query or query
+        fast_path_result = await self._fast_path_router.try_all(route_query, agent_state)
         if fast_path_result is not None:
             answer, final_state = self._apply_fast_path_result(
                 query, conversation_id, fast_path_result, agent_state

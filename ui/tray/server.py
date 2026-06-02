@@ -340,6 +340,15 @@ async def _verify_api_key(key: str | None = Security(_API_KEY_HEADER)) -> None:
         )
 
 
+async def _start_component_in_background(name: str, starter) -> None:
+    try:
+        await starter()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("{} failed to start", name)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -350,16 +359,32 @@ async def lifespan(app: FastAPI):
         logger.exception("macOS calendar permission probe failed")
         app_state.macos_permissions["calendar"] = "unknown"
 
+    startup_tasks: list[asyncio.Task[Any]] = []
     if app_state.model_manager is not None:
-        try:
-            await app_state.model_manager.start()
-        except Exception:
-            logger.exception("ModelManager failed to start — model swapping disabled")
+        startup_tasks.append(
+            asyncio.create_task(
+                _start_component_in_background("ModelManager", app_state.model_manager.start)
+            )
+        )
 
     if app_state.llama_health_monitor is not None:
-        await app_state.llama_health_monitor.start()
+        startup_tasks.append(
+            asyncio.create_task(
+                _start_component_in_background(
+                    "LlamaServerHealthMonitor", app_state.llama_health_monitor.start
+                )
+            )
+        )
 
     yield
+
+    for task in startup_tasks:
+        task.cancel()
+    for task in startup_tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     if app_state.llama_health_monitor is not None:
         await app_state.llama_health_monitor.stop()
@@ -447,6 +472,7 @@ async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dic
             result = process_uploaded_file(
                 temp_path,
                 authorized_paths=app_state.authorized_read_paths,
+                enforce_authorization=False,
             )
 
             if isinstance(result, dict) and "error" in result:
@@ -493,23 +519,38 @@ def _build_augmented_question(
     if not attachments:
         return question
 
-    context_parts = ["[Attached Files Context]"]
+    max_total_chars = 12_000
+    max_chars_per_file = 4_000
+    remaining = max_total_chars
+    context_parts = [
+        "[Instruction]",
+        "La pregunta del usuario se refiere a los archivos adjuntos. Usa su contenido para responder.",
+        "[User Question]",
+        question,
+        "[Attached Files Context]",
+    ]
     for att in attachments:
         if att.type == "image":
             context_parts.append(
-                f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\nData: {att.content}"
+                f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\n"
+                "Nota: imagen adjunta. Analiza según metadatos y la pregunta del usuario."
             )
-        else:
-            context_parts.append(
-                f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{att.content}"
-            )
-    context_parts.append("[Instruction]")
-    context_parts.append(
-        "La pregunta del usuario se refiere al contenido de los archivos adjuntos. "
-        "Usa ese contenido para responder."
-    )
-    context_parts.append("[User Question]")
-    context_parts.append(question)
+            continue
+
+        if remaining <= 0:
+            context_parts.append("[Context truncated: attachment limit reached]")
+            break
+
+        content = att.content or ""
+        allowed = min(max_chars_per_file, remaining)
+        clipped = content[:allowed]
+        remaining -= len(clipped)
+        truncated = len(content) > len(clipped)
+        trunc_note = "\n[Attachment truncated for prompt size]" if truncated else ""
+        context_parts.append(
+            f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{clipped}{trunc_note}"
+        )
+
     return "\n\n".join(context_parts)
 
 
@@ -604,7 +645,10 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
 
     try:
         answer, final_state = await app_state.runtime.run(
-            augmented_question, agent_id, conversation_id=conv_id
+            augmented_question,
+            agent_id,
+            conversation_id=conv_id,
+            intent_query=query_text,
         )
     except Exception as exc:
         logger.exception("Runtime error during /query")
@@ -724,7 +768,10 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
             final_state = None
             live_streamed = False
             async for chunk in app_state.runtime.run_streaming(
-                augmented_question, agent_id, conversation_id=stream_conv_id
+                augmented_question,
+                agent_id,
+                conversation_id=stream_conv_id,
+                intent_query=query_text,
             ):
                 if isinstance(chunk, StreamRunComplete):
                     final_state = chunk.final_state
