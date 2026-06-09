@@ -5,7 +5,9 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from core.inference.engine import InferenceEngine
 from core.memory.long_term import LongTermStore, MemoryChunk, RetrievalContext
+from core.memory.vector_store import VectorStore
 
 if TYPE_CHECKING:
     from core.agents.state_store import AgentState
@@ -18,8 +20,10 @@ _CHARS_PER_TOKEN = 4
 # Leave headroom for system prompt and model response
 DEFAULT_TOKEN_BUDGET = 3500
 
-_CONSOLIDATION_THRESHOLD = 0.85
-_TARGET_FILL_RATIO = 0.60
+_CONSOLIDATION_THRESHOLD_HIGH = 0.85
+_TARGET_FILL_RATIO_HIGH = 0.60
+_CONSOLIDATION_THRESHOLD_LOW = 0.60
+_TARGET_FILL_RATIO_LOW = 0.40
 _SYSTEM_OVERHEAD_TOKENS = 800
 _CONSOLIDATION_INSTRUCTION = (
     "Resume nuestra conversación hasta ahora en 3 párrafos técnicos, "
@@ -36,6 +40,7 @@ class AssembledContext:
     agent_summary: str
     total_tokens_estimated: int
     sources_used: list[str]
+    documents_compressed: bool = False
 
 
 class ContextBuilder:
@@ -44,13 +49,25 @@ class ContextBuilder:
         short_term: ShortTermStore,
         long_term: LongTermStore,
         token_budget: int = DEFAULT_TOKEN_BUDGET,
+        vector_store: VectorStore | None = None,
+        inference_engine: InferenceEngine | None = None,
     ) -> None:
         self._short_term = short_term
         self._long_term = long_term
         self._token_budget = token_budget
+        self._vector_store = vector_store
+        self._inference_engine = inference_engine
 
     def _tokens(self, text: str) -> int:
         return max(1, len(text) // _CHARS_PER_TOKEN)
+
+    def _consolidation_params(self) -> tuple[float, float]:
+        from core.observability.ram_monitor import current_ram_pressure
+
+        pressure = current_ram_pressure()
+        if pressure in ("warn", "critical"):
+            return (_CONSOLIDATION_THRESHOLD_LOW, _TARGET_FILL_RATIO_LOW)
+        return (_CONSOLIDATION_THRESHOLD_HIGH, _TARGET_FILL_RATIO_HIGH)
 
     def estimate_session_fill(self, agent_state: AgentState, messages: list[Message]) -> int:
         instructions = agent_state.profile.preferences.get("instructions", "")
@@ -90,11 +107,12 @@ class ContextBuilder:
             return False
 
         fill = self.estimate_session_fill(agent_state, messages)
-        threshold = int(context_window * _CONSOLIDATION_THRESHOLD)
+        threshold_pct, target_pct = self._consolidation_params()
+        threshold = int(context_window * threshold_pct)
         if fill < threshold:
             return False
 
-        target = int(context_window * _TARGET_FILL_RATIO)
+        target = int(context_window * target_pct)
         to_evict = self._messages_to_evict(messages, fill, target)
         if to_evict <= 0:
             return False
@@ -125,12 +143,17 @@ class ContextBuilder:
         return True
 
     async def build(self, query: str, agent_state: AgentState) -> AssembledContext:
+        from core.observability.ram_monitor import current_ram_pressure
+
         remaining = self._token_budget
         sources: list[str] = []
+        under_pressure = current_ram_pressure() in ("warn", "critical")
 
-        # Priority 1: instructions + working_memory (always included, deducted upfront)
+        # Priority 1: instructions + working_memory (skip working_memory under RAM pressure)
         instructions = agent_state.profile.preferences.get("instructions", "")
-        working_text = " ".join(str(v) for v in agent_state.working_memory.values())
+        working_text = (
+            "" if under_pressure else " ".join(str(v) for v in agent_state.working_memory.values())
+        )
         remaining -= self._tokens(instructions + working_text)
 
         # Priority 2: session summary
@@ -157,7 +180,27 @@ class ContextBuilder:
             else:
                 break
 
-        # Priority 4 (lowest): recent session messages, newest-first, trim to fit
+        # Priority 4: vector store documents (local RAG) — skip under RAM pressure
+        kept_documents: list[SearchResult] = []
+        if (
+            not under_pressure
+            and self._vector_store is not None
+            and self._inference_engine is not None
+        ):
+            try:
+                doc_chunks = await self._vector_store.search(query, self._inference_engine, top_k=5)
+                for chunk in doc_chunks:
+                    cost = self._tokens(chunk.content)
+                    if remaining - cost >= 0:
+                        kept_documents.append(chunk)
+                        remaining -= cost
+                        sources.append(f"doc:{chunk.source_path}:{chunk.chunk_index}")
+                    else:
+                        break
+            except Exception:
+                logger.warning("Vector store search failed, skipping document RAG")
+
+        # Priority 5 (lowest): recent session messages, newest-first, trim to fit
         ctx = self._short_term.get_context()
         kept_messages: list[Message] = []
         for msg in reversed(ctx.active_messages):
@@ -172,7 +215,7 @@ class ContextBuilder:
         return AssembledContext(
             session_history=kept_messages,
             retrieved_memory=kept_memory,
-            retrieved_documents=[],  # populated by RAG layer when integrated
+            retrieved_documents=kept_documents,
             agent_summary=summary,
             total_tokens_estimated=total_used,
             sources_used=sources,

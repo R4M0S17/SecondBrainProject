@@ -29,6 +29,7 @@ GENERAL_AGENT_ID = "general-v1"
 ACADEMIC_TOOLS: list[str] = [
     "search_documents",
     "read_file",
+    "upload_file",
     "write_file",
     "create_note",
     # Phase 1 & 3: filesystem read + Notes/Spotlight
@@ -36,6 +37,8 @@ ACADEMIC_TOOLS: list[str] = [
     "search_files",
     "search_notes",
     "spotlight_search",
+    # Web research
+    "web_search",
 ]
 CALENDAR_TOOLS: list[str] = [
     "search_documents",
@@ -52,6 +55,7 @@ CALENDAR_TOOLS: list[str] = [
 CODE_TOOLS: list[str] = [
     "search_documents",
     "read_file",
+    "upload_file",
     "execute_python",
     # Phase 1 & 2: filesystem + script execution
     "create_python_file",
@@ -62,6 +66,8 @@ CODE_TOOLS: list[str] = [
     "search_files",
     "create_directory",
     "evaluate_math",
+    # Web search for docs, Stack Overflow, APIs
+    "web_search",
 ]
 GENERAL_TOOLS: list[str] = [
     "get_upcoming_events",
@@ -77,7 +83,10 @@ GENERAL_TOOLS: list[str] = [
     "search_notes",
     "write_file",
     "read_file",
+    "upload_file",
     "evaluate_math",
+    "web_search",
+    "web_fetch",
 ]
 
 _PREFIX_MAP: dict[str, str] = {

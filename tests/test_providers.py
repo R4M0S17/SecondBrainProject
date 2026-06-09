@@ -214,6 +214,76 @@ def test_set_primary_is_idempotent():
 
 
 # ---------------------------------------------------------------------------
+# Test: Emergency provider fallback
+# ---------------------------------------------------------------------------
+
+
+def test_register_emergency_sets_emergency_name():
+    registry = ProviderRegistry()
+    registry.register("primary", _make_chat_provider(), _make_embed_provider())
+    registry.register("claude", _make_chat_provider("claude"), _make_embed_provider())
+
+    registry.register_emergency("claude")
+    assert registry._emergency_name == "claude"
+
+
+def test_register_emergency_raises_for_unregistered():
+    registry = ProviderRegistry()
+    registry.register("primary", _make_chat_provider(), _make_embed_provider())
+
+    with pytest.raises(KeyError):
+        registry.register_emergency("claude")
+
+
+def test_select_for_task_uses_emergency_when_ram_critical(mocker):
+    registry = ProviderRegistry(
+        ram_threshold_primary_gb=4.0,
+        ram_threshold_fallback_gb=2.0,
+    )
+    registry.register("primary", _make_chat_provider("phi3-mini.gguf"), _make_embed_provider())
+    registry.register("claude", _make_chat_provider("claude-sonnet"), _make_embed_provider())
+    registry.register_emergency("claude")
+
+    mock_mem = MagicMock()
+    mock_mem.available = int(0.3 * 1024**3)
+    mocker.patch("psutil.virtual_memory", return_value=mock_mem)
+
+    chosen = registry.select_for_task(TaskHint.CHAT)
+    assert chosen == "claude"
+
+
+# ---------------------------------------------------------------------------
+# Test: LlamaCppChatProvider.reduce_context() shrinks context_window
+# ---------------------------------------------------------------------------
+
+
+def test_reduce_context_halves_context_window():
+    provider = _make_chat_provider("phi3-mini.gguf")
+    assert provider.context_window() == 4096
+
+    provider.reduce_context(factor=0.5)
+    assert provider.context_window() == 2048
+
+    provider.reduce_context(factor=0.25)
+    assert provider.context_window() == 1024
+
+
+def test_reduce_context_floor_is_512():
+    provider = _make_chat_provider("phi3-mini.gguf")
+    provider.reduce_context(factor=0.05)
+    assert provider.context_window() == 512
+
+
+def test_reduce_context_reset_on_new_instance():
+    p1 = _make_chat_provider("phi3-mini.gguf")
+    p1.reduce_context(factor=0.5)
+    assert p1.context_window() == 2048
+
+    p2 = _make_chat_provider("phi3-mini.gguf")
+    assert p2.context_window() == 4096
+
+
+# ---------------------------------------------------------------------------
 # Test: LlamaCppChatProvider.set_model() changes model used for requests
 # ---------------------------------------------------------------------------
 

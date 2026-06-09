@@ -516,7 +516,7 @@ class TestEdgeCases:
         for query in queries:
             # Should at least not error; may return None if pattern not matched
             result = try_calendar_fast_path(query, GENERAL_TOOLS, ics_path=str(ics))
-            assert result is None or isinstance(result, dict)  # Should not raise
+            assert result is None or isinstance(result, (dict, str))  # Should not raise
 
 
 # ============================================================================

@@ -186,6 +186,7 @@ class ModelManager:
             str(port),
             "--ctx-size",
             str(ctx),
+            "--context-shift",
             "--n-gpu-layers",
             "99",
             "--chat-template",

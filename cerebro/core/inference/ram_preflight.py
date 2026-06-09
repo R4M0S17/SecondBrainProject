@@ -8,7 +8,7 @@ from loguru import logger
 
 from core.inference.inference_warnings import append_inference_warnings, mark_skip_context_enricher
 from core.inference.prompt_cache import prompt_cache_path
-from core.observability.ram_monitor import RamMonitor
+from core.observability.ram_monitor import RamMonitor, set_ram_pressure
 
 RAM_WARNING_CRITICAL = "ram_pressure_critical"
 RAM_WARNING_WARN = "ram_pressure_warn"
@@ -28,6 +28,7 @@ def _purge_prompt_cache() -> None:
 def run_ram_preflight(monitor: RamMonitor | None = None) -> list[str]:
     """Log pressure, optionally purge caches, and record warning codes for metadata."""
     snap = (monitor or RamMonitor()).snapshot()
+    set_ram_pressure(snap["pressure"])
     warnings: list[str] = []
 
     critical = snap["pressure"] == "critical" or snap["available_gb"] < _MIN_AVAILABLE_GB

@@ -9,15 +9,15 @@ export default function DndToggle() {
   };
 
   return (
-    <div className="h-[44px] flex items-center justify-between px-2 rounded bg-[#242736]">
-      <span className="text-[14px] text-[#e5e0ed]">Do Not Disturb</span>
+    <div className="h-[44px] flex items-center justify-between px-2 rounded bg-surface-container">
+      <span className="text-[14px] text-on-surface">Do Not Disturb</span>
       <button
         onClick={toggle}
         role="switch"
         aria-checked={enabled}
         aria-label="Toggle Do Not Disturb"
-        className={`w-8 h-4 rounded-full relative transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#94a3b8] ${
-          enabled ? "bg-[#94a3b8]" : "bg-[#13121b]"
+        className={`w-8 h-4 rounded-full relative transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-container ${
+          enabled ? "bg-primary-container" : "bg-background"
         }`}
       >
         <div

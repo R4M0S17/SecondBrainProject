@@ -11,6 +11,8 @@ from core.inference.registry import Message
 
 
 class MlxChatProvider:
+    supports_vision = False
+
     """In-process LLM inference via mlx-lm on Apple Silicon.
 
     All MLX operations (load + generate) run on a single persistent worker
@@ -30,7 +32,7 @@ class MlxChatProvider:
         self._worker.start()
 
     def _worker_loop(self) -> None:
-        from mlx_lm import load  # type: ignore[import]
+        from mlx_lm import load
 
         logger.info("Loading MLX model: {}", self._model_repo)
         self._model, self._tokenizer = load(self._model_repo)
@@ -44,14 +46,13 @@ class MlxChatProvider:
             task()
 
     def _apply_template(self, messages: list[Message]) -> str:
-        if hasattr(self._tokenizer, "apply_chat_template"):
-            return self._tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+        tok = self._tokenizer
+        if tok is not None and hasattr(tok, "apply_chat_template"):
+            return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
 
     async def complete(self, messages: list[Message], **kwargs) -> str:
-        from mlx_lm import generate  # type: ignore[import]
+        from mlx_lm import generate
 
         await asyncio.to_thread(self._ready.wait)
         prompt = self._apply_template(messages)
@@ -72,10 +73,10 @@ class MlxChatProvider:
                 loop.call_soon_threadsafe(fut.set_exception, exc)
 
         self._task_queue.put(_task)
-        return await fut
+        return str(await fut)
 
     async def stream(self, messages: list[Message]) -> AsyncIterator[str]:
-        from mlx_lm import stream_generate  # type: ignore[import]
+        from mlx_lm import stream_generate
 
         await asyncio.to_thread(self._ready.wait)
         prompt = self._apply_template(messages)

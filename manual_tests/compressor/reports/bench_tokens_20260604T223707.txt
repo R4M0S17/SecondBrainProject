@@ -1,0 +1,17 @@
+================================================================================
+SEMANTIC COMPRESSOR — TOKEN BUDGET VALIDATION REPORT
+Generated: 20260604T223707 UTC
+================================================================================
+
+Query                                              Total Tokens    ≤600     Boundaries OK   Pass    
+------------------------------------------------------------------------------------------------
+gradient descent machine learning optimization     558             ✅        ✅               ✅       
+photosynthesis plants carbon dioxide               564             ✅        ✅               ✅       
+quantum entanglement physics experiment            575             ✅        ✅               ✅       
+calculus derivative function chain rule            568             ✅        ✅               ✅       
+Paris France capital population landmarks          573             ✅        ✅               ✅       
+------------------------------------------------------------------------------------------------
+
+Result: ALL PASS ✅
+Peak memory (tracemalloc): 0.19 MB (limit: 50 MB)
+Memory: PASS ✅

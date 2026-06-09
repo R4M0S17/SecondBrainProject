@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.inference.engine import InferenceEngine
 from core.memory.vector_store import SearchResult, VectorStore
+from core.utils.compressor import SemanticCompressor
 
 NO_INFO_RESPONSE = "No encontré información sobre eso en tus documentos."
 
@@ -30,17 +31,28 @@ class RAGResponse:
     sources: list[str]
     chunks_used: int
     latency_ms: float
+    compressed: bool = False
 
 
 class RAGQueryEngine:
-    def __init__(self, store: VectorStore, engine: InferenceEngine) -> None:
+    def __init__(
+        self,
+        store: VectorStore,
+        engine: InferenceEngine,
+        compressor: SemanticCompressor | None = None,
+    ) -> None:
         self.store = store
         self.engine = engine
+        self.compressor = compressor
 
     async def query(self, question: str, top_k: int = 5) -> RAGResponse:
         start = time.monotonic()
 
         chunks = await self.store.search(question, self.engine, top_k=top_k)
+        before = len(chunks)
+        if self.compressor is not None:
+            chunks = self.compressor.compress(question, chunks)
+        compressed = self.compressor is not None and len(chunks) < before
         prompt = self.build_prompt(question, chunks)
         answer = await self.engine.complete(prompt, system=SYSTEM_PROMPT)
 
@@ -53,6 +65,7 @@ class RAGQueryEngine:
             sources=sources,
             chunks_used=len(chunks),
             latency_ms=latency_ms,
+            compressed=compressed,
         )
 
     def build_prompt(self, question: str, chunks: list[SearchResult]) -> str:

@@ -1,34 +1,88 @@
+import { useState, useEffect, useRef } from "react";
 import type { Message } from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import MarkdownRenderer from "./MarkdownRenderer";
 import MessageFooter from "./MessageFooter";
 import SourcesPanel from "./SourcesPanel";
 import ToolHistoryPanel from "./ToolHistoryPanel";
 import MemoryPanel from "./MemoryPanel";
 
-interface MessageBubbleProps {
-  message: Message;
+function useTypewriter(fullText: string, isStreaming: boolean, speed: number = 30) {
+  const [displayed, setDisplayed] = useState(0);
+  const fullTextRef = useRef(fullText);
+  fullTextRef.current = fullText;
+
+  useEffect(() => {
+    if (!isStreaming) {
+      setDisplayed(fullText.length);
+      return;
+    }
+
+    setDisplayed((prev) => Math.min(prev, fullText.length));
+
+    const interval = setInterval(() => {
+      setDisplayed((prev) => {
+        const max = fullTextRef.current.length;
+        if (prev >= max) {
+          return max;
+        }
+        return prev + 1;
+      });
+    }, speed);
+
+    return () => clearInterval(interval);
+  }, [isStreaming, speed, fullText]);
+
+  return displayed;
 }
 
-export default function MessageBubble({ message }: MessageBubbleProps) {
+interface MessageBubbleProps {
+  message: Message;
+  isStreaming?: boolean;
+}
+
+export default function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
   const { role, content, metadata, expandedPanel, id } = message;
+  const typewriterLen = useTypewriter(content, !!isStreaming);
+  const displayText = isStreaming ? content.slice(0, typewriterLen) : content;
 
   if (role === "user") {
     return (
       <div className="flex justify-end" role="article" aria-label="Your message">
-        <div className="bg-[#444652] text-[#e8eaf0] px-4 py-2 rounded-full max-w-[85%] text-[14px] leading-[20px]">
+        <div className="max-w-[70%] bg-primary-container/15 border border-primary-container/25 rounded-2xl rounded-tr-sm p-4 text-sm text-on-surface">
           {content}
         </div>
       </div>
     );
   }
 
-  // Assistant message
+  const searchingSources = useChatStore((s) => s.searchingSources);
+  const searchingWeb = useChatStore((s) => s.searchingWeb);
+
   return (
-    <div className="space-y-3" role="article" aria-label="Assistant message">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 space-y-2">
-          <p className="text-[14px] leading-[20px] text-[#e5e0ed] whitespace-pre-wrap">
-            {content}
-          </p>
+    <div className="flex justify-start" role="article" aria-label="Assistant message">
+      <div className="flex gap-4 max-w-[80%]">
+        <div className="w-8 h-8 rounded-full bg-primary-container/20 flex items-center justify-center shrink-0 border border-primary-container/30">
+          <img src="/BestLogo.svg" alt="Cerebro" className="w-6 h-6 opacity-80" />
+        </div>
+        <div className="space-y-3 pt-1">
+          {(searchingWeb || searchingSources) && !content && (
+            <div className="text-xs text-on-surface-variant italic flex items-center gap-1.5 mb-1">
+              <span className="material-symbols-outlined text-[14px] animate-spin">sync</span>
+              {searchingWeb
+                ? "Searching the web…"
+                : `Searching ${searchingSources?.count ?? 0} file${(searchingSources?.count ?? 0) !== 1 ? "s" : ""}…`
+              }
+            </div>
+          )}
+          {isStreaming ? (
+            <p className="text-sm text-on-surface-variant whitespace-pre-wrap">
+              {displayText}
+              <span className="inline-block w-[2px] h-[16px] bg-primary-container ml-[1px] animate-pulse align-text-bottom" />
+            </p>
+          ) : (
+            <MarkdownRenderer content={content} />
+          )}
           {metadata && (
             <MessageFooter
               messageId={id}
@@ -36,19 +90,18 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
               expandedPanel={expandedPanel}
             />
           )}
+
+          {metadata && expandedPanel === "sources" && (
+            <SourcesPanel sources={metadata.sources_used} />
+          )}
+          {metadata && expandedPanel === "tools" && (
+            <ToolHistoryPanel tools={metadata.tools_called} />
+          )}
+          {metadata && expandedPanel === "memory" && (
+            <MemoryPanel memory={metadata.memory_retrieved} />
+          )}
         </div>
       </div>
-
-      {/* Expandable panels */}
-      {metadata && expandedPanel === "sources" && (
-        <SourcesPanel sources={metadata.sources_used} />
-      )}
-      {metadata && expandedPanel === "tools" && (
-        <ToolHistoryPanel tools={metadata.tools_called} />
-      )}
-      {metadata && expandedPanel === "memory" && (
-        <MemoryPanel memory={metadata.memory_retrieved} />
-      )}
     </div>
   );
 }

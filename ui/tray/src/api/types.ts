@@ -173,6 +173,11 @@ export interface FleetModelsResponse {
   active_model_id: string;
 }
 
+export interface ContextSourcesEvent {
+  sources: string[];
+  episode_count: number;
+}
+
 export interface ModelSwapEvent {
   phase: "started" | "complete";
   from_model: string;
@@ -200,7 +205,7 @@ export interface AppConfig {
   };
   dnd_enabled: boolean;
   embedding_model: string;
-  inference_backend: "llamacpp" | "claude";
+  inference_backend: "llamacpp" | "claude" | "mlx";
   /** When false, MLX secondary provider is disabled (persisted for lite / 8 GB setups). */
   mlx_enabled?: boolean;
 }
@@ -227,6 +232,12 @@ export interface LlamaCppModelsResponse {
   active_model: string | null;
 }
 
+export interface DocumentInfo {
+  source_path: string;
+  file_modified: number;
+  filename: string;
+}
+
 export type AgentId = "auto" | "general" | "thesis" | "code" | "calendar";
 
 export interface Agent {
@@ -246,6 +257,53 @@ export const AGENTS: Agent[] = [
   { id: "code", label: "Code", description: "Programming & debugging" },
   { id: "calendar", label: "Calendar", description: "Schedule & tasks" },
 ];
+
+// ── Time-Travel Debugger types ──────────────────────────────────────────
+
+export interface DebugRun {
+  id: string;
+  agent_id: string;
+  query: string;
+  conversation_id: string | null;
+  created_at: number;
+  duration_ms: number | null;
+  success: boolean;
+}
+
+export interface DebugStep {
+  id: string;
+  run_id: string;
+  step_number: number;
+  node_name: string;
+  input_preview: string | null;
+  output_preview: string | null;
+  tool_name: string | null;
+  tool_args_json: string | null;
+  tool_result_preview: string | null;
+  needs_confirmation: boolean;
+  timestamp: number;
+}
+
+export interface DebugStepDetail extends DebugStep {
+  tokens: { token_order: number; token_text: string; is_final: number }[];
+}
+
+// ── Desktop Automation types ──────────────────────────────────────────
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  applescript: string;
+  parameters: { name: string; type: string; description: string }[];
+  tags: string[];
+  created_at: number;
+  updated_at: number;
+  run_count: number;
+  last_run: number | null;
+}
+
+// ── Claude models ───────────────────────────────────────────────────────
 
 export interface ClaudeModel {
   id: string;

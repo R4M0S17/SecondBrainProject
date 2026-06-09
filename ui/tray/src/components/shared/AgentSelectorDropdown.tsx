@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useChatStore } from "../../stores/chat";
+import { useSettingsStore } from "../../stores/settings";
 import { useSystemStore } from "../../stores/system";
 import { AGENTS, type AgentId } from "../../api/types";
 
@@ -73,7 +74,8 @@ export default function AgentSelectorDropdown() {
   const { status } = useSystemStore();
   const ref = useRef<HTMLDivElement>(null);
 
-  const model = status?.model ?? "—";
+  const settingsModel = useSettingsStore.getState().activeModel;
+  const model = status?.current_model_id ?? settingsModel ?? status?.model ?? "—";
   const currentAgent = AGENTS.find((a) => a.id === activeAgent) ?? AGENTS[0];
 
   useEffect(() => {
@@ -97,7 +99,7 @@ export default function AgentSelectorDropdown() {
       <div className="flex items-center gap-2">
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-1.5 cursor-pointer hover:bg-[#35343d] transition-colors px-1.5 py-[2px] rounded"
+          className="flex items-center gap-1.5 cursor-pointer hover:bg-surface-container-highest transition-colors px-1.5 py-[2px] rounded"
           aria-haspopup="listbox"
           aria-expanded={open}
         >
@@ -108,7 +110,7 @@ export default function AgentSelectorDropdown() {
             {currentAgent.label}
           </span>
           <svg
-            className={`w-3.5 h-3.5 text-[#c9c4d7] transition-transform ${open ? "rotate-180" : ""}`}
+            className={`w-3.5 h-3.5 text-on-surface-variant transition-transform ${open ? "rotate-180" : ""}`}
             viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
           >
             <path d="M6 9l6 6 6-6" />
@@ -116,7 +118,7 @@ export default function AgentSelectorDropdown() {
         </button>
 
         {/* Model badge */}
-        <div className="bg-[#444652] text-[#c9c4d7] text-[11px] font-bold tracking-[0.05em] px-2 py-[1px] rounded-full flex items-center">
+        <div className="bg-surface-container-highest text-on-surface-variant text-[11px] font-bold tracking-[0.05em] px-2 py-[1px] rounded-full flex items-center">
           {model}
         </div>
       </div>
@@ -125,7 +127,7 @@ export default function AgentSelectorDropdown() {
       {open && (
         <div
           role="listbox"
-          className="absolute top-full left-0 mt-1 w-[240px] bg-[#1c1b23] border border-[#242736] rounded-lg shadow-xl z-50 overflow-hidden p-1 flex flex-col gap-0.5"
+          className="absolute top-full left-0 mt-1 w-[240px] bg-surface-container-low border border-outline-variant rounded-lg shadow-xl z-50 overflow-hidden p-1 flex flex-col gap-0.5"
         >
           {AGENTS.map((agent) => (
             <button
@@ -136,7 +138,7 @@ export default function AgentSelectorDropdown() {
               className={`w-full text-left px-3 py-2 flex items-center gap-3 rounded-md transition-colors ${
                 agent.id === activeAgent
                   ? "bg-[#27263080]"
-                  : "hover:bg-[#201f27]"
+                  : "hover:bg-surface-container"
               }`}
             >
               <span className={`flex-shrink-0 p-1.5 rounded-md ${AGENT_BG[agent.id]} ${AGENT_COLORS[agent.id]}`}>
@@ -146,10 +148,10 @@ export default function AgentSelectorDropdown() {
                 <span className="text-[13px] text-[#e8eaf0] font-semibold leading-tight">
                   {agent.label}
                 </span>
-                <span className="text-[11px] text-[#8b8fa8] leading-tight">{agent.description}</span>
+                <span className="text-[11px] text-outline leading-tight">{agent.description}</span>
               </span>
               {agent.id === activeAgent && (
-                <svg className="ml-auto w-3.5 h-3.5 text-[#94a3b8] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <svg className="ml-auto w-3.5 h-3.5 text-primary-container flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
                   <polyline points="20 6 9 17 4 12"/>
                 </svg>
               )}

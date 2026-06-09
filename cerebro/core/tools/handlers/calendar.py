@@ -17,6 +17,7 @@ from core.agents.calendar_query_parse import (
     CalendarDateFilter,
     extract_calendar_date_filter,
     filter_events_by_date,
+    hours_window_for_filter,
     scope_phrase_for_filter,
 )
 from integrations.calendar_reader import (
@@ -28,7 +29,7 @@ from integrations.calendar_reader import (
     delete_apple_calendar_event_by_title,
 )
 
-_FAST_APPLE_TIMEOUT = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "12"))
+_FAST_APPLE_TIMEOUT = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "30"))
 
 # Short calendar block for "recordatorio" / reminder-style requests (not Apple Reminders app).
 _REMINDER_EVENT_DURATION_MINS = 30
@@ -254,8 +255,9 @@ def get_upcoming_events_for_query(
 ) -> str:
     """Like get_upcoming_events but parses after/before/on anchors from the query text."""
     date_filter = extract_calendar_date_filter(query)
+    effective_hours = hours_window_for_filter(date_filter, base_hours=hours_ahead)
     return get_upcoming_events(
-        hours_ahead=hours_ahead,
+        hours_ahead=effective_hours,
         ics_path=ics_path,
         max_events=max_events,
         fast_apple=fast_apple,

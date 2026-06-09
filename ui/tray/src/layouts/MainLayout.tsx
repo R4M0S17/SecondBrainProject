@@ -1,30 +1,72 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useState, useCallback, useEffect } from "react";
 import Header from "./Header";
+import LeftSidebar from "./LeftSidebar";
 import ChatWindow from "../components/chat/ChatWindow";
+import AgentBar from "../components/chat/AgentBar";
+import SystemSidebar from "../components/status/SystemSidebar";
 import StatusBar from "../components/status/StatusBar";
 import { useSettingsStore } from "../stores/settings";
 
 const SettingsPanel = lazy(() => import("../components/settings/SettingsPanel"));
+const DocumentsPanel = lazy(() => import("../components/documents/DocumentsPanel"));
 
 export default function MainLayout() {
-  const { isOpen } = useSettingsStore();
+  const { isOpen: settingsOpen, open: openSettings, close: closeSettings } = useSettingsStore();
+  const [docsOpen, setDocsOpen] = useState(false);
+  const closeDocs = useCallback(() => setDocsOpen(false), []);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => {
+        const w = getCurrentWindow();
+        w.isFullscreen().then(setIsFullscreen);
+        w.onResized(() => {
+          w.isFullscreen().then(setIsFullscreen);
+        }).then((fn) => { cleanup = fn; });
+      })
+      .catch(() => {});
+    return () => cleanup?.();
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    setDocsOpen(false);
+    openSettings();
+  }, [openSettings]);
+
+  const handleOpenDocuments = useCallback(() => {
+    if (settingsOpen) closeSettings();
+    setDocsOpen(true);
+  }, [settingsOpen, closeSettings]);
 
   return (
-    <div className="flex flex-col w-full h-full bg-[#0f1117] overflow-hidden">
-      <div
-        className="h-7 bg-[#1c1b23] shrink-0"
-        onMouseDown={() =>
-          import("@tauri-apps/api/window")
-            .then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
-            .catch(() => {})
-        }
+    <div className="flex flex-col w-full h-full bg-background overflow-hidden">
+      {!isFullscreen && <div className="h-7 shrink-0" data-tauri-drag-region />}
+      <Header
+        onDocumentsOpen={handleOpenDocuments}
+        onSettingsOpen={handleOpenSettings}
       />
-      <Header />
-      <ChatWindow className="flex-1 min-h-0" />
+
+      <div className="flex flex-1 overflow-hidden">
+        <LeftSidebar onOpenSettings={handleOpenSettings} />
+        <div className="flex-1 flex flex-col relative px-4 md:px-6 lg:px-8 pt-2 pb-6 w-full min-w-0">
+          <AgentBar />
+          <ChatWindow className="flex-1 min-h-0" />
+        </div>
+        <SystemSidebar onOpenDocuments={handleOpenDocuments} />
+      </div>
+
       <StatusBar />
-      {isOpen && (
+
+      {settingsOpen && (
         <Suspense fallback={null}>
           <SettingsPanel />
+        </Suspense>
+      )}
+      {docsOpen && (
+        <Suspense fallback={null}>
+          <DocumentsPanel isOpen={docsOpen} onClose={closeDocs} />
         </Suspense>
       )}
     </div>

@@ -11,7 +11,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from core.agents.conversation_store import ConversationStore
-from core.agents.runtime import StreamRunComplete
+from core.agents.runtime import ContextSourcesEvent, StreamRunComplete
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector
 from ui.tray.server import app, app_state
@@ -35,8 +35,10 @@ class _RunStreamingMock:
         agent_id: str,
         conversation_id: str | None = None,
         intent_query: str | None = None,
+        slot_id: int | None = None,
+        attachments: list[dict] | None = None,
     ):
-        self.calls.append((query, agent_id, conversation_id, intent_query))
+        self.calls.append((query, agent_id, conversation_id, intent_query, attachments))
         yield self.answer
         yield StreamRunComplete(answer=self.answer, final_state=self.final_state)
 
@@ -580,6 +582,130 @@ async def test_query_stream_calls_runtime_run_streaming(client, mock_runtime):
         await resp.aread()
     assert len(mock_runtime._run_streaming_mock.calls) == 1
     mock_runtime.stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_query_stream_semantic_chunking_event_count(client, mock_runtime):
+    """SentenceBuffer flushes produce ≤10 SSE events for 50 single-word tokens with 2 sentences."""
+    words = [
+        "This ",
+        "is ",
+        "a ",
+        "test ",
+        "of ",
+        "the ",
+        "sentence ",
+        "buffer. ",
+        "It ",
+        "should ",
+        "flush ",
+        "at ",
+        "boundaries. ",
+        "These ",
+        "extra ",
+        "words ",
+        "just ",
+        "add ",
+        "bulk ",
+        "to ",
+        "reach ",
+        "fifty ",
+        "tokens ",
+        "total ",
+        "without ",
+        "more ",
+        "sentences. ",
+        "Just ",
+        "padding ",
+        "here ",
+        "and ",
+        "more ",
+        "padding ",
+        "there ",
+        "to ",
+        "fill ",
+        "the ",
+        "count. ",
+        "Almost ",
+        "there ",
+        "now ",
+        "just ",
+        "a ",
+        "few ",
+        "more ",
+        "words ",
+        "left ",
+        "to ",
+        "write ",
+        "out. ",
+    ]
+    assert len(words) == 50, f"Expected 50 tokens, got {len(words)}"
+
+    full_answer = "".join(words)
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None)
+
+    async def _streaming_mock(*args, **kwargs):
+        for w in words:
+            yield w
+        yield StreamRunComplete(answer=full_answer, final_state=final_state)
+
+    app_state.runtime.run_streaming = _streaming_mock
+
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "test", "agent": "general-v1"},
+        )
+        assert resp.status_code == 200
+        body = await resp.aread()
+
+    body_text = body.decode()
+    token_events = [
+        line for line in body_text.split("\n") if line.startswith("data: ") and '"token"' in line
+    ]
+    token_count = len(token_events)
+    assert token_count <= 10, f"SentenceBuffer produced {token_count} token events, expected ≤10"
+
+    reconstructed = ""
+    for line in token_events:
+        payload = json.loads(line[6:])
+        reconstructed += payload["token"]
+    assert reconstructed == full_answer, (
+        f"Reconstructed text does not match original.\n"
+        f"Expected ({len(full_answer)} chars): {full_answer[:100]}...\n"
+        f"Got ({len(reconstructed)} chars): {reconstructed[:100]}..."
+    )
+
+
+@pytest.mark.asyncio
+async def test_query_stream_context_sources_event(client, mock_runtime):
+    """SSE stream includes context_sources event before token events when available."""
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None)
+    answer = "Respuesta de prueba."
+
+    async def _streaming_with_sources(*args, **kwargs):
+        yield ContextSourcesEvent(sources=["file1.pdf", "notes.md"], episode_count=2)
+        yield answer
+        yield StreamRunComplete(answer=answer, final_state=final_state)
+
+    app_state.runtime.run_streaming = _streaming_with_sources
+
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "test", "agent": "general-v1"},
+        )
+        assert resp.status_code == 200
+        body = await resp.aread()
+
+    body_text = body.decode()
+    events = [line for line in body_text.split("\n") if line.startswith("data: ")]
+    assert len(events) >= 2
+
+    first = json.loads(events[0][6:])
+    assert first.get("type") == "context_sources"
+    assert first.get("sources") == ["file1.pdf", "notes.md"]
+    assert first.get("episode_count") == 2
 
 
 @pytest.mark.asyncio

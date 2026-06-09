@@ -11,7 +11,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from core.agents.conversation_store import ConversationStore
-from core.agents.runtime import StreamRunComplete
+from core.agents.runtime import ContextSourcesEvent, StreamRunComplete
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector
 from ui.tray.server import app, app_state
@@ -35,8 +35,10 @@ class _RunStreamingMock:
         agent_id: str,
         conversation_id: str | None = None,
         intent_query: str | None = None,
+        slot_id: int | None = None,
+        attachments: list[dict] | None = None,
     ):
-        self.calls.append((query, agent_id, conversation_id, intent_query))
+        self.calls.append((query, agent_id, conversation_id, intent_query, attachments))
         yield self.answer
         yield StreamRunComplete(answer=self.answer, final_state=self.final_state)
 
@@ -583,6 +585,130 @@ async def test_query_stream_calls_runtime_run_streaming(client, mock_runtime):
 
 
 @pytest.mark.asyncio
+async def test_query_stream_semantic_chunking_event_count(client, mock_runtime):
+    """SentenceBuffer flushes produce ≤10 SSE events for 50 single-word tokens with 2 sentences."""
+    words = [
+        "This ",
+        "is ",
+        "a ",
+        "test ",
+        "of ",
+        "the ",
+        "sentence ",
+        "buffer. ",
+        "It ",
+        "should ",
+        "flush ",
+        "at ",
+        "boundaries. ",
+        "These ",
+        "extra ",
+        "words ",
+        "just ",
+        "add ",
+        "bulk ",
+        "to ",
+        "reach ",
+        "fifty ",
+        "tokens ",
+        "total ",
+        "without ",
+        "more ",
+        "sentences. ",
+        "Just ",
+        "padding ",
+        "here ",
+        "and ",
+        "more ",
+        "padding ",
+        "there ",
+        "to ",
+        "fill ",
+        "the ",
+        "count. ",
+        "Almost ",
+        "there ",
+        "now ",
+        "just ",
+        "a ",
+        "few ",
+        "more ",
+        "words ",
+        "left ",
+        "to ",
+        "write ",
+        "out. ",
+    ]
+    assert len(words) == 50, f"Expected 50 tokens, got {len(words)}"
+
+    full_answer = "".join(words)
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None)
+
+    async def _streaming_mock(*args, **kwargs):
+        for w in words:
+            yield w
+        yield StreamRunComplete(answer=full_answer, final_state=final_state)
+
+    app_state.runtime.run_streaming = _streaming_mock
+
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "test", "agent": "general-v1"},
+        )
+        assert resp.status_code == 200
+        body = await resp.aread()
+
+    body_text = body.decode()
+    token_events = [
+        line for line in body_text.split("\n") if line.startswith("data: ") and '"token"' in line
+    ]
+    token_count = len(token_events)
+    assert token_count <= 10, f"SentenceBuffer produced {token_count} token events, expected ≤10"
+
+    reconstructed = ""
+    for line in token_events:
+        payload = json.loads(line[6:])
+        reconstructed += payload["token"]
+    assert reconstructed == full_answer, (
+        f"Reconstructed text does not match original.\n"
+        f"Expected ({len(full_answer)} chars): {full_answer[:100]}...\n"
+        f"Got ({len(reconstructed)} chars): {reconstructed[:100]}..."
+    )
+
+
+@pytest.mark.asyncio
+async def test_query_stream_context_sources_event(client, mock_runtime):
+    """SSE stream includes context_sources event before token events when available."""
+    final_state = MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None)
+    answer = "Respuesta de prueba."
+
+    async def _streaming_with_sources(*args, **kwargs):
+        yield ContextSourcesEvent(sources=["file1.pdf", "notes.md"], episode_count=2)
+        yield answer
+        yield StreamRunComplete(answer=answer, final_state=final_state)
+
+    app_state.runtime.run_streaming = _streaming_with_sources
+
+    async with client as c:
+        resp = await c.post(
+            "/api/query/stream",
+            json={"question": "test", "agent": "general-v1"},
+        )
+        assert resp.status_code == 200
+        body = await resp.aread()
+
+    body_text = body.decode()
+    events = [line for line in body_text.split("\n") if line.startswith("data: ")]
+    assert len(events) >= 2
+
+    first = json.loads(events[0][6:])
+    assert first.get("type") == "context_sources"
+    assert first.get("sources") == ["file1.pdf", "notes.md"]
+    assert first.get("episode_count") == 2
+
+
+@pytest.mark.asyncio
 async def test_config_model_change_switches_to_mlx(client):
     """Patching model with the MLX model ID switches primary to mlx."""
     from core.inference.providers.llamacpp_provider import LlamaCppChatProvider
@@ -603,3 +729,116 @@ async def test_config_model_change_switches_to_mlx(client):
         await c.patch("/api/config", json={"model": "mlx-community/Phi-4-mini-instruct-4bit"})
 
     assert registry.get_chat() is mlx_chat
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# /fleet/*
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fleet_orchestrator(tmp_path):
+    from core.inference.fleet.hardware_monitor import HardwareSnapshot
+    from core.inference.fleet.model_registry import ModelConfig
+    from core.inference.fleet.orchestrator import FleetOrchestrator, ModelSelection
+
+    model_path = tmp_path / "tiny.gguf"
+    model_path.write_text("fake", encoding="utf-8")
+    model = ModelConfig(
+        id="tiny-q4",
+        path=str(model_path),
+        family="test",
+        params_b=0.5,
+        quant="Q4_K_M",
+        ram_required_gb=1.0,
+        vram_required_gb=0.5,
+        gpu_layers=0,
+        context_length=2048,
+        capabilities=["chat"],
+        speed_tokens_per_sec=100.0,
+    )
+    hw = HardwareSnapshot(
+        ram_total_gb=16.0,
+        ram_available_gb=8.0,
+        cpu_count=8,
+        cpu_percent=10.0,
+        gpu_backend="metal",
+        gpu_vram_total_gb=16.0,
+        gpu_vram_available_gb=8.0,
+        unified_memory=True,
+    )
+    fleet = FleetOrchestrator()
+    fleet._hw_snapshot = hw
+    fleet.current_selection = ModelSelection(
+        model=model,
+        gpu_layers=0,
+        context_length=2048,
+        rationale="test fixture",
+    )
+    app_state.fleet_orchestrator = fleet
+    return fleet
+
+
+@pytest.mark.asyncio
+async def test_fleet_status_returns_200(client, fleet_orchestrator):
+    async with client as c:
+        resp = await c.get("/api/fleet/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "auto"
+    assert body["current_model"]["id"] == "tiny-q4"
+    assert body["hardware"]["ram_pressure_pct"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_fleet_status_503_without_orchestrator(client):
+    app_state.fleet_orchestrator = None
+    async with client as c:
+        resp = await c.get("/api/fleet/status")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_fleet_models_lists_registry(client, fleet_orchestrator, monkeypatch):
+    model = fleet_orchestrator.current_selection.model
+    monkeypatch.setattr(fleet_orchestrator, "list_models", lambda registry_path=None: [model])
+    async with client as c:
+        resp = await c.get("/api/fleet/models")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["active_model_id"] == "tiny-q4"
+    assert len(body["models"]) == 1
+    assert body["models"][0]["available_on_disk"] is True
+
+
+@pytest.mark.asyncio
+async def test_fleet_config_pinned_persists(client, fleet_orchestrator, monkeypatch):
+    model = fleet_orchestrator.current_selection.model
+    monkeypatch.setattr(fleet_orchestrator, "list_models", lambda registry_path=None: [model])
+    async with client as c:
+        resp = await c.patch(
+            "/api/fleet/config",
+            json={"mode": "pinned", "pinned_model_id": "tiny-q4"},
+        )
+    assert resp.status_code == 200
+    assert app_state._config["fleet_mode"] == "pinned"
+    assert fleet_orchestrator.mode == "pinned"
+
+
+@pytest.mark.asyncio
+async def test_fleet_config_auto_restores_selection(client, fleet_orchestrator, monkeypatch):
+    def _fake_startup(registry_path=None, default_task_complexity=None):
+        sel = fleet_orchestrator.current_selection
+        fleet_orchestrator._mode = "auto"
+        fleet_orchestrator._pinned_model_id = None
+        return sel
+
+    model = fleet_orchestrator.current_selection.model
+    monkeypatch.setattr(fleet_orchestrator, "list_models", lambda registry_path=None: [model])
+    monkeypatch.setattr(fleet_orchestrator, "select_on_startup", _fake_startup)
+    fleet_orchestrator.pin_model("tiny-q4")
+    async with client as c:
+        resp = await c.patch("/api/fleet/config", json={"mode": "auto"})
+    assert resp.status_code == 200
+    assert app_state._config["fleet_mode"] == "auto"
+    assert fleet_orchestrator.mode == "auto"

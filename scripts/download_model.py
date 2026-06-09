@@ -70,10 +70,15 @@ if __name__ == "__main__":
 
     print("=== Cerebro Model Efficiency Testing ===\n")
     print("Available models:")
-    print("1. qwen  — Qwen2.5-Coder-3B-Instruct-Q4_K_M (default chat model)")
-    print("2. llama — Llama-3.2-3B-Instruct-Q4_K_M (legacy fallback)\n")
+    print("1. qwen3.5 — Qwen3.5-2B-Instruct-UD-Q4_K_XL (multimodal, default)")
+    print("2. qwen    — Qwen2.5-Coder-3B-Instruct-Q4_K_M (code chat model)")
+    print("3. llama   — Llama-3.2-3B-Instruct-Q4_K_M (legacy fallback)\n")
 
     targets = {
+        "qwen3.5": (
+            "unsloth/Qwen3.5-2B-GGUF",
+            "Qwen3.5-2B-UD-Q4_K_XL.gguf",
+        ),
         "qwen": (
             "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF",
             "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",

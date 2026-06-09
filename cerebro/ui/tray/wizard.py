@@ -57,7 +57,7 @@ class WizardSession:
     """Stateless wizard session; sentinel file on disk tracks completion."""
 
     data_dir: Path
-    chat_model: str = "phi4-mini"
+    chat_model: str = "Qwen_Qwen3.5-2B-Q4_K_M.gguf"
     embed_model: str = "nomic-embed-text"
 
     def __post_init__(self) -> None:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSettingsStore } from "../../stores/settings";
-import { useSystemStore, selectIsClaudeMode } from "../../stores/system";
+import { useSystemStore } from "../../stores/system";
 import { switchInferenceBackend } from "../../api/client";
 import FolderManager from "./FolderManager";
 import IndexProgress from "./IndexProgress";
@@ -9,13 +9,22 @@ import ToolPermissions from "./ToolPermissions";
 import DndToggle from "./DndToggle";
 import FleetSettings from "./FleetSettings";
 
+type BackendId = "llamacpp" | "mlx" | "claude";
+
+const BACKENDS: { id: BackendId; label: string }[] = [
+  { id: "llamacpp", label: "Local" },
+  { id: "mlx", label: "MLX" },
+  { id: "claude", label: "Claude API" },
+];
+
 export default function SettingsPanel() {
   const { close, isOpen } = useSettingsStore();
   const status = useSystemStore((s) => s.status);
-  const isCloud = selectIsClaudeMode(status);
+  const activeBackend: BackendId = (status?.provider as BackendId) || "llamacpp";
   const [switching, setSwitching] = useState(false);
 
-  const handleBackendSwitch = async (backend: "llamacpp" | "claude") => {
+  const handleBackendSwitch = async (backend: BackendId) => {
+    if (backend === activeBackend) return;
     setSwitching(true);
     try {
       await switchInferenceBackend(backend);
@@ -34,7 +43,7 @@ export default function SettingsPanel() {
   }, [close]);
 
   return (
-    <div className="absolute inset-0 z-40 flex" role="complementary" aria-label="Settings">
+    <div className="fixed inset-0 z-[60] flex" role="complementary" aria-label="Settings">
       {/* Backdrop */}
       <div
         className="flex-1 bg-black/40"
@@ -44,16 +53,16 @@ export default function SettingsPanel() {
 
       {/* Slide-over panel — 320px from right */}
       <aside
-        className={`w-[320px] h-full bg-[#1a1d27] border-l border-[#242736] flex flex-col z-10 transition-transform duration-200 ease-out ${
+        className={`w-[320px] h-full bg-surface-container border-l border-outline-variant flex flex-col z-10 transition-transform duration-200 ease-out ${
           isOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
         {/* Header */}
-        <header className="h-[48px] flex items-center justify-between px-4 bg-[#1a1d27] border-b border-[#242736] shrink-0">
-          <h2 className="text-[15px] font-semibold text-[#e5e0ed]">Settings</h2>
+        <header className="h-[48px] flex items-center justify-between px-4 bg-surface-container border-b border-outline-variant shrink-0">
+          <h2 className="text-[15px] font-semibold text-on-surface">Settings</h2>
           <button
             onClick={close}
-            className="p-1 rounded hover:bg-[#35343d] transition-colors text-[#c9c4d7]"
+            className="p-1 rounded hover:bg-surface-container-highest transition-colors text-on-surface-variant"
             aria-label="Close settings"
           >
             <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -66,7 +75,7 @@ export default function SettingsPanel() {
         <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
           {/* Watched Folders */}
           <section>
-            <label className="block text-[11px] font-bold tracking-[0.05em] text-[#8b8fa8] uppercase mb-2">
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
               Watched Folders
             </label>
             <FolderManager />
@@ -75,52 +84,42 @@ export default function SettingsPanel() {
 
           {/* Inference Backend */}
           <section>
-            <label className="block text-[11px] font-bold tracking-[0.05em] text-[#8b8fa8] uppercase mb-2">
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
               Inference Backend
             </label>
             <div className="flex gap-2">
-              <button
-                onClick={() => void handleBackendSwitch("llamacpp")}
-                disabled={switching || !isCloud}
-                className={`flex-1 py-2 rounded-[6px] text-[12px] font-semibold transition-colors ${
-                  !isCloud
-                    ? "bg-[#242736] border border-[#94a3b8] text-[#e5e0ed]"
-                    : "bg-[#1a1d27] border border-[#242736] text-[#474554] hover:border-[#474554]"
-                }`}
-              >
-                Local
-              </button>
-              <button
-                onClick={() => void handleBackendSwitch("claude")}
-                disabled={switching || isCloud}
-                className={`flex-1 py-2 rounded-[6px] text-[12px] font-semibold transition-colors ${
-                  isCloud
-                    ? "bg-[#2d1f4a] border border-[#a78bfa] text-[#a78bfa]"
-                    : "bg-[#1a1d27] border border-[#242736] text-[#474554] hover:border-[#474554]"
-                }`}
-              >
-                Claude API
-              </button>
+              {BACKENDS.map(({ id, label }) => {
+                const isActive = activeBackend === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => void handleBackendSwitch(id)}
+                    disabled={switching || isActive}
+                    className={`flex-1 py-2 rounded-[6px] text-[12px] font-semibold transition-all ${
+                      isActive
+                        ? "bg-surface-container border border-primary-container text-on-surface shadow-sm"
+                        : "bg-surface-container border border-outline-variant text-outline hover:border-outline hover:text-outline"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
-            <p className="text-[10px] font-mono text-[#474554] mt-1 px-1">
-              {isCloud
-                ? "Restart backend to apply · set ANTHROPIC_API_KEY"
-                : "Restart backend to apply · set CEREBRO_INFERENCE_BACKEND=claude"}
-            </p>
           </section>
 
           {/* Model */}
           <section>
-            <label className="block text-[11px] font-bold tracking-[0.05em] text-[#8b8fa8] uppercase mb-2">
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
               Model
             </label>
             <ModelSelector />
           </section>
 
           {/* Fleet Orchestrator */}
-          {!isCloud && (
+          {activeBackend !== "claude" && (
             <section>
-              <label className="block text-[11px] font-bold tracking-[0.05em] text-[#8b8fa8] uppercase mb-2">
+              <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
                 Fleet Orchestrator
               </label>
               <FleetSettings />
@@ -129,7 +128,7 @@ export default function SettingsPanel() {
 
           {/* Tool Permissions */}
           <section>
-            <label className="block text-[11px] font-bold tracking-[0.05em] text-[#8b8fa8] uppercase mb-2">
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
               Tool Permissions
             </label>
             <ToolPermissions />
@@ -137,7 +136,7 @@ export default function SettingsPanel() {
 
           {/* Notifications */}
           <section>
-            <label className="block text-[11px] font-bold tracking-[0.05em] text-[#8b8fa8] uppercase mb-2">
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
               Notifications
             </label>
             <DndToggle />
@@ -145,19 +144,19 @@ export default function SettingsPanel() {
         </div>
 
         {/* Status bar at bottom */}
-        <footer className="h-[28px] bg-[#1a1d27] border-t border-[#242736] flex items-center justify-between px-3 shrink-0">
+        <footer className="h-[28px] bg-surface-container border-t border-outline-variant flex items-center justify-between px-3 shrink-0">
           <div className="flex items-center gap-1">
             <div
               className={`w-1.5 h-1.5 rounded-full ${
-                isCloud ? "bg-[#a78bfa]" : status?.engine_ok ? "bg-[#4ade80]" : "bg-[#ffb4ab]"
+                activeBackend === "claude" ? "bg-[#a78bfa]" : status?.engine_ok ? "bg-success-green" : "bg-error"
               }`}
             />
             <span
               className={`text-[10px] font-bold tracking-[0.05em] uppercase ${
-                isCloud ? "text-[#a78bfa]" : status?.engine_ok ? "text-[#4ade80]" : "text-[#ffb4ab]"
+                activeBackend === "claude" ? "text-[#a78bfa]" : status?.engine_ok ? "text-success-green" : "text-error"
               }`}
             >
-              {isCloud ? "Claude API" : status?.engine_ok ? "Engine OK" : "Engine down"}
+              {activeBackend === "claude" ? "Claude API" : status?.engine_ok ? "Engine OK" : "Engine down"}
             </span>
           </div>
         </footer>

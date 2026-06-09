@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Final
 
 # Matches opening through the answer string's opening quote (GBNF allows ws).
@@ -17,7 +17,7 @@ _TOOL_OPEN_RE: Final = re.compile(
 )
 
 
-class _Mode(str, Enum):
+class _Mode(StrEnum):
     SEEKING = "seeking"
     IN_ANSWER = "in_answer"
     TOOL_BUFFER = "tool_buffer"

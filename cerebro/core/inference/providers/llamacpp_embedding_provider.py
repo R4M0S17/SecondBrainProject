@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import httpx
 
 from core.inference.engine import InferenceTimeoutError
@@ -24,7 +26,8 @@ class LlamaCppEmbeddingProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(f"{self._base_url}/v1/embeddings", json=payload)
                 response.raise_for_status()
-                return response.json()["data"][0]["embedding"]
+                vec = cast(list[Any], response.json()["data"][0]["embedding"])
+                return [float(x) for x in vec]
         except httpx.TimeoutException as e:
             raise InferenceTimeoutError("llama-server embedding timed out") from e
         except httpx.HTTPStatusError as e:

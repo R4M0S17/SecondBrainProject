@@ -203,6 +203,7 @@ def _ical_component_to_event(component) -> CalendarEvent | None:
 _AS_FETCH_UPCOMING = """\
 tell application "Calendar"
     set now to current date
+    set cutoffDate to now + ({hours_ahead} * hours)
     set skipCal to {{{skip_list}}}
     set out to ""
     repeat with cal in calendars
@@ -210,7 +211,7 @@ tell application "Calendar"
         if skipCal contains cName then
         else
             try
-                repeat with ev in (every event of cal whose start date ≥ now)
+                repeat with ev in (every event of cal whose start date ≥ now and start date ≤ cutoffDate)
                     set t to summary of ev
                     if t is missing value then set t to ""
                     set out to out & t & "{sep}" & (start date of ev as string) & "{sep}" & (end date of ev as string) & linefeed
@@ -249,13 +250,17 @@ def _parse_applescript_date_string(raw: str) -> datetime | None:
 def _fetch_upcoming_via_applescript(hours_ahead: int) -> tuple[list[CalendarEvent], str]:
     """Return upcoming events using AppleScript (reliable) and filter window in Python."""
     skip_list = ", ".join(f'"{n}"' for n in sorted(_SKIPPED_CALENDAR_NAMES))
-    script = _AS_FETCH_UPCOMING.format(sep=_AS_RECORD_SEP, skip_list=skip_list)
+    script = _AS_FETCH_UPCOMING.format(
+        sep=_AS_RECORD_SEP,
+        skip_list=skip_list,
+        hours_ahead=hours_ahead,
+    )
     try:
         result = subprocess.run(
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=max(8, int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "18"))),
+            timeout=max(8, int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "30"))),
         )
     except subprocess.TimeoutExpired:
         return [], "osascript timed out"
@@ -369,7 +374,7 @@ class AppleCalendarBackend:
     """Query Apple Calendar via osascript JavaScript for Automation (macOS only)."""
 
     _DEFAULT_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_TIMEOUT", "35"))
-    _FAST_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "12"))
+    _FAST_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "30"))
 
     def __init__(self, *, timeout_sec: int | None = None) -> None:
         self._timeout_sec = timeout_sec if timeout_sec is not None else self._DEFAULT_TIMEOUT_SEC

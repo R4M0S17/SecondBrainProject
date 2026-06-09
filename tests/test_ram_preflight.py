@@ -47,6 +47,46 @@ def test_run_ram_preflight_warn_only():
     assert consume_inference_warnings() == [RAM_WARNING_WARN]
 
 
+def test_run_ram_preflight_sets_ram_pressure_contextvar(monkeypatch):
+    from core.observability.ram_monitor import (
+        current_ram_pressure,
+        set_ram_pressure,
+    )
+
+    set_ram_pressure("ok")
+    assert current_ram_pressure() == "ok"
+
+    monitor = MagicMock(spec=RamMonitor)
+    monitor.snapshot.return_value = {
+        "pressure": "critical",
+        "used_gb": 7.2,
+        "available_gb": 0.4,
+        "total_gb": 8.0,
+    }
+
+    run_ram_preflight(monitor)
+
+    assert current_ram_pressure() == "critical"
+
+
+def test_run_ram_preflight_sets_warn_pressure(monkeypatch):
+    from core.observability.ram_monitor import current_ram_pressure, set_ram_pressure
+
+    set_ram_pressure("ok")
+
+    monitor = MagicMock(spec=RamMonitor)
+    monitor.snapshot.return_value = {
+        "pressure": "warn",
+        "used_gb": 6.5,
+        "available_gb": 1.2,
+        "total_gb": 8.0,
+    }
+
+    run_ram_preflight(monitor)
+
+    assert current_ram_pressure() == "warn"
+
+
 @pytest.mark.asyncio
 async def test_complete_still_returns_under_ram_critical(mocker):
     clear_inference_warnings()

@@ -18,8 +18,8 @@ from core.agents.file_write_fast_path import (
 
 _CALENDAR_CONTENT_RE = re.compile(
     r"\b("
-    r"cumpleaños|cumpleaño|cumpleannos|cumpleanos|cumplea(?:ñ|n)os|cumplea(?:ñ|n)o|"
-    r"cumple|birthday|aniversario|anniversary|"
+    r"cumpleaños|cumpleaño|cumpleannos|cumpleanos|cumplea(?:ñ|n)os|"
+    r"cumplea(?:ñ|n)o|cumple|birthday|aniversario|anniversary|"
     r"calendario|agenda|"
     r"eventos?\s+pr[oó]ximos?|pr[oó]ximos?\s+eventos?|"
     r"pr[oó]ximos?\s+\d+\s+(cumple|eventos?)|"

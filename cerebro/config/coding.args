@@ -1,4 +1,5 @@
---model bin/models/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+--model bin/models/Qwen3.5-2B-UD-Q4_K_XL.gguf
+--reasoning off
 --cache-prompt
 --ctx-size 8192
 --cache-type-k q8_0

@@ -11,6 +11,8 @@ from core.inference.registry import Message
 
 
 class MlxChatProvider:
+    supports_vision = False
+
     """In-process LLM inference via mlx-lm on Apple Silicon.
 
     All MLX operations (load + generate) run on a single persistent worker

@@ -27,12 +27,12 @@ class ErrorBoundary extends Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center h-full bg-[#0f1117] text-[#e5e0ed] gap-4 p-8">
+        <div className="flex flex-col items-center justify-center h-full bg-background text-on-surface gap-4 p-8">
           <p className="text-[16px] font-semibold">Something went wrong in the UI.</p>
-          <p className="text-[12px] text-[#8b8fa8] text-center">{this.state.message}</p>
+          <p className="text-[12px] text-outline text-center">{this.state.message}</p>
           <button
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-[#94a3b8] text-[#0f1117] rounded text-[14px] font-semibold"
+            className="px-4 py-2 bg-primary-container text-on-primary-container rounded text-[14px] font-semibold"
           >
             Reload
           </button>

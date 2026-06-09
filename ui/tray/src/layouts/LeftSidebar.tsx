@@ -1,0 +1,38 @@
+import { useState } from "react";
+
+interface LeftSidebarProps {
+  onOpenSettings?: () => void;
+}
+
+type LeftTab = "chat" | "fleet" | "tools" | "logs";
+
+const tabs: { id: LeftTab; icon: string; label: string }[] = [
+  { id: "chat", icon: "chat", label: "Chat" },
+  { id: "fleet", icon: "dns", label: "Fleet" },
+  { id: "tools", icon: "build", label: "Tools" },
+  { id: "logs", icon: "terminal", label: "Logs" },
+];
+
+export default function LeftSidebar({ onOpenSettings: _onOpenSettings }: LeftSidebarProps) {
+  const [activeTab, setActiveTab] = useState<LeftTab>("chat");
+
+  return (
+    <aside className="flex flex-col items-center w-12 bg-surface-container-low/60 backdrop-blur-sm border-r border-outline-variant/20 shrink-0 py-3 gap-1 z-30">
+      {tabs.map(({ id, icon, label }) => (
+        <button
+          key={id}
+          onClick={() => setActiveTab(id)}
+          className={`p-2 rounded-lg transition-colors ${
+            activeTab === id
+              ? "bg-primary-container/15 text-primary-container"
+              : "text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
+          }`}
+          aria-label={label}
+          title={label}
+        >
+          <span className="material-symbols-outlined text-[20px]">{icon}</span>
+        </button>
+      ))}
+    </aside>
+  );
+}

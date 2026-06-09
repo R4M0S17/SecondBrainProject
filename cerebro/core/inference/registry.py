@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast, runtime_checkable
 
 import psutil
 from loguru import logger
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 class Message(TypedDict):
     role: str
-    content: str
+    content: str | list[dict]
 
 
 class TaskHint(StrEnum):
@@ -30,6 +30,8 @@ class InsufficientResourcesError(Exception):
 
 @runtime_checkable
 class ChatProvider(Protocol):
+    supports_vision: bool = False
+
     async def complete(self, messages: list[Message], **kwargs) -> str: ...
 
     async def stream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]: ...
@@ -68,6 +70,7 @@ class ProviderRegistry:
         self._providers: dict[str, _ProviderEntry] = {}
         self._primary_name: str | None = None
         self._fallback_name: str | None = None
+        self._emergency_name: str | None = None
         self._ram_threshold_primary = ram_threshold_primary_gb
         self._ram_threshold_fallback = ram_threshold_fallback_gb
 
@@ -77,6 +80,12 @@ class ProviderRegistry:
             self._primary_name = name
         elif self._fallback_name is None:
             self._fallback_name = name
+
+    def register_emergency(self, name: str) -> None:
+        if name not in self._providers:
+            raise KeyError(f"Cannot register emergency provider '{name}': not registered")
+        self._emergency_name = name
+        logger.info("Emergency fallback provider set to '{}'", name)
 
     def get_chat(self, name: str | None = None) -> ChatProvider:
         key = name or self._primary_name
@@ -123,6 +132,14 @@ class ProviderRegistry:
             fallback = self._fallback_name or self._primary_name
             return fallback  # type: ignore[return-value]
 
+        if self._emergency_name is not None:
+            logger.warning(
+                "RAM critical ({:.1f} GB) — switching to emergency provider '{}'",
+                ram_available_gb,
+                self._emergency_name,
+            )
+            return self._emergency_name  # type: ignore[return-value]
+
         raise InsufficientResourcesError(
             f"Only {ram_available_gb:.1f} GB RAM available "
             f"(minimum {self._ram_threshold_fallback} GB required for inference)"
@@ -134,10 +151,13 @@ class ProviderRegistry:
         role = _AGENT_TO_ROLE.get(agent_id, "general")
         port = await model_manager.ensure_specialist(role)
         profile = "coding" if role == "code" else "chat"
-        return LlamaCppChatProvider(
-            model=agent_id,
-            base_url=f"http://127.0.0.1:{port}",
-            profile=profile,
+        return cast(
+            ChatProvider,
+            LlamaCppChatProvider(
+                model=agent_id,
+                base_url=f"http://127.0.0.1:{port}",
+                profile=profile,
+            ),
         )
 
     async def get_embedding_provider(

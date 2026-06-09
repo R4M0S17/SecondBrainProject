@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
+from typing import Any
 
 from core.agents.state_store import AgentProfile
 
@@ -176,7 +177,7 @@ def register_filesystem_tools(
     authorized_paths are bound via partial so the LLM never sees them as
     callable arguments.
     """
-    from core.tools.handlers.execution import run_script
+    from core.tools.handlers.execution import execute_python, run_script
     from core.tools.handlers.filesystem import (
         create_directory,
         create_python_file,
@@ -186,6 +187,7 @@ def register_filesystem_tools(
         search_files,
         write_file,
     )
+    from core.tools.handlers.upload import handle_file_upload
 
     registry.register(
         ToolDefinition(
@@ -274,6 +276,21 @@ def register_filesystem_tools(
     )
     registry.register(
         ToolDefinition(
+            name="execute_python",
+            description="Execute Python code in a sandboxed environment (RestrictedPython) with allowed: math, datetime, json, re, collections, itertools",
+            handler=partial(execute_python),
+            required_permission="tools.fs.write",
+            requires_confirmation=True,
+            scope=ToolScope.SANDBOXED,
+            audit_level=AuditLevel.FULL,
+            parameters={
+                "code": "str — Python code to execute",
+                "timeout_seconds": "int — maximum execution time in seconds (default: 10)",
+            },
+        )
+    )
+    registry.register(
+        ToolDefinition(
             name="run_script",
             description="Execute a saved Python script file and return its output",
             handler=partial(run_script, authorized_paths=authorized_write_paths),
@@ -297,6 +314,20 @@ def register_filesystem_tools(
             scope=ToolScope.LOCAL,
             audit_level=AuditLevel.FULL,
             parameters={"path": "str — ruta absoluta al archivo a eliminar"},
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="upload_file",
+            description="Process an uploaded file (PDF, image, or text) and extract its content for AI analysis",
+            handler=partial(handle_file_upload, authorized_paths=authorized_read_paths),
+            required_permission="tools.fs.read",
+            requires_confirmation=False,
+            scope=ToolScope.LOCAL,
+            audit_level=AuditLevel.METADATA,
+            parameters={
+                "file_path": "str — ruta absoluta al archivo cargado (PDF, imagen o texto)"
+            },
         )
     )
 
@@ -390,5 +421,93 @@ def register_math_tools(registry: ToolRegistry) -> None:
             scope=ToolScope.SANDBOXED,
             audit_level=AuditLevel.METADATA,
             parameters={"expression": "str — expresión numérica (ej: '17*23')"},
+        )
+    )
+
+
+def register_automation_tools(
+    registry: ToolRegistry,
+    recorder: Any,
+    workflow_store: Any,
+    chat_provider_getter: Any,
+) -> None:
+    """Register Desktop Automation tools (recording + workflow playback)."""
+    from core.automation.tools import (
+        make_run_workflow,
+        make_start_recording,
+        make_stop_recording,
+    )
+
+    registry.register(
+        ToolDefinition(
+            name="start_recording",
+            description="Begin capturing mouse and keyboard events on macOS to record a reusable workflow",
+            handler=make_start_recording(recorder),
+            required_permission="tools.automation.record",
+            requires_confirmation=True,
+            scope=ToolScope.RESTRICTED,
+            audit_level=AuditLevel.FULL,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="stop_recording",
+            description="Stop recording and generalise the captured events into a reusable AppleScript workflow",
+            handler=make_stop_recording(recorder, workflow_store, chat_provider_getter),
+            required_permission="tools.automation.record",
+            requires_confirmation=False,
+            scope=ToolScope.RESTRICTED,
+            audit_level=AuditLevel.FULL,
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="run_workflow",
+            description="Execute a previously recorded automation workflow by its ID",
+            handler=make_run_workflow(workflow_store),
+            required_permission="tools.automation.execute",
+            requires_confirmation=True,
+            scope=ToolScope.RESTRICTED,
+            audit_level=AuditLevel.FULL,
+            parameters={"workflow_id": "str — ID del workflow a ejecutar"},
+        )
+    )
+
+
+def register_web_tools(registry: ToolRegistry) -> None:
+    """Register web search & fetch ToolDefinitions into a ToolRegistry instance."""
+    from core.tools.handlers.web import web_fetch, web_search
+
+    registry.register(
+        ToolDefinition(
+            name="web_search",
+            description=(
+                "Search the internet for current information using a web search engine. "
+                "Use for news, facts, recent events, or any question that needs up-to-date data."
+            ),
+            handler=web_search,
+            required_permission="tools.web.read",
+            requires_confirmation=False,
+            scope=ToolScope.SANDBOXED,
+            audit_level=AuditLevel.METADATA,
+            parameters={
+                "query": "str — search query in natural language",
+                "max_results": "int — number of results to return (default: 5)",
+            },
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="web_fetch",
+            description=(
+                "Fetch and extract readable text content from a specific URL. "
+                "Use to read full articles or pages found via web_search."
+            ),
+            handler=web_fetch,
+            required_permission="tools.web.read",
+            requires_confirmation=False,
+            scope=ToolScope.SANDBOXED,
+            audit_level=AuditLevel.METADATA,
+            parameters={"url": "str — full URL to fetch (https://...)"},
         )
     )

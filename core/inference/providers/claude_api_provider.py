@@ -21,6 +21,8 @@ class ClaudeApiUnavailableError(Exception):
 
 
 class ClaudeApiChatProvider:
+    supports_vision = False
+
     def __init__(
         self,
         model: str = _DEFAULT_MODEL,

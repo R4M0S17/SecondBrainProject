@@ -14,6 +14,9 @@ import asyncio
 import inspect
 import json
 import os
+import re
+import signal
+import subprocess
 import tempfile
 import time
 import uuid
@@ -23,6 +26,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+
+# Tuned pool limits: prevents socket exhaustion under concurrent requests.
+# max_connections=20 gives headroom for bursts; max_keepalive=10 keeps warm
+# sockets ready; keepalive_expiry=30s matches llama-server's keep-alive window.
+_HTTP_POOL_LIMITS = httpx.Limits(
+    max_connections=20,
+    max_keepalive_connections=10,
+    keepalive_expiry=30.0,
+)
+
 from fastapi import (
     APIRouter,
     Body,
@@ -44,6 +57,7 @@ from core.agents.conversation_store import ConversationStore
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
 from core.inference.inference_warnings import clear_inference_warnings, consume_inference_warnings
 from core.inference.ram_preflight import RAM_WARNING_CRITICAL, collect_ram_warnings
+from core.ingestion.pipeline import IngestionPipeline
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
 from core.tools.handlers.upload import process_uploaded_file
@@ -125,8 +139,8 @@ class ToolConfirmRequest(BaseModel):
 class FileAttachment(BaseModel):
     filename: str
     mime_type: str
-    content: str
-    type: str
+    content: str  # Contains raw text for docs/PDFs, or base64 for images
+    type: str  # "pdf", "image", "text", or "unknown"
 
 
 class QueryRequest(BaseModel):
@@ -140,32 +154,6 @@ class QueryResponse(BaseModel):
     answer: str
     metadata: ResponseMetadataModel
     conversation_id: str
-
-
-def _build_augmented_question(question: str, attachments: list[FileAttachment] | None) -> str:
-    if not attachments:
-        return question
-
-    parts = [question, "", "ARCHIVOS ADJUNTOS:"]
-    for attachment in attachments:
-        content = attachment.content.strip()
-        if not content:
-            continue
-        limit = 20000 if attachment.type == "image" else 12000
-        if len(content) > limit:
-            content = content[:limit] + "\n[Truncated attachment content]"
-        parts.append(
-            f"- {attachment.filename} ({attachment.mime_type}, {attachment.type})\n" f"{content}"
-        )
-
-    parts.extend(
-        [
-            "",
-            "Usa el contenido de los archivos adjuntos como contexto principal para responder.",
-            "No inventes detalles que no estén en los archivos.",
-        ]
-    )
-    return "\n".join(parts)
 
 
 class IndexRequest(BaseModel):
@@ -285,6 +273,8 @@ class AppState:
         self.enricher: Any = None  # ContextEnricher | None
         self.embedding_provider: Any = None  # CachedEmbeddingProvider | None
         self.fleet_orchestrator: Any = None  # FleetOrchestrator | None
+        self.rag_engine: Any = None  # RAGQueryEngine | None
+        self.inference_engine: Any = None  # InferenceEngine | None
         self.router: SpecializedAgentRouter = SpecializedAgentRouter()
         self.active_agent_id: str = GENERAL_AGENT_ID
         self.metrics: MetricsCollector = MetricsCollector()
@@ -305,6 +295,11 @@ class AppState:
         self.macos_permissions: dict[str, str] = {"calendar": "unknown"}
         self.ram_monitor: RamMonitor = RamMonitor()
         self.llama_health_monitor: Any = None
+        self.time_travel_recorder: Any = None
+        self.recorder: Any = None
+        self.workflow_store: Any = None
+        # Maps conversation_id → llama-server slot_id for KV cache reuse.
+        self._active_slots: dict[str, int] = {}
         self._load_wizard_state()
 
     def _load_config(self) -> dict[str, Any]:
@@ -375,8 +370,27 @@ async def _start_component_in_background(name: str, starter) -> None:
         logger.exception("{} failed to start", name)
 
 
+def _build_inference_engine(app: FastAPI, model: str) -> Any:
+    """Construct an InferenceEngine backed by the shared connection pool."""
+    from core.inference.engine import InferenceEngine
+
+    return InferenceEngine(
+        model=model,
+        base_url=os.getenv("CEREBRO_LLAMACPP_URL", "http://127.0.0.1:8080"),
+        http_client=getattr(app.state, "http_client", None),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Shared HTTP client — created ONCE, lives for the entire server process ──
+    http_client = httpx.AsyncClient(
+        limits=_HTTP_POOL_LIMITS,
+        timeout=httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0),
+    )
+    app.state.http_client = http_client
+    logger.info("Shared httpx.AsyncClient initialised (pool: {})", _HTTP_POOL_LIMITS)
+
     try:
         from core.observability.macos_perms import probe_calendar_permission
 
@@ -386,6 +400,19 @@ async def lifespan(app: FastAPI):
         app_state.macos_permissions["calendar"] = "unknown"
 
     startup_tasks: list[asyncio.Task[Any]] = []
+    if app_state.embedding_provider is not None:
+        cache = getattr(app_state.embedding_provider, "_cache", None)
+        if cache is not None:
+            startup_tasks.append(
+                asyncio.create_task(
+                    _start_component_in_background("EmbeddingCache.load", cache.load_from_store)
+                )
+            )
+            startup_tasks.append(
+                asyncio.create_task(
+                    _start_component_in_background("EmbeddingCache.sweep", cache.sweep_expired)
+                )
+            )
     if app_state.model_manager is not None:
         startup_tasks.append(
             asyncio.create_task(
@@ -402,8 +429,12 @@ async def lifespan(app: FastAPI):
             )
         )
 
-    yield
+    if app_state.time_travel_recorder is not None:
+        app_state.time_travel_recorder.start()
 
+    yield  # ── server is live ──────────────────────────────────────────────────
+
+    # Graceful shutdown: cancel background tasks first, then close the HTTP pool.
     for task in startup_tasks:
         task.cancel()
     for task in startup_tasks:
@@ -416,6 +447,19 @@ async def lifespan(app: FastAPI):
         await app_state.llama_health_monitor.stop()
     if app_state.model_manager is not None:
         await app_state.model_manager.stop()
+    if app_state.time_travel_recorder is not None:
+        app_state.time_travel_recorder.enforce_retention()
+        await app_state.time_travel_recorder.shutdown()
+    if app_state.recorder is not None:
+        try:
+            app_state.recorder.stop()
+        except Exception:
+            pass
+    if app_state.workflow_store is not None:
+        app_state.workflow_store.close()
+
+    await http_client.aclose()
+    logger.info("Shared httpx.AsyncClient closed cleanly")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -434,11 +478,34 @@ app.add_middleware(
 api = APIRouter(prefix="/api")
 
 
+def _safe_dest(path: Path) -> Path:
+    """Ensure destination path doesn't overwrite existing files."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    counter = 1
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+# Dedicated secure file upload endpoint (STEP 1 implementation)
 @api.post("/files/upload")
 async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
-    max_single_file_bytes = 10 * 1024 * 1024
-    max_total_upload_bytes = 30 * 1024 * 1024
-    allowed_mimes = {
+    """Upload and pre-process documents/images safely.
+
+    Reuses existing core.tools.handlers.upload extraction logic.
+
+    Adds server-side validation and size limits to prevent abuse and DB bloat.
+    """
+    # Limits
+    MAX_SINGLE_FILE_BYTES = 10 * 1024 * 1024  # 10 MB per file
+    MAX_TOTAL_UPLOAD_BYTES = 30 * 1024 * 1024  # 30 MB total per request
+
+    ALLOWED_MIMES = {
         "image/jpeg",
         "image/png",
         "image/gif",
@@ -454,36 +521,44 @@ async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dic
     total_bytes = 0
 
     for file in files:
-        if file.content_type and file.content_type not in allowed_mimes:
+        # Basic content-type whitelist
+        if file.content_type and file.content_type not in ALLOWED_MIMES:
             raise HTTPException(
                 status_code=400, detail=f"Unsupported file type: {file.content_type}"
             )
 
+        # Create a safe temporary file matching the suffix of the original upload
         suffix = Path(file.filename).suffix if file.filename else ""
-        temp_path: str | None = None
+        temp_path = None
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 temp_path = tmp.name
+                # Stream file into temp file and enforce per-file + total limits
                 while True:
                     chunk = file.file.read(8192)
                     if not chunk:
                         break
                     tmp.write(chunk)
                     total_bytes += len(chunk)
-                    if total_bytes > max_total_upload_bytes:
+
+                    if total_bytes > MAX_TOTAL_UPLOAD_BYTES:
+                        # Clean up and respond with 413
                         raise HTTPException(status_code=413, detail="Total upload size exceeded")
-                    if tmp.tell() > max_single_file_bytes:
+
+                    if tmp.tell() > MAX_SINGLE_FILE_BYTES:
                         raise HTTPException(
                             status_code=413,
                             detail=f"File '{file.filename or 'unknown'}' exceeds single-file size limit",
                         )
                 tmp.flush()
 
+            # Reuses the existing high-quality tool validator & processor
             result = process_uploaded_file(
                 temp_path,
                 authorized_paths=app_state.authorized_read_paths,
                 enforce_authorization=False,
             )
+
             if isinstance(result, dict) and "error" in result:
                 raise HTTPException(status_code=400, detail=result["error"])
 
@@ -493,18 +568,50 @@ async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dic
                     "mime_type": result.get("metadata", {}).get(
                         "mime_type", "application/octet-stream"
                     ),
-                    "content": result.get("content", ""),
+                    "content": result.get("content"),
                     "type": result.get("type", "unknown"),
                 }
             )
+
         finally:
-            if temp_path:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
+            # Guarantee temporary file is deleted immediately from disk
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
 
     return parsed_attachments
+
+
+class SentenceBuffer:
+    """Buffers tokens and flushes at sentence boundaries.
+
+    Reduces DOM repaint events by emitting multi-token chunks instead of
+    single tokens. Flushes on: sentence-ending punctuation, newlines, max
+    chars exceeded, or max age exceeded.
+    """
+
+    def __init__(self, max_chars: int = 120, max_age_ms: int = 200) -> None:
+        self._buf: list[str] = []
+        self._max_chars = max_chars
+        self._max_age_ms = max_age_ms
+        self._last_flush = 0.0
+
+    def add(self, token: str) -> str | None:
+        self._buf.append(token)
+        text = "".join(self._buf)
+        age_ms = (time.monotonic() - self._last_flush) * 1000 if self._last_flush > 0 else 0.0
+        if (
+            len(text) >= self._max_chars
+            or text.rstrip().endswith((".", "!", "?", "\n"))
+            or (self._last_flush > 0 and age_ms >= self._max_age_ms)
+        ):
+            return self.flush()
+        return None
+
+    def flush(self) -> str:
+        result = "".join(self._buf)
+        self._buf.clear()
+        self._last_flush = time.monotonic()
+        return result
 
 
 def _build_metadata(
@@ -520,6 +627,48 @@ def _build_metadata(
         provider_used=provider_name,
         warnings=warnings,
     )
+
+
+def _build_augmented_question(
+    question: str,
+    attachments: list[FileAttachment] | None,
+) -> str:
+    if not attachments:
+        return question
+
+    max_total_chars = 12_000
+    max_chars_per_file = 4_000
+    remaining = max_total_chars
+    context_parts = [
+        "[Instruction]",
+        "La pregunta del usuario se refiere a los archivos adjuntos. Usa su contenido para responder.",
+        "[User Question]",
+        question,
+        "[Attached Files Context]",
+    ]
+    for att in attachments:
+        if att.type == "image":
+            context_parts.append(
+                f"[File: {att.filename} (IMAGE)]\nMIME-Type: {att.mime_type}\n"
+                "Nota: imagen adjunta enviada al modelo como dato multimodal."
+            )
+            continue
+
+        if remaining <= 0:
+            context_parts.append("[Context truncated: attachment limit reached]")
+            break
+
+        content = att.content or ""
+        allowed = min(max_chars_per_file, remaining)
+        clipped = content[:allowed]
+        remaining -= len(clipped)
+        truncated = len(content) > len(clipped)
+        trunc_note = "\n[Attachment truncated for prompt size]" if truncated else ""
+        context_parts.append(
+            f"[File: {att.filename}]\nMIME-Type: {att.mime_type}\nContent:\n{clipped}{trunc_note}"
+        )
+
+    return "\n\n".join(context_parts)
 
 
 def _meta_to_model(meta: ResponseMetadata) -> ResponseMetadataModel:
@@ -567,18 +716,16 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     if req.agent == "auto":
         route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
-        intent_query = route.query
+        query_text = route.query
     else:
         agent_id = req.agent
-        intent_query = req.question
-
-    query_text = _build_augmented_question(req.question, req.attachments)
+        query_text = req.question
 
     app_state.active_agent_id = agent_id
     app_state.metrics.set_active_agent(agent_id)
 
     # Resolve model name for metadata; ensure specialist is loaded when model swapping is active.
-    model_name = "phi3:mini"
+    model_name = app_state._config.get("model", "Qwen3.5-2B-UD-Q4_K_XL.gguf")
     provider_name = "unknown"
     warnings: list[str] = []
     clear_inference_warnings()
@@ -611,9 +758,21 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             pass
 
     start = time.perf_counter()
+    text_attachments = [a for a in (req.attachments or []) if a.type != "image"]
+    image_attachments = [
+        {"filename": a.filename, "mime_type": a.mime_type, "content": a.content, "type": a.type}
+        for a in (req.attachments or [])
+        if a.type == "image"
+    ]
+    augmented_question = _build_augmented_question(query_text, text_attachments)
+
     try:
         answer, final_state = await app_state.runtime.run(
-            query_text, agent_id, conversation_id=conv_id, intent_query=intent_query
+            augmented_question,
+            agent_id,
+            conversation_id=conv_id,
+            intent_query=query_text,
+            attachments=image_attachments,
         )
     except Exception as exc:
         logger.exception("Runtime error during /query")
@@ -628,7 +787,7 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
                 name=tc.tool_name,
                 args_summary=str(tc.args)[:100] if tc.args else "",
                 result_summary=(tc.result or "")[:200],
-                latency_ms=0.0,
+                latency_ms=tc.latency_ms,
                 approved=True,
             )
         )
@@ -649,7 +808,13 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     meta_model = _meta_to_model(meta)
 
     try:
-        app_state.conv_store.append(conv_id, query_text, answer, meta_model.model_dump())
+        history_question = req.question
+        if getattr(req, "attachments", None):
+            filenames = ", ".join(
+                att.filename for att in req.attachments if getattr(att, "filename", None)
+            )
+            history_question = f"{req.question}\n\n[Attached files: {filenames}]"
+        app_state.conv_store.append(conv_id, history_question, answer, meta_model.model_dump())
     except Exception:
         logger.exception("Failed to persist conversation turn for {}", conv_id)
 
@@ -664,20 +829,7 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
             detail="Runtime not initialized. Start the llama.cpp server and reload.",
         )
 
-    if req.agent == "auto":
-        route = await app_state.router.route_with_llm(req.question)
-        agent_id = route.agent_id
-        intent_query = route.query
-    else:
-        agent_id = req.agent
-        intent_query = req.question
-
-    query_text = _build_augmented_question(req.question, req.attachments)
-
-    app_state.active_agent_id = agent_id
-    app_state.metrics.set_active_agent(agent_id)
-
-    model_name = "phi3:mini"
+    model_name = app_state._config.get("model", "Qwen3.5-2B-UD-Q4_K_XL.gguf")
     provider_name = "unknown"
     warnings: list[str] = []
     clear_inference_warnings()
@@ -692,9 +844,30 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
         except Exception:
             warnings.append("provider_fallback")
 
+    if req.agent == "auto":
+        route = await app_state.router.route_with_llm(req.question)
+        agent_id = route.agent_id
+        query_text = route.query
+    else:
+        agent_id = req.agent
+        query_text = req.question
+
+    app_state.active_agent_id = agent_id
+    app_state.metrics.set_active_agent(agent_id)
+
     stream_conv_id = req.conversation_id
     if stream_conv_id is None or app_state.conv_store.get(stream_conv_id) is None:
         stream_conv_id = app_state.conv_store.create(agent_id)
+
+    # Separate image attachments for multimodal support
+    text_attachments = [a for a in (req.attachments or []) if a.type != "image"]
+    image_attachments_stream = [
+        {"filename": a.filename, "mime_type": a.mime_type, "content": a.content, "type": a.type}
+        for a in (req.attachments or [])
+        if a.type == "image"
+    ]
+    # Build augmented question for streaming endpoint (LLM context only)
+    augmented_question = _build_augmented_question(query_text, text_attachments)
 
     # Phase 2: always use runtime.run() (tool loop) for /query/stream so live-data
     # questions invoke tools; token streaming is simulated from the final answer.
@@ -720,25 +893,38 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
             except Exception:
                 warnings.append("provider_fallback")
         try:
-            from core.agents.runtime import StreamRunComplete
+            from core.agents.runtime import ContextSourcesEvent, StreamRunComplete
 
+            slot_id_in = app_state._active_slots.get(stream_conv_id)
             answer_parts: list[str] = []
             final_state = None
             live_streamed = False
+            buf = SentenceBuffer()
             async for chunk in app_state.runtime.run_streaming(
-                query_text,
+                augmented_question,
                 agent_id,
                 conversation_id=stream_conv_id,
-                intent_query=intent_query,
+                intent_query=query_text,
+                slot_id=slot_id_in,
+                attachments=image_attachments_stream,
             ):
+                if isinstance(chunk, ContextSourcesEvent):
+                    yield f"data: {json.dumps({'type': 'context_sources', 'sources': chunk.sources, 'episode_count': chunk.episode_count})}\n\n"
+                    continue
                 if isinstance(chunk, StreamRunComplete):
+                    remaining = buf.flush()
+                    if remaining:
+                        answer_parts.append(remaining)
+                        yield f"data: {json.dumps({'token': remaining})}\n\n"
                     final_state = chunk.final_state
                     if not answer_parts:
                         answer_parts = [chunk.answer]
                     break
                 live_streamed = True
                 answer_parts.append(chunk)
-                yield f"data: {json.dumps({'token': chunk})}\n\n"
+                flushed = buf.add(chunk)
+                if flushed is not None:
+                    yield f"data: {json.dumps({'token': flushed})}\n\n"
 
             if final_state is None:
                 raise RuntimeError("run_streaming ended without StreamRunComplete")
@@ -749,6 +935,9 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
                 for i, word in enumerate(words):
                     token = word + (" " if i < len(words) - 1 else "")
                     yield f"data: {json.dumps({'token': token})}\n\n"
+        except asyncio.CancelledError:
+            logger.info("Client disconnected during streaming for conv={}", stream_conv_id)
+            return
         except Exception as exc:
             logger.exception("Runtime error during /query/stream (tools path)")
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
@@ -764,7 +953,7 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
                     name=tc.tool_name,
                     args_summary=str(tc.args)[:100] if tc.args else "",
                     result_summary=(tc.result or "")[:200],
-                    latency_ms=0.0,
+                    latency_ms=tc.latency_ms,
                     approved=True,
                 )
             )
@@ -784,7 +973,15 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
         meta_model = _meta_to_model(meta)
 
         try:
-            app_state.conv_store.append(stream_conv_id, query_text, answer, meta_model.model_dump())
+            history_question = query_text
+            if getattr(req, "attachments", None):
+                filenames = ", ".join(
+                    att.filename for att in req.attachments if getattr(att, "filename", None)
+                )
+                history_question = f"{query_text}\n\n[Attached files: {filenames}]"
+            app_state.conv_store.append(
+                stream_conv_id, history_question, answer, meta_model.model_dump()
+            )
         except Exception:
             logger.exception("Failed to persist streaming (tools) turn for {}", stream_conv_id)
 
@@ -810,12 +1007,10 @@ async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
     if req.agent == "auto":
         route = await app_state.router.route_with_llm(req.question)
         agent_id = route.agent_id
-        intent_query = route.query
+        query_text = route.query
     else:
         agent_id = req.agent
-        intent_query = req.question
-
-    query_text = _build_augmented_question(req.question, req.attachments)
+        query_text = req.question
 
     app_state.active_agent_id = agent_id
     app_state.metrics.set_active_agent(agent_id)
@@ -833,10 +1028,7 @@ async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
             is_complex = app_state.planner.is_complex_task(query_text)
             if not is_complex:
                 answer, final_state = await app_state.runtime.run(
-                    query_text,
-                    agent_id,
-                    conversation_id=plan_conv_id,
-                    intent_query=intent_query,
+                    query_text, agent_id, conversation_id=plan_conv_id
                 )
                 yield f"data: {json.dumps({'step': 0, 'description': query_text[:100], 'total': 1})}\n\n"
                 words = answer.split(" ")
@@ -853,10 +1045,7 @@ async def query_plan_endpoint(req: QueryRequest) -> StreamingResponse:
                     yield f"data: {json.dumps({'step': step_idx, 'description': step_text[:100], 'total': total_steps})}\n\n"
 
                     answer, final_state = await app_state.runtime.run(
-                        step_text,
-                        agent_id,
-                        conversation_id=plan_conv_id,
-                        intent_query=intent_query,
+                        step_text, agent_id, conversation_id=plan_conv_id
                     )
 
                     # Stream tokens for this step's answer
@@ -906,7 +1095,7 @@ async def tool_confirm_endpoint(req: ToolConfirmRequest) -> QueryResponse:
     tool_name: str = pending["tool_name"]
     tool_args: dict = pending["tool_args"]
 
-    model_name = "phi3:mini"
+    model_name = app_state._config.get("model", "Qwen3.5-2B-UD-Q4_K_XL.gguf")
     provider_name = "unknown"
     warnings: list[str] = []
     if app_state.provider_registry is not None:
@@ -968,20 +1157,38 @@ async def tool_confirm_endpoint(req: ToolConfirmRequest) -> QueryResponse:
 async def _run_index_job(job_id: str, paths: list[str]) -> None:
     job = app_state._index_jobs[job_id]
     try:
-        file_count = 0
+        pipeline = IngestionPipeline()
+        total = 0
         for raw_path in paths:
             p = Path(raw_path).expanduser()
             if p.is_file():
-                file_count += 1
+                total += await _ingest_file(p, pipeline)
             elif p.is_dir():
-                file_count += sum(1 for f in p.rglob("*") if f.is_file())
-        job.files_indexed = file_count
+                for f in p.rglob("*"):
+                    if f.is_file() and f.suffix.lower() in {".pdf", ".txt", ".md", ".py", ".docx"}:
+                        total += await _ingest_file(f, pipeline)
+        job.files_indexed = total
         job.status = "done"
-        logger.info("Index job {} completed: {} files", job_id, file_count)
+        logger.info("Index job {} completed: {} chunks indexed", job_id, total)
     except Exception as exc:
         job.status = "error"
         job.message = str(exc)
         logger.exception("Index job {} failed", job_id)
+
+
+async def _ingest_file(path: Path, pipeline: IngestionPipeline) -> int:
+    if app_state.vector_store is None or app_state.inference_engine is None:
+        return 0
+    try:
+        docs = pipeline.ingest(str(path))
+        if not docs:
+            return 0
+        count = await app_state.vector_store.upsert(docs, app_state.inference_engine)
+        logger.debug("Indexed {} chunks from {}", count, path.name)
+        return count
+    except Exception as exc:
+        logger.warning("Failed to index {}: {}", path.name, exc)
+        return 0
 
 
 @api.post("/index", response_model=IndexResponse)
@@ -1016,6 +1223,38 @@ async def _apply_ram_pressure_warnings(warnings: list[str]) -> None:
         cache = getattr(app_state.embedding_provider, "_cache", None)
         if cache is not None:
             await cache.clear()
+
+
+@api.get("/documents")
+async def list_documents_endpoint() -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    if app_state.vector_store is not None:
+        try:
+            indexed = app_state.vector_store.get_indexed_files()
+            for source_path, file_modified in sorted(
+                indexed.items(), key=lambda x: x[1], reverse=True
+            ):
+                files.append(
+                    {
+                        "source_path": source_path,
+                        "file_modified": file_modified,
+                        "filename": Path(source_path).name,
+                    }
+                )
+        except Exception as exc:
+            logger.warning("Failed to list documents: {}", exc)
+    return files
+
+
+@api.delete("/documents")
+async def delete_document_endpoint(source_path: str) -> dict[str, Any]:
+    if app_state.vector_store is None:
+        raise HTTPException(status_code=503, detail="Vector store not available")
+    try:
+        count = app_state.vector_store.delete_by_source(source_path)
+        return {"deleted": count, "source_path": source_path}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @api.get("/health", response_model=HealthResponse)
@@ -1321,6 +1560,27 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
         registry.set_primary(target)
 
+        # Hot-switch the running llama-server to the selected model
+        prev_model = app_state._config.get("model")
+        if target == "llamacpp" and app_state.model_manager is None and model_name != prev_model:
+            try:
+                await _switch_llamacpp_model(model_name)
+            except Exception:
+                logger.exception("Failed to hot-switch model")
+
+    if "inference_backend" in settings and app_state.provider_registry is not None:
+        backend: str = settings["inference_backend"]
+        registry = app_state.provider_registry
+        if backend in registry.available_providers():
+            registry.set_primary(backend)
+            logger.info("Inference backend switched to '{}'", backend)
+        else:
+            logger.warning(
+                "Backend '{}' not available (registered: {})",
+                backend,
+                registry.available_providers(),
+            )
+
     if "watched_folders" in settings and app_state.runtime is not None:
         from functools import partial
 
@@ -1360,16 +1620,15 @@ async def list_models() -> dict[str, Any]:
             except Exception:
                 pass
 
-    # llama.cpp GGUF models
-    if _LLAMA_CPP_MODELS_DIR.is_dir():
-        for gguf in sorted(_LLAMA_CPP_MODELS_DIR.glob("*.gguf")):
-            models.append(
-                {
-                    "name": gguf.name,
-                    "size_gb": round(gguf.stat().st_size / 1_073_741_824, 1),
-                    "provider": "llamacpp",
-                }
-            )
+    # llama.cpp GGUF models (from all model dirs)
+    for m in _find_all_gguf():
+        models.append(
+            {
+                "name": m["name"],
+                "size_gb": m["size_gb"],
+                "provider": "llamacpp",
+            }
+        )
 
     # Active model from registry
     active_model: str | None = None
@@ -1384,12 +1643,7 @@ async def list_models() -> dict[str, Any]:
 
 @api.get("/llama-cpp/models")
 async def list_llama_cpp_models() -> dict[str, Any]:
-    models: list[dict[str, Any]] = []
-    if _LLAMA_CPP_MODELS_DIR.is_dir():
-        for gguf in sorted(_LLAMA_CPP_MODELS_DIR.glob("*.gguf")):
-            size_gb = round(gguf.stat().st_size / 1_073_741_824, 1)
-            models.append({"name": gguf.name, "size_gb": size_gb, "provider": "llama_cpp"})
-
+    models = _find_all_gguf()
     active_model: str | None = None
     if app_state.model_manager is not None:
         mm_status = app_state.model_manager.specialist_status
@@ -1402,6 +1656,111 @@ async def list_llama_cpp_models() -> dict[str, Any]:
 app.include_router(api)
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Debug router  (/api/debug/runs)  —  Time-Travel Debugger
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class DebugRunModel(BaseModel):
+    id: str
+    agent_id: str
+    query: str
+    conversation_id: str | None = None
+    created_at: float
+    duration_ms: float | None = None
+    success: bool = False
+
+
+class DebugStepModel(BaseModel):
+    id: str
+    run_id: str
+    step_number: int
+    node_name: str
+    input_preview: str | None = None
+    output_preview: str | None = None
+    tool_name: str | None = None
+    tool_args_json: str | None = None
+    tool_result_preview: str | None = None
+    needs_confirmation: bool = False
+    timestamp: float
+
+
+debug = APIRouter(prefix="/api/debug")
+
+
+@debug.get("/runs", response_model=list[DebugRunModel])
+async def debug_list_runs(limit: int = 50, offset: int = 0):
+    if app_state.time_travel_recorder is None:
+        return []
+    return app_state.time_travel_recorder.get_runs(limit=limit, offset=offset)
+
+
+@debug.get("/runs/{run_id}/steps", response_model=list[DebugStepModel])
+async def debug_run_steps(run_id: str):
+    if app_state.time_travel_recorder is None:
+        return []
+    return app_state.time_travel_recorder.get_run_steps(run_id)
+
+
+@debug.get("/steps/{step_id}")
+async def debug_step_detail(step_id: str):
+    if app_state.time_travel_recorder is None:
+        raise HTTPException(status_code=404, detail="Recorder not available")
+    detail = app_state.time_travel_recorder.get_step_detail(step_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Step not found")
+    return detail
+
+
+app.include_router(debug)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Workflow router  (/api/workflows/*)  —  Desktop Automation
+# ──────────────────────────────────────────────────────────────────────────────
+
+wf = APIRouter(prefix="/api/workflows")
+
+
+@wf.get("", response_model=list[dict])
+async def workflow_list():
+    if app_state.workflow_store is None:
+        return []
+    return app_state.workflow_store.list_all()
+
+
+@wf.get("/{wf_id}", response_model=dict | None)
+async def workflow_get(wf_id: str):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    w = app_state.workflow_store.get(wf_id)
+    if w is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return w
+
+
+@wf.delete("/{wf_id}")
+async def workflow_delete(wf_id: str):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    ok = app_state.workflow_store.delete(wf_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return {"deleted": True}
+
+
+@wf.post("/{wf_id}/run")
+async def workflow_run(wf_id: str):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    from core.automation.tools import make_run_workflow
+
+    handler = make_run_workflow(app_state.workflow_store)
+    result = await handler(workflow_id=wf_id)
+    return {"result": result}
+
+
+app.include_router(wf)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Wizard router  (/api/wizard/*)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1410,6 +1769,122 @@ _LLAMA_CPP_MODELS_DIR = Path(
     os.getenv("CEREBRO_MODELS_DIR", str(Path(__file__).parent.parent.parent / "bin" / "models"))
 ).expanduser()
 
+
+def _find_all_gguf() -> list[dict[str, Any]]:
+    models: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    dirs = [_LLAMA_CPP_MODELS_DIR]
+
+    root_dir = _LLAMA_CPP_MODELS_DIR.parent.parent
+    for candidate in [root_dir / "cerebro" / "bin" / "models", root_dir / "bin" / "models"]:
+        if candidate.is_dir() and candidate.resolve() != _LLAMA_CPP_MODELS_DIR.resolve():
+            dirs.append(candidate)
+            break
+
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for gguf in sorted(d.glob("*.gguf")):
+            if gguf.name.startswith("mmproj"):
+                continue
+            if gguf.name not in seen:
+                seen.add(gguf.name)
+                size_gb = round(gguf.stat().st_size / 1_073_741_824, 1)
+                models.append({"name": gguf.name, "size_gb": size_gb, "provider": "llama_cpp"})
+    return models
+
+
+def _kill_process_on_port(port: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["lsof", "-t", "-i", f":{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            for pid in result.stdout.strip().split("\n"):
+                os.kill(int(pid), signal.SIGTERM)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_mmproj(models_dir: Path) -> Path | None:
+    for f in sorted(models_dir.glob("mmproj*.gguf")):
+        return f
+    return None
+
+
+def _update_args_mmproj(args_file: Path) -> None:
+    content = args_file.read_text()
+    # Remove any existing --mmproj line
+    content = re.sub(r"^--mmproj\s+.*$\n?", "", content, flags=re.MULTILINE)
+    mmproj_path = _find_mmproj(_LLAMA_CPP_MODELS_DIR)
+    if mmproj_path is not None:
+        root = _LLAMA_CPP_MODELS_DIR.parent.parent
+        rel = mmproj_path.relative_to(root)
+        content += f"--mmproj {rel}\n"
+    args_file.write_text(content)
+
+
+async def _switch_llamacpp_model(model_name: str) -> None:
+    root = _LLAMA_CPP_MODELS_DIR.parent.parent
+
+    model_path: Path | None = None
+    for base in [_LLAMA_CPP_MODELS_DIR, root / "cerebro" / "bin" / "models"]:
+        candidate = base / model_name
+        if candidate.is_file() or candidate.is_symlink():
+            model_path = candidate
+            break
+
+    if model_path is None:
+        raise FileNotFoundError(f"Model GGUF not found: {model_name}")
+
+    rel_path = model_path.relative_to(root)
+
+    args_file = root / "config" / "chat.args"
+    if args_file.is_file():
+        content = args_file.read_text()
+        content = re.sub(
+            r"^--model\s+.*$",
+            f"--model {rel_path}",
+            content,
+            flags=re.MULTILINE,
+        )
+        args_file.write_text(content)
+        _update_args_mmproj(args_file)
+
+    killed = _kill_process_on_port(8080)
+    if killed:
+        await asyncio.sleep(1)
+
+    engine_script = root / "bin" / "start_engine.sh"
+    if engine_script.is_file():
+        subprocess.Popen(
+            ["bash", str(engine_script), "chat"],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        for attempt in range(30):
+            try:
+                r = await client.get(f"{_LLAMA_CPP_BASE}/health")
+                if r.status_code == 200:
+                    logger.info("llama-server is healthy after model switch to {}", model_name)
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+        logger.error(
+            "llama-server did not become healthy within 60s after switching to {}", model_name
+        )
+
+
 wizard = APIRouter(prefix="/api/wizard")
 
 
@@ -1417,11 +1892,18 @@ def _wizard_claude_mode() -> bool:
     return os.getenv("CEREBRO_INFERENCE_BACKEND", "llamacpp").lower() == "claude"
 
 
-async def _llamacpp_running() -> bool:
+async def _llamacpp_running(
+    client: httpx.AsyncClient | None = None,
+) -> bool:
+    """Check llama.cpp health, reusing the shared connection pool when available."""
+    timeout = httpx.Timeout(3.0)
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"{_LLAMA_CPP_BASE}/health")
-            return r.status_code == 200
+        if client is not None:
+            r = await client.get(f"{_LLAMA_CPP_BASE}/health", timeout=timeout)
+        else:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.get(f"{_LLAMA_CPP_BASE}/health")
+        return r.status_code == 200
     except Exception:
         return False
 
@@ -1437,7 +1919,9 @@ async def wizard_status() -> WizardStatusResponse:
             folders_configured=bool(app_state._config.get("watched_folders")),
             recommend_lite=recommend_lite_profile(),
         )
-    running = await _llamacpp_running()
+    running = await _llamacpp_running(
+        client=getattr(app_state, "http_client", None),
+    )
     models_ok = (
         any(_LLAMA_CPP_MODELS_DIR.glob("*.gguf")) if _LLAMA_CPP_MODELS_DIR.exists() else False
     )
@@ -1458,7 +1942,11 @@ async def wizard_check_llamacpp() -> dict[str, Any]:
             "status": "skipped",
             "reason": "Claude API mode — llama.cpp not needed for inference",
         }
-    return {"running": await _llamacpp_running()}
+    return {
+        "running": await _llamacpp_running(
+            client=getattr(app_state, "http_client", None),
+        )
+    }
 
 
 @wizard.post("/check-models")
@@ -1477,7 +1965,7 @@ async def wizard_check_models() -> dict[str, Any]:
         }
     if not _LLAMA_CPP_MODELS_DIR.exists():
         return {"ok": False, "detail": f"Models directory not found: {_LLAMA_CPP_MODELS_DIR}"}
-    found = list(_LLAMA_CPP_MODELS_DIR.glob("*.gguf"))
+    found = [f for f in _LLAMA_CPP_MODELS_DIR.glob("*.gguf") if not f.name.startswith("mmproj")]
     return {"ok": bool(found), "models": [f.name for f in found]}
 
 

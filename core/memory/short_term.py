@@ -70,14 +70,26 @@ class ShortTermStore:
         return sum(len(m["content"]) // _CHARS_PER_TOKEN for m in self._messages)
 
     async def distill_if_needed(self, provider: ChatProvider, ctx_size: int) -> bool:
-        """Summarize and collapse messages when token usage exceeds 75% of ctx_size.
+        from core.observability.ram_monitor import current_ram_pressure
 
-        Returns True if distillation was performed.
-        """
-        if self._token_count() < (ctx_size * 3 // 4):
+        pressure = current_ram_pressure()
+        threshold_pct = 0.5 if pressure in ("warn", "critical") else 0.75
+        if self._token_count() < (ctx_size * threshold_pct):
             return False
         summary = await self.to_summary(provider)
-        self._messages = [{"role": "system", "content": f"[Contexto previo resumido]: {summary}"}]
+        label = (
+            "resumido por presión de RAM" if pressure in ("warn", "critical") else "previo resumido"
+        )
+        self._messages = [{"role": "system", "content": f"[Contexto {label}]: {summary}"}]
+        return True
+
+    async def distill_forced(self, provider: ChatProvider) -> bool:
+        if not self._messages:
+            return False
+        summary = await self.to_summary(provider)
+        self._messages = [
+            {"role": "system", "content": f"[Contexto resumido por presión de RAM]: {summary}"}
+        ]
         return True
 
     async def slide_to_long_term(self, long_term: LongTermStore, keep_last_n: int = 10) -> int:

@@ -6,6 +6,7 @@ from core.observability.response_meta import (
     SystemStats,
     ToolCallRecord,
 )
+from core.observability.time_travel import TimeTravelRecorder
 
 __all__ = [
     "MemoryRef",
@@ -14,4 +15,5 @@ __all__ = [
     "SourceRef",
     "SystemStats",
     "ToolCallRecord",
+    "TimeTravelRecorder",
 ]

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -51,6 +52,10 @@ class CacheStore(ABC):
     async def clear(self) -> None:
         """Clear all cache entries."""
 
+    @abstractmethod
+    async def delete_expired_entries(self, ttl_seconds: int) -> int:
+        """Delete entries older than ttl_seconds. Returns count of deleted entries."""
+
 
 class InMemoryCacheStore(CacheStore):
     """In-memory cache store (no persistence)."""
@@ -72,6 +77,9 @@ class InMemoryCacheStore(CacheStore):
 
     async def clear(self) -> None:
         self._store.clear()
+
+    async def delete_expired_entries(self, ttl_seconds: int) -> int:
+        return 0
 
 
 class SQLiteCacheStore(CacheStore):
@@ -164,3 +172,15 @@ class SQLiteCacheStore(CacheStore):
                 conn.commit()
         except sqlite3.Error as e:
             logger.error("Failed to clear cache: {}", e)
+
+    async def delete_expired_entries(self, ttl_seconds: int) -> int:
+        """Delete entries older than ttl_seconds."""
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                cutoff = time.time() - ttl_seconds
+                cursor = conn.execute("DELETE FROM embeddings WHERE timestamp < ?", (cutoff,))
+                conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error("Failed to delete expired cache entries: {}", e)
+            return 0

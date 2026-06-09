@@ -1,0 +1,62 @@
+{
+  "UD-XL": {
+    "code": {
+      "prompt_t_s": 0.7,
+      "gen_t_s": 4.8,
+      "elapsed": 62.0,
+      "tokens_in": 42,
+      "tokens_out": 300
+    },
+    "reasoning": {
+      "prompt_t_s": 0.4,
+      "gen_t_s": 4.8,
+      "elapsed": 104.1,
+      "tokens_in": 40,
+      "tokens_out": 500
+    },
+    "summary": {
+      "prompt_t_s": 0.5,
+      "gen_t_s": 4.8,
+      "elapsed": 62.0,
+      "tokens_in": 32,
+      "tokens_out": 300
+    },
+    "instruction": {
+      "prompt_t_s": 0.4,
+      "gen_t_s": 4.8,
+      "elapsed": 61.9,
+      "tokens_in": 24,
+      "tokens_out": 300
+    }
+  },
+  "K_M": {
+    "code": {
+      "prompt_t_s": 0.7,
+      "gen_t_s": 5.1,
+      "elapsed": 59.1,
+      "tokens_in": 42,
+      "tokens_out": 300
+    },
+    "reasoning": {
+      "prompt_t_s": 0.4,
+      "gen_t_s": 5.1,
+      "elapsed": 99.0,
+      "tokens_in": 40,
+      "tokens_out": 500
+    },
+    "summary": {
+      "prompt_t_s": 0.5,
+      "gen_t_s": 5.1,
+      "elapsed": 59.0,
+      "tokens_in": 32,
+      "tokens_out": 300
+    },
+    "instruction": {
+      "prompt_t_s": 0.4,
+      "gen_t_s": 5.1,
+      "elapsed": 58.6,
+      "tokens_in": 24,
+      "tokens_out": 300
+    }
+  }
+}

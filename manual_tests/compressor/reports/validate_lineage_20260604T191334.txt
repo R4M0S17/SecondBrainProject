@@ -1,0 +1,17 @@
+================================================================================
+SEMANTIC COMPRESSOR — LINEAGE VALIDATION REPORT
+Generated: 20260604T191334 UTC
+================================================================================
+
+Test Case                                     Original Count   Compressed Count   Lineage OK  
+-------------------------------------------------------------------------------------------
+multiple sources multiple chunks              5                3                  ✅           
+single source multiple chunks                 4                2                  ✅           
+single source single chunk                    1                1                  ✅           
+empty-like minimal content                    2                0                  ✅           
+repeated source different indices             3                2                  ✅           
+-------------------------------------------------------------------------------------------
+
+Result: ALL PASS ✅
+
+All compressed (source_path, chunk_index) pairs are strict subsets of originals.

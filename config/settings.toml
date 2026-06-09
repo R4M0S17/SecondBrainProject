@@ -4,7 +4,7 @@ language = "es"
 log_level = "INFO"
 
 [providers]
-default_chat = "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+default_chat = "Qwen3.5-2B-UD-Q4_K_XL.gguf"
 fallback_chat = "mlx-community/Phi-4-mini-instruct-3bit"
 embedding = "v5-nano-retrieval-Q4_K_M.gguf"
 base_url = "http://127.0.0.1:8080"
@@ -14,7 +14,7 @@ ram_threshold_primary_gb = 1.0
 ram_threshold_fallback_gb = 0.3
 
 [inference]
-model = "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+model = "Qwen3.5-2B-UD-Q4_K_XL.gguf"
 embedding_model = "v5-nano-retrieval-Q4_K_M.gguf"
 base_url = "http://127.0.0.1:8080"
 timeout_seconds = 30
@@ -32,11 +32,18 @@ db_path = "~/.cerebro/db"
 agent_state_dir = "~/.cerebro/agents"
 short_term_max_messages = 30
 long_term_episode_limit = 500
+embedding_cache_ttl_days = 30
 
 [tools]
 enable_execute_python = true
 enable_write_file = true
 authorized_write_paths = []
+
+[tools.web]
+backend = "duckduckgo"       # "duckduckgo" | "tavily"
+max_results = 5
+timeout_seconds = 15
+max_content_chars = 4000     # 4000 chars ≈ 1000 tokens. 8000 es el techo máximo absoluto.
 
 [files]
 cerebro_files_path = "~/Desktop/CerebroFiles"

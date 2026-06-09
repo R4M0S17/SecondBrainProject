@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 
+from core.agents.calendar_query_parse import extract_calendar_date_filter
 from core.tools.handlers.calendar import (
     get_upcoming_events_for_query,
     query_events,
@@ -20,12 +21,14 @@ _BIRTHDAY_RE = re.compile(
 )
 
 _UPCOMING_RE = re.compile(
-    r"\b(pr[oó]ximo|proximo|next)\s+evento\b|"
-    r"\bpr[oó]ximo\s+evento\s+en\s+(mi\s+)?(calendario|agenda)\b|"
-    r"\b(cual|cu[aá]l)\s+es\s+el\s+pr[oó]ximo\s+evento\b|"
+    r"\b(pr[oó]xim[oa]|proxim[oa]|next)\s+(evento|reuni[oó]n|cita|meeting)\b|"
+    r"\b(pr[oó]xim[oa]|proxim[oa]|next)\s+(evento|reuni[oó]n|cita|meeting)"
+    r"\s+en\s+(mi\s+)?(calendario|agenda)\b|"
+    r"\b(cual|cu[aá]l)\s+es\s+(el|la)\s+pr[oó]xim[oa]\s+(evento|reuni[oó]n|cita|meeting)\b|"
     r"\bevento\s+m[aá]s\s+cercano\b|"
     r"\beventos?\s+(pr[oó]ximos?|proximos?|de\s+hoy|esta\s+semana|del\s+d[ií]a)\b|"
     r"\b(qu[eé]|que)\s+tengo\s+(en\s+)?(el\s+)?(calendario|agenda)\b|"
+    r"\b(qu[eé]|que)\s+(tengo|hay)\s+(para\s+)?(mañana|manana|hoy)\b|"
     r"\bwhat\s+do\s+i\s+have\s+(on\s+)?(my\s+)?(calendar|schedule)\b|"
     r"\bwhat'?s\s+on\s+my\s+calendar\b|"
     r"\b(lista|listar|mu[eé]strame|muestra)\s+(los\s+)?eventos\b|"
@@ -40,7 +43,7 @@ _UPCOMING_RE = re.compile(
 
 # Day-scoped schedule (may not say "próximo evento")
 _DAY_SCHEDULE_RE = re.compile(
-    r"\b(?:qu[eé]|que)\s+tengo\s+(?:el|para\s+el|para\s+la)\s+"
+    r"\b(?:qu[eé]|que)\s+tengo\s+(?:(?:el|la|para(?:\s+el|\s+la)?)\s+)?"
     r"(?:lunes|martes|mi[eé]rcoles|miercoles|jueves|viernes|s[aá]bado|sabado|domingo|"
     r"ma[nñ]ana|manana|hoy|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
     r"\beventos?\s+del?\s+"
@@ -87,6 +90,10 @@ _DAYS_RE = re.compile(r"\b(\d{1,3})\s*(d[ií]as?|days?)\b", re.IGNORECASE)
 _CALENDAR_TOOL_NAMES = frozenset(
     {"get_upcoming_events", "search_upcoming", "query_events"},
 )
+_CALENDAR_CONTEXT_RE = re.compile(
+    r"\b(?:calendario|agenda|eventos?|reuniones?|citas?|tengo|hay|calendar|schedule|meetings?)\b",
+    re.IGNORECASE,
+)
 
 _LIMIT_ONE_RE = re.compile(
     r"\b(solo|solamente|únicamente|unicamente|nada\s+más|nadamas)\s+"
@@ -132,12 +139,18 @@ def _extract_hours(query: str, default: int = 24) -> int:
         return max(1, min(int(m.group(1)) * 24, 24 * 30))
     if re.search(r"\besta\s+semana\b|this\s+week", query, re.I):
         return 24 * 7
+    if re.search(r"\bhoy\b|\btoday\b", query, re.I):
+        return 24
     if re.search(r"\bmañana\b|\bmanana\b|\btomorrow\b", query, re.I):
         return 48
-    if re.search(r"\b(pr[oó]ximo|proximo|next)\s+evento\b", query, re.I):
-        if not re.search(r"\beventos\b", query, re.I):
-            return 24 * 14  # single "próximo evento" — 2 weeks is enough
-        return max(default, 24 * 14)
+    if re.search(
+        r"\b(pr[oó]xim[oa]|proxim[oa]|next)\s+(evento|reuni[oó]n|cita|meeting)\b",
+        query,
+        re.I,
+    ):
+        if not re.search(r"\b(eventos|reuniones|citas|meetings)\b", query, re.I):
+            return 24 * 7  # single "próximo/a [evento|reunión]" — 1 week
+        return max(default, 24 * 7)
     if _AFTER_BEFORE_RE.search(query) or _DAY_SCHEDULE_RE.search(query):
         return 24 * 30
     return default
@@ -149,8 +162,12 @@ def _upcoming_max_results(query: str) -> int:
         return 0
     if _LIMIT_ONE_RE.search(query):
         return 1
-    if re.search(r"\b(pr[oó]ximo|proximo|next)\s+evento\b", query, re.I):
-        if not re.search(r"\beventos\b", query, re.I):
+    if re.search(
+        r"\b(pr[oó]xim[oa]|proxim[oa]|next)\s+(evento|reuni[oó]n|cita|meeting)\b",
+        query,
+        re.I,
+    ):
+        if not re.search(r"\b(eventos|reuniones|citas|meetings)\b", query, re.I):
             return 1
     if _LIMIT_TWO_RE.search(query):
         return 2
@@ -187,6 +204,8 @@ def _birthday_keyword(query: str) -> str:
 
 
 def _is_calendar_read_query(text: str) -> bool:
+    if extract_calendar_date_filter(text) is not None and _CALENDAR_CONTEXT_RE.search(text):
+        return True
     return bool(
         _UPCOMING_RE.search(text)
         or _DAY_SCHEDULE_RE.search(text)

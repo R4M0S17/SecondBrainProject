@@ -34,15 +34,15 @@ export default function ToolPermissions() {
           return (
             <div
               key={key}
-              className="h-[44px] flex items-center justify-between px-2 rounded hover:bg-[#1c1b23] transition-colors"
+              className="h-[44px] flex items-center justify-between px-2 rounded hover:bg-surface-container-low transition-colors"
             >
-              <span className="text-[14px] text-[#e5e0ed]">{label}</span>
+              <span className="text-[14px] text-on-surface">{label}</span>
               <button
                 onClick={() => toggle(key)}
                 role="switch"
                 aria-checked={enabled}
                 className={`w-8 h-4 rounded-full relative cursor-pointer transition-colors ${
-                  enabled ? "bg-[#94a3b8]" : "bg-[#13121b]"
+                  enabled ? "bg-primary-container" : "bg-background"
                 }`}
               >
                 <div

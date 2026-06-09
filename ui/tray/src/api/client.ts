@@ -1,5 +1,7 @@
 import { ApiError } from "./errors";
 import type {
+  ContextSourcesEvent,
+  DocumentInfo,
   FileAttachment,
   QueryRequest,
   QueryResponse,
@@ -18,6 +20,10 @@ import type {
   FleetStatus,
   FleetModelsResponse,
   ModelSwapEvent,
+  DebugRun,
+  DebugStep,
+  DebugStepDetail,
+  Workflow,
 } from "./types";
 
 export const AGENT_ID_MAP: Record<AgentId, string> = {
@@ -92,6 +98,7 @@ export async function queryAgentStream(
   signal?: AbortSignal,
   onConversationId?: (id: string) => void,
   onModelSwap?: (event: ModelSwapEvent) => void,
+  onContextSources?: (event: ContextSourcesEvent) => void,
 ): Promise<ResponseMetadata | null> {
   const res = await fetch(`${BASE}/api/query/stream`, {
     method: "POST",
@@ -121,6 +128,8 @@ export async function queryAgentStream(
         const parsed = JSON.parse(payload) as Record<string, unknown>;
         if (typeof parsed.token === "string") {
           onToken(parsed.token);
+        } else if (parsed.type === "context_sources") {
+          onContextSources?.(parsed as unknown as ContextSourcesEvent);
         } else if (parsed.metadata) {
           metadata = parsed.metadata as ResponseMetadata;
           if (typeof parsed.conversation_id === "string") {
@@ -191,7 +200,7 @@ export async function updateConfig(
 }
 
 export async function switchInferenceBackend(
-  backend: "llamacpp" | "claude"
+  backend: "llamacpp" | "claude" | "mlx"
 ): Promise<AppConfig> {
   return updateConfig({ inference_backend: backend });
 }
@@ -210,6 +219,17 @@ export async function listConversations(): Promise<ConversationSummary[]> {
 
 export async function getConversation(id: string): Promise<ConversationDetail> {
   return request<ConversationDetail>(`/api/conversations/${id}`);
+}
+
+export async function listDocuments(): Promise<DocumentInfo[]> {
+  return request<DocumentInfo[]>("/api/documents");
+}
+
+export async function deleteDocument(sourcePath: string): Promise<{ deleted: number; source_path: string }> {
+  return request<{ deleted: number; source_path: string }>(
+    `/api/documents?source_path=${encodeURIComponent(sourcePath)}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function confirmTool(
@@ -278,4 +298,47 @@ export async function wizardSetFolders(
 
 export async function wizardComplete(): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>("/api/wizard/complete", { method: "POST" });
+}
+
+// ── Desktop Automation ────────────────────────────────────────────────
+
+export async function listWorkflows(): Promise<Workflow[]> {
+  return request<Workflow[]>("/api/workflows");
+}
+
+export async function getWorkflow(id: string): Promise<Workflow> {
+  return request<Workflow>(`/api/workflows/${id}`);
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  await request<void>(`/api/workflows/${id}`, { method: "DELETE" });
+}
+
+export async function runWorkflow(id: string): Promise<{ result: string }> {
+  return request<{ result: string }>(`/api/workflows/${id}/run`, {
+    method: "POST",
+  });
+}
+
+// ── Time-Travel Debugger ───────────────────────────────────────────────
+
+export async function listDebugRuns(
+  limit = 50,
+  offset = 0
+): Promise<DebugRun[]> {
+  return request<DebugRun[]>(
+    `/api/debug/runs?limit=${limit}&offset=${offset}`
+  );
+}
+
+export async function getDebugRunSteps(
+  runId: string
+): Promise<DebugStep[]> {
+  return request<DebugStep[]>(`/api/debug/runs/${runId}/steps`);
+}
+
+export async function getDebugStepDetail(
+  stepId: string
+): Promise<DebugStepDetail> {
+  return request<DebugStepDetail>(`/api/debug/steps/${stepId}`);
 }

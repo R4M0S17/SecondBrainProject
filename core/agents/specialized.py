@@ -37,6 +37,8 @@ ACADEMIC_TOOLS: list[str] = [
     "search_files",
     "search_notes",
     "spotlight_search",
+    # Web research
+    "web_search",
 ]
 CALENDAR_TOOLS: list[str] = [
     "search_documents",
@@ -64,6 +66,8 @@ CODE_TOOLS: list[str] = [
     "search_files",
     "create_directory",
     "evaluate_math",
+    # Web search for docs, Stack Overflow, APIs
+    "web_search",
 ]
 GENERAL_TOOLS: list[str] = [
     "get_upcoming_events",
@@ -81,6 +85,8 @@ GENERAL_TOOLS: list[str] = [
     "read_file",
     "upload_file",
     "evaluate_math",
+    "web_search",
+    "web_fetch",
 ]
 
 _PREFIX_MAP: dict[str, str] = {

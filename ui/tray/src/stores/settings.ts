@@ -3,7 +3,14 @@ import type { AppConfig, LocalModel, LlamaCppModel } from "../api/types";
 import { getConfig, updateConfig, startIndex, getModels, getLlamaCppModels } from "../api/client";
 
 const FALLBACK_LLAMA_CPP_MODELS: LlamaCppModel[] = [
-  { name: "QWEN_QWEN3-4B-INSTRUCT-2507-Q4_K_M.GGUF", size_gb: 2.6, provider: "llama_cpp" },
+  { name: "Qwen3.5-2B-UD-Q4_K_XL.gguf", size_gb: 1.2, provider: "llama_cpp" },
+  { name: "Qwen_Qwen3.5-2B-Q4_K_M.gguf", size_gb: 1.3, provider: "llama_cpp" },
+  { name: "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf", size_gb: 0.9, provider: "llama_cpp" },
+  { name: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf", size_gb: 0.9, provider: "llama_cpp" },
+  { name: "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf", size_gb: 2.3, provider: "llama_cpp" },
+  { name: "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf", size_gb: 1.8, provider: "llama_cpp" },
+  { name: "llama-3.2-3b-instruct-q4_k_m.gguf", size_gb: 1.9, provider: "llama_cpp" },
+  { name: "v5-nano-retrieval-Q4_K_M.gguf", size_gb: 0.1, provider: "llama_cpp" },
 ];
 
 interface SettingsState {
@@ -18,6 +25,7 @@ interface SettingsState {
   modelsLoading: boolean;
   llamaCppModels: LlamaCppModel[];
   llamaCppLoading: boolean;
+  switchingModel: boolean;
 
   load: () => Promise<void>;
   loadModels: () => Promise<void>;
@@ -29,8 +37,10 @@ interface SettingsState {
   clearIndexJob: () => void;
 }
 
+const DEFAULT_MODEL = "Qwen3.5-2B-UD-Q4_K_XL.gguf";
+
 const DEFAULT_CONFIG: AppConfig = {
-  model: "phi3:mini",
+  model: DEFAULT_MODEL,
   watched_folders: [],
   tool_permissions: {
     execute_python: true,
@@ -51,10 +61,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isSaving: false,
   activeJobId: null,
   models: [],
-  activeModel: null,
+  activeModel: DEFAULT_MODEL,
   modelsLoading: false,
   llamaCppModels: FALLBACK_LLAMA_CPP_MODELS,
   llamaCppLoading: false,
+  switchingModel: false,
 
   load: async () => {
     try {
@@ -74,7 +85,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ modelsLoading: true });
     try {
       const r = await getModels();
-      set({ models: r.models, activeModel: r.active_model, modelsLoading: false });
+      set({ models: r.models, activeModel: r.active_model ?? get().activeModel, modelsLoading: false });
     } catch {
       set({ modelsLoading: false });
     }
@@ -87,7 +98,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const r = await getLlamaCppModels();
       const models = r.models.length > 0 ? r.models : FALLBACK_LLAMA_CPP_MODELS;
-      set({ llamaCppModels: models, llamaCppLoading: false });
+      set({
+        llamaCppModels: models,
+        activeModel: r.active_model ?? get().activeModel,
+        llamaCppLoading: false,
+      });
     } catch {
       // Backend endpoint not yet implemented — keep fallback models
       set({ llamaCppLoading: false });
@@ -99,13 +114,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (!config) return;
     const merged = { ...config, ...partial };
     set({ config: merged, isDirty: true, isSaving: true });
-    if (partial.model) set({ activeModel: partial.model });
+    if (partial.model) set({ activeModel: partial.model, switchingModel: true });
     try {
       const saved = await updateConfig(partial);
-      set({ config: saved, isDirty: false, isSaving: false, error: null });
+      set({ config: saved, isDirty: false, isSaving: false, error: null, switchingModel: false });
     } catch (e) {
       set({
         isSaving: false,
+        switchingModel: false,
         error: e instanceof Error ? e.message : "Save failed",
       });
     }

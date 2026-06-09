@@ -45,10 +45,10 @@ export default function WizardShell() {
   const stepLabel = labels[visualStep] ?? "";
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#0f1117]">
+    <div className="w-full h-full flex flex-col bg-background">
       {/* drag strip — mirrors MainLayout */}
       <div
-        className="h-7 bg-[#1c1b23] shrink-0"
+        className="h-7 bg-surface-container-low shrink-0"
         onMouseDown={() =>
           import("@tauri-apps/api/window")
             .then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
@@ -56,7 +56,7 @@ export default function WizardShell() {
         }
       />
       <div className="flex-1 flex items-center justify-center">
-      <div className="w-[440px] bg-[#1a1d27] border border-[#242736] rounded-xl p-[40px_36px] flex flex-col items-center">
+      <div className="w-[440px] bg-surface-container border border-outline-variant rounded-xl p-[40px_36px] flex flex-col items-center">
         {/* Header */}
         <div className="flex flex-col items-center text-center mb-6">
           <svg
@@ -70,7 +70,7 @@ export default function WizardShell() {
           <h1 className="text-[22px] font-bold leading-[28px] tracking-[-0.01em] text-[#e8eaf0] mb-1">
             Cerebro
           </h1>
-          <p className="text-[14px] text-[#8b8fa8]">Your private AI second brain</p>
+          <p className="text-[14px] text-outline">Your private AI second brain</p>
         </div>
 
         {/* Step dots */}
@@ -88,8 +88,8 @@ export default function WizardShell() {
           disabled={!stepReady || isAdvancing}
           className={`w-full py-3 rounded-lg font-bold text-[14px] flex items-center justify-center gap-2 transition-all ${
             stepReady && !isAdvancing
-              ? "bg-primary text-[#0f1117] hover:opacity-90 active:scale-[0.98]"
-              : "bg-[#242736] text-[#8b8fa8] cursor-not-allowed"
+              ? "bg-primary-container text-on-primary-container hover:opacity-90 active:scale-[0.98]"
+              : "bg-surface-container text-outline cursor-not-allowed"
           }`}
         >
           {isAdvancing ? "Please wait…" : currentStep === 3 ? "Finish" : "Continue"}
