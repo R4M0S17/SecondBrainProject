@@ -29,6 +29,7 @@ _UPCOMING_RE = re.compile(
     r"\beventos?\s+(pr[oó]ximos?|proximos?|de\s+hoy|esta\s+semana|del\s+d[ií]a)\b|"
     r"\b(qu[eé]|que)\s+tengo\s+(en\s+)?(el\s+)?(calendario|agenda)\b|"
     r"\b(qu[eé]|que)\s+(tengo|hay)\s+(para\s+)?(mañana|manana|hoy)\b|"
+    r"\b(dime|tell\s+me)\s+(si|if)\s+(tengo|i\s+have|hay)\s+(reuniones?|eventos?|citas?|meetings?|algo)\b|"
     r"\bwhat\s+do\s+i\s+have\s+(on\s+)?(my\s+)?(calendar|schedule)\b|"
     r"\bwhat'?s\s+on\s+my\s+calendar\b|"
     r"\b(lista|listar|mu[eé]strame|muestra)\s+(los\s+)?eventos\b|"

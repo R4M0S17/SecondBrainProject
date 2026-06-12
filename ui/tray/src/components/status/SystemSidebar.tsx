@@ -17,11 +17,11 @@ export default function SystemSidebar({ className = "", onOpenDocuments }: Syste
       <aside className={`flex flex-col items-center pt-4 w-10 border-l border-outline-variant/20 glass-panel z-40 shrink-0 ${className}`}>
         <button
           onClick={() => setCollapsed(false)}
-          className="p-1.5 text-on-surface-variant hover:text-primary transition-colors rounded hover:bg-surface-container"
-          aria-label="Expand sidebar"
-          title="Expand sidebar"
+          className="p-1.5 text-on-surface-variant hover:text-primary-container transition-colors rounded hover:bg-surface-container"
+          aria-label="Expand Fleet panel"
+          title="Fleet"
         >
-          <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+          <span className="material-symbols-outlined text-[20px]">dns</span>
         </button>
       </aside>
     );
@@ -31,9 +31,9 @@ export default function SystemSidebar({ className = "", onOpenDocuments }: Syste
     <aside className={`flex flex-col p-5 md:p-6 border-l border-outline-variant/20 glass-panel z-40 shrink-0 overflow-y-auto scrollbar-auto relative ${className}`}>
       <button
         onClick={() => setCollapsed(true)}
-        className="absolute top-3 right-3 p-1 text-on-surface-variant hover:text-primary transition-colors rounded hover:bg-surface-container"
-        aria-label="Collapse sidebar"
-        title="Collapse sidebar"
+        className="absolute top-3 right-3 p-1 text-on-surface-variant hover:text-primary-container transition-colors rounded hover:bg-surface-container"
+        aria-label="Collapse Fleet panel"
+        title="Collapse Fleet panel"
       >
         <span className="material-symbols-outlined text-[16px]">chevron_right</span>
       </button>

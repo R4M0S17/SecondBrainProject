@@ -197,30 +197,39 @@ def _ical_component_to_event(component) -> CalendarEvent | None:
 # Apple Calendar backend (macOS only)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# JXA script: two-phase query.
-# Phase 1: whose() date filter for non-recurring future events (fast).
-# AppleScript read: JXA ``whose`` date ranges often return nothing on modern Calendar.app.
-_AS_FETCH_UPCOMING = """\
-tell application "Calendar"
-    set now to current date
-    set cutoffDate to now + ({hours_ahead} * hours)
-    set skipCal to {{{skip_list}}}
-    set out to ""
-    repeat with cal in calendars
-        set cName to name of cal
-        if skipCal contains cName then
-        else
-            try
-                repeat with ev in (every event of cal whose start date ≥ now and start date ≤ cutoffDate)
-                    set t to summary of ev
-                    if t is missing value then set t to ""
-                    set out to out & t & "{sep}" & (start date of ev as string) & "{sep}" & (end date of ev as string) & linefeed
-                end repeat
-            end try
-        end if
-    end repeat
-    return out
-end tell
+# JXA script: fetch upcoming events using date-range filter via whose().
+# Much faster than loading all events; Calendar.app handles recurring event
+# expansion internally. Returns JSON for Python processing.
+_JXA_FETCH_UPCOMING = """\
+var app = Application("Calendar");
+var skipNames = {skip_list_json};
+var now = new Date();
+var cutoff = new Date(now.getTime() + {hours_ahead} * 3600000);
+var events = [];
+
+var cals = app.calendars();
+for (var i = 0; i < cals.length; i++) {{
+    var cal = cals[i];
+    var name = cal.name();
+    if (skipNames.indexOf(name) >= 0) continue;
+    try {{
+        var evts = cal.events.whose({{_and: [
+            {{startDate: {{_greaterThanEquals: now}}}},
+            {{startDate: {{_lessThanEquals: cutoff}}}}
+        ]}})();
+        for (var j = 0; j < evts.length; j++) {{
+            try {{
+                var ev = evts[j];
+                events.push({{
+                    title: ev.summary() || "",
+                    start: ev.startDate().toISOString(),
+                    end: (ev.endDate() || ev.startDate()).toISOString()
+                }});
+            }} catch(e) {{}}
+        }}
+    }} catch(e) {{}}
+}}
+JSON.stringify(events);
 """
 
 
@@ -248,16 +257,12 @@ def _parse_applescript_date_string(raw: str) -> datetime | None:
 
 
 def _fetch_upcoming_via_applescript(hours_ahead: int) -> tuple[list[CalendarEvent], str]:
-    """Return upcoming events using AppleScript (reliable) and filter window in Python."""
-    skip_list = ", ".join(f'"{n}"' for n in sorted(_SKIPPED_CALENDAR_NAMES))
-    script = _AS_FETCH_UPCOMING.format(
-        sep=_AS_RECORD_SEP,
-        skip_list=skip_list,
-        hours_ahead=hours_ahead,
-    )
+    """Return upcoming events using JXA whose() date filter (reliable + fast)."""
+    skip_list_json = json.dumps(sorted(_SKIPPED_CALENDAR_NAMES))
+    script = _JXA_FETCH_UPCOMING.format(skip_list_json=skip_list_json, hours_ahead=hours_ahead)
     try:
         result = subprocess.run(
-            ["osascript", "-e", script],
+            ["osascript", "-l", "JavaScript", "-e", script],
             capture_output=True,
             text=True,
             timeout=max(8, int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "30"))),
@@ -271,34 +276,46 @@ def _fetch_upcoming_via_applescript(hours_ahead: int) -> tuple[list[CalendarEven
     if result.returncode != 0:
         return [], stderr or f"exit {result.returncode}"
 
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return [], ""
+
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        return [], f"JSON parse error: {exc}"
+
+    if not isinstance(data, list):
+        return [], "unexpected JSON shape"
+
     now = datetime.now().astimezone()
     cutoff = now + timedelta(hours=hours_ahead)
     events: list[CalendarEvent] = []
-    for line in (result.stdout or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(_AS_RECORD_SEP)
-        if len(parts) < 2:
-            continue
-        title = parts[0].strip()
-        start = _parse_applescript_date_string(parts[1])
-        if start is None or start < now or start > cutoff:
-            continue
-        end = start
-        if len(parts) >= 3:
-            parsed_end = _parse_applescript_date_string(parts[2])
-            if parsed_end is not None:
-                end = parsed_end
-        events.append(
-            CalendarEvent(
-                title=title,
-                start=start,
-                end=end,
-                description="",
-                location="",
+    for item in data:
+        try:
+            start = datetime.fromisoformat(item["start"].replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            start = start.astimezone()
+            if start < now or start > cutoff:
+                continue
+            end = start
+            if "end" in item:
+                parsed_end = datetime.fromisoformat(item["end"].replace("Z", "+00:00"))
+                if parsed_end.tzinfo is None:
+                    parsed_end = parsed_end.replace(tzinfo=UTC)
+                end = parsed_end.astimezone()
+            events.append(
+                CalendarEvent(
+                    title=item.get("title", ""),
+                    start=start,
+                    end=end,
+                    description=item.get("description", ""),
+                    location=item.get("location", ""),
+                )
             )
-        )
+        except Exception as exc:
+            logger.debug("Skipping malformed JXA calendar event: {}", exc)
     events.sort(key=lambda e: e.start)
     return events, ""
 

@@ -302,6 +302,21 @@ export async function wizardComplete(): Promise<{ ok: boolean }> {
 
 // ── Desktop Automation ────────────────────────────────────────────────
 
+export interface ToolInfo {
+  name: string;
+  description: string;
+  required_permission: string;
+  requires_confirmation: boolean;
+  scope: string;
+  audit_level: string;
+  enabled: boolean;
+  parameters: Record<string, string>;
+}
+
+export async function listTools(): Promise<ToolInfo[]> {
+  return request<ToolInfo[]>("/api/tools");
+}
+
 export async function listWorkflows(): Promise<Workflow[]> {
   return request<Workflow[]>("/api/workflows");
 }

@@ -31,19 +31,49 @@ fi
 mkdir -p "${CONFIG_DIR}"
 mkdir -p "${CONFIG_DIR}/logs"
 
+# Detect brew-installed llama-server binary
+LLAMA_SERVER_BIN=""
+if command -v brew &>/dev/null; then
+  _brew_llama="$(brew --prefix llama.cpp 2>/dev/null)/bin/llama-server" || true
+  if [[ -x "${_brew_llama}" ]]; then
+    LLAMA_SERVER_BIN="${_brew_llama}"
+  fi
+fi
+# Fallback: check PATH
+if [[ -z "${LLAMA_SERVER_BIN}" ]]; then
+  _path_llama="$(command -v llama-server 2>/dev/null || true)"
+  if [[ -n "${_path_llama}" && -x "${_path_llama}" ]]; then
+    LLAMA_SERVER_BIN="${_path_llama}"
+  fi
+fi
+
+# Preserve existing llama_server_bin if it was manually set
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _existing="$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}')).get('llama_server_bin',''))" 2>/dev/null || true)"
+  if [[ -n "${_existing}" && -x "${_existing}" ]]; then
+    LLAMA_SERVER_BIN="${_existing}"
+  fi
+fi
+
 cerebro_root_escaped="${ROOT//\\/\\\\}"
 cerebro_root_escaped="${cerebro_root_escaped//\"/\\\"}"
+
+LLAMA_LINE=""
+if [[ -n "${LLAMA_SERVER_BIN}" ]]; then
+  LLAMA_LINE="  \"llama_server_bin\": \"${LLAMA_SERVER_BIN}\""
+fi
 
 cat > "${CONFIG_FILE}" <<EOF
 {
   "cerebro_root": "${cerebro_root_escaped}",
   "profile_env": "${profile_env}",
   "inference_backend": "llamacpp",
-  "start_embed_server": false
+  "start_embed_server": false${LLAMA_LINE:+, }${LLAMA_LINE}
 }
 EOF
 
 echo "Wrote ${CONFIG_FILE}"
 echo "  cerebro_root: ${ROOT}"
 echo "  profile_env:  ${profile_env:-<none>}"
+echo "  llama_server: ${LLAMA_SERVER_BIN:-<PATH>}"
 echo "  logs:         ${CONFIG_DIR}/logs/"

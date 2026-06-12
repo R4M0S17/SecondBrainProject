@@ -4,13 +4,12 @@ import { getConfig, updateConfig, startIndex, getModels, getLlamaCppModels } fro
 
 const FALLBACK_LLAMA_CPP_MODELS: LlamaCppModel[] = [
   { name: "Qwen3.5-2B-UD-Q4_K_XL.gguf", size_gb: 1.2, provider: "llama_cpp" },
+  { name: "Qwen_Qwen3.5-0.8B-Q4_K_M.gguf", size_gb: 0.5, provider: "llama_cpp" },
+  { name: "Qwen_Qwen3.5-0.8B-Q5_K_M.gguf", size_gb: 0.6, provider: "llama_cpp" },
   { name: "Qwen_Qwen3.5-2B-Q4_K_M.gguf", size_gb: 1.3, provider: "llama_cpp" },
   { name: "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf", size_gb: 0.9, provider: "llama_cpp" },
   { name: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf", size_gb: 0.9, provider: "llama_cpp" },
-  { name: "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf", size_gb: 2.3, provider: "llama_cpp" },
-  { name: "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf", size_gb: 1.8, provider: "llama_cpp" },
   { name: "llama-3.2-3b-instruct-q4_k_m.gguf", size_gb: 1.9, provider: "llama_cpp" },
-  { name: "v5-nano-retrieval-Q4_K_M.gguf", size_gb: 0.1, provider: "llama_cpp" },
 ];
 
 interface SettingsState {

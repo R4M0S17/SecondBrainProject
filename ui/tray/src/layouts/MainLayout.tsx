@@ -5,7 +5,10 @@ import ChatWindow from "../components/chat/ChatWindow";
 import AgentBar from "../components/chat/AgentBar";
 import SystemSidebar from "../components/status/SystemSidebar";
 import StatusBar from "../components/status/StatusBar";
+import ToolsPanel from "../components/tools/ToolsPanel";
+import CodePanel from "../components/code/CodePanel";
 import { useSettingsStore } from "../stores/settings";
+import { useTabStore } from "../stores/tab";
 
 const SettingsPanel = lazy(() => import("../components/settings/SettingsPanel"));
 const DocumentsPanel = lazy(() => import("../components/documents/DocumentsPanel"));
@@ -15,6 +18,7 @@ export default function MainLayout() {
   const [docsOpen, setDocsOpen] = useState(false);
   const closeDocs = useCallback(() => setDocsOpen(false), []);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const activeTab = useTabStore((s) => s.activeTab);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -50,9 +54,17 @@ export default function MainLayout() {
 
       <div className="flex flex-1 overflow-hidden">
         <LeftSidebar onOpenSettings={handleOpenSettings} />
-        <div className="flex-1 flex flex-col relative px-4 md:px-6 lg:px-8 pt-2 pb-6 w-full min-w-0">
-          <AgentBar />
-          <ChatWindow className="flex-1 min-h-0" />
+        <div className="flex-1 flex flex-col relative w-full min-w-0">
+          {activeTab === "tools" ? (
+            <ToolsPanel />
+          ) : activeTab === "code" ? (
+            <CodePanel />
+          ) : (
+            <div className="flex-1 flex flex-col px-4 md:px-6 lg:px-8 pt-2 pb-6 w-full min-w-0">
+              <AgentBar />
+              <ChatWindow className="flex-1 min-h-0" />
+            </div>
+          )}
         </div>
         <SystemSidebar onOpenDocuments={handleOpenDocuments} />
       </div>

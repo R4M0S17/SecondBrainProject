@@ -16,7 +16,7 @@ export default function StatusBar() {
   const engineOk = status?.engine_ok ?? false;
   const ramUsed = status?.ram_used_gb ?? 0;
   const ramTotal = status?.ram_total_gb ?? (status?.ram_used_gb ?? 0) + (status?.ram_available_gb ?? 0);
-  const cpuAvg = 0;
+  const cpuAvg = status?.cpu_percent ?? 0;
   const uptime = "—";
 
   return (

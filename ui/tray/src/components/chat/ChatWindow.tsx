@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore } from "../../stores/chat";
 import { useSettingsStore } from "../../stores/settings";
 import MessageBubble from "./MessageBubble";
@@ -16,13 +16,25 @@ interface ChatWindowProps {
 export default function ChatWindow({ className = "" }: ChatWindowProps) {
   const { messages, isLoading, pendingConfirmation } = useChatStore();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(
     new Set()
   );
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (isNearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, isLoading]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const threshold = 150;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
 
   const activeModel = useChatStore((s) => {
     for (let i = s.messages.length - 1; i >= 0; i--) {
@@ -40,7 +52,7 @@ export default function ChatWindow({ className = "" }: ChatWindowProps) {
 
   return (
     <div className={`flex flex-col ${className}`}>
-      <div className="flex-1 overflow-y-auto pr-4 space-y-6 scrollbar-auto min-h-0">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto pr-4 space-y-6 scrollbar-auto min-h-0">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 opacity-40">
             <img src="/BestLogo.svg" alt="Cerebro" className="w-12 h-12 opacity-60" />

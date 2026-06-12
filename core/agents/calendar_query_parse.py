@@ -77,6 +77,7 @@ _ON_RE = re.compile(
     rf"\b(?:"
     rf"(?:qu[eé]|que)\s+tengo\s+(?:el|la|para(?:\s+el|\s+la)?)\s+|"
     rf"(?:qu[eé]|que)\s+hay\s+(?:el|para(?:\s+el|\s+la)?)\s+|"
+    rf"(?:tengo|hay)\s+(?:reuniones?|eventos?|citas?)\s+|"
     rf"eventos?\s+(?:del|de\s+el|para(?:\s+el|\s+la)?|el)\s+|"
     rf"reuniones?\s+(?:del|de\s+el|para(?:\s+el|\s+la)?|el)\s+|"
     rf"citas?\s+(?:del|de\s+el|para(?:\s+el|\s+la)?|el)\s+|"
@@ -207,23 +208,37 @@ def _extract_loose_on_filter(text: str) -> CalendarDateFilter | None:
     """Fallback parser for day-scoped asks not covered by strict regex patterns."""
     if not _CALENDAR_CONTEXT_RE.search(text):
         return None
-    cleaned = _TRAILING_CALENDAR_CONTEXT_RE.sub("", text).strip().rstrip("?.!")
+    cleaned = _TRAILING_CALENDAR_CONTEXT_RE.sub("", text).strip().rstrip("?!.")
     m = _LOOSE_ON_RE.search(cleaned)
-    if not m:
-        return None
-    fragment = m.group("fragment").strip()
-    if not fragment:
-        return None
-    anchor_day, anchor_dt = _anchor_day_from_fragment(fragment)
-    if anchor_day is None:
-        return None
-    return CalendarDateFilter(
-        kind=DateFilterKind.ON,
-        anchor_day=anchor_day,
-        anchor_label=_format_anchor_label(anchor_day),
-        has_time=anchor_dt is not None,
-        anchor_dt=anchor_dt,
-    )
+    if m:
+        fragment = m.group("fragment").strip()
+        if fragment:
+            anchor_day, anchor_dt = _anchor_day_from_fragment(fragment)
+            if anchor_day is not None:
+                return CalendarDateFilter(
+                    kind=DateFilterKind.ON,
+                    anchor_day=anchor_day,
+                    anchor_label=_format_anchor_label(anchor_day),
+                    has_time=anchor_dt is not None,
+                    anchor_dt=anchor_dt,
+                )
+    # Fallback: try last word as a day anchor (only if it looks like a day word)
+    words = cleaned.split()
+    if words:
+        last = words[-1].strip().rstrip("?!.")
+        if last and re.match(
+            rf"^(?:{_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|{_DATE_TEXT_FRAGMENT})$", last, re.I
+        ):
+            anchor_day, anchor_dt = _anchor_day_from_fragment(last)
+            if anchor_day is not None:
+                return CalendarDateFilter(
+                    kind=DateFilterKind.ON,
+                    anchor_day=anchor_day,
+                    anchor_label=_format_anchor_label(anchor_day),
+                    has_time=anchor_dt is not None,
+                    anchor_dt=anchor_dt,
+                )
+    return None
 
 
 def filter_events_by_date(

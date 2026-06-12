@@ -116,6 +116,7 @@ export interface StatusResponse {
   ram_total_gb: number;
   ram_used_gb: number;
   ram_available_gb: number;
+  cpu_percent: number;
   queries_total: number;
   avg_latency_ms: number;
   p95_latency_ms: number;

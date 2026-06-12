@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+import psutil
 
 # Tuned pool limits: prevents socket exhaustion under concurrent requests.
 # max_connections=20 gives headroom for bursts; max_keepalive=10 keeps warm
@@ -207,6 +208,7 @@ class StatusResponse(BaseModel):
     current_model_id: str | None = None
     current_model_quant: str | None = None
     current_model_params_b: float | None = None
+    cpu_percent: float = 0.0
     hardware_snapshot: dict[str, Any] | None = None
     selection_rationale: str | None = None
     context_window: int = 0
@@ -1277,6 +1279,7 @@ async def health_endpoint() -> HealthResponse:
 
 @api.get("/status", response_model=StatusResponse)
 async def status_endpoint() -> StatusResponse:
+    cpu_percent = psutil.cpu_percent(interval=0)
     ram_snap = app_state.ram_monitor.snapshot()
     ram_total_gb = ram_snap["total_gb"]
     ram_available_gb = ram_snap["available_gb"]
@@ -1359,6 +1362,7 @@ async def status_endpoint() -> StatusResponse:
         current_model_id=current_model_id,
         current_model_quant=current_model_quant,
         current_model_params_b=current_model_params_b,
+        cpu_percent=cpu_percent,
         hardware_snapshot=hardware_snapshot,
         selection_rationale=selection_rationale,
         context_window=context_window,
@@ -1653,6 +1657,42 @@ async def list_llama_cpp_models() -> dict[str, Any]:
     return {"models": models, "active_model": active_model}
 
 
+# ── Tool Registry Browser ───────────────────────────────────────────
+
+
+@api.get("/tools")
+async def list_tools() -> list[dict[str, Any]]:
+    """Return all registered tool definitions with permission state."""
+    if app_state.runtime is None:
+        return []
+    tools: list[dict[str, Any]] = []
+    config = app_state._config
+    tool_perms = config.get("tool_permissions", {})
+    for name, td in app_state.runtime._tool_definitions.items():
+        enabled = True
+        if name == "web_search":
+            enabled = tool_perms.get("search_web", False)
+        elif td.required_permission in ("tools.fs.write", "tools.calendar.write"):
+            enabled = tool_perms.get("write_file", True)
+        elif td.required_permission == "tools.fs.read":
+            enabled = tool_perms.get("read_file", True)
+        elif td.required_permission == "tools.automation.record":
+            enabled = tool_perms.get("execute_python", True)
+        tools.append(
+            {
+                "name": td.name,
+                "description": td.description,
+                "required_permission": td.required_permission,
+                "requires_confirmation": td.requires_confirmation,
+                "scope": td.scope.value,
+                "audit_level": td.audit_level.value,
+                "enabled": enabled,
+                "parameters": td.parameters,
+            }
+        )
+    return tools
+
+
 app.include_router(api)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1789,7 +1829,10 @@ def _find_all_gguf() -> list[dict[str, Any]]:
                 continue
             if gguf.name not in seen:
                 seen.add(gguf.name)
-                size_gb = round(gguf.stat().st_size / 1_073_741_824, 1)
+                try:
+                    size_gb = round(gguf.stat().st_size / 1_073_741_824, 1)
+                except (OSError, FileNotFoundError):
+                    continue
                 models.append({"name": gguf.name, "size_gb": size_gb, "provider": "llama_cpp"})
     return models
 

@@ -455,7 +455,7 @@ export default function InputArea() {
   const latency = status?.p95_latency_ms ?? 0;
 
   return (
-    <div className="relative w-full mt-auto">
+    <div className="relative w-full shrink-0">
       <div className="input-glow flex items-center bg-surface-container-low border border-outline-variant/50 rounded-xl p-2 transition-all duration-300">
         {/* Command autocomplete */}
         {showAutocomplete && (

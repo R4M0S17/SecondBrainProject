@@ -17,6 +17,5 @@ repos:
       - id: mypy
         args: [--ignore-missing-imports, core]
         pass_filenames: false
-        exclude: ^cerebro/
         additional_dependencies:
           - types-dateparser

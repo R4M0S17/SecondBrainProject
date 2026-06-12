@@ -20,7 +20,7 @@ cd ui/tray && npm run build # production desktop build
 
 **Entry point**: `main.py:_build_app_state()` wires everything → `app_state` singleton → `uvicorn.run(app, host="0.0.0.0", port=PORT)`. `load_dotenv()` runs before all other imports — env vars are visible to all modules on first import.
 
-**Backend lives in `core/`**. There is a gitignored `cerebro/` copy at repo root — edit only `core/`, never touch `cerebro/`.
+**Backend lives in `core/`** — this is the single source of truth. The old `cerebro/` copy was deleted. See `docs/UNIFICACION_CEREBRO.md`.
 
 **Fast-path pipeline** (runs before LLM, in order): math → file write (+ calendar-to-file fusion) → reminder → calendar → file search → LangGraph graph. Reordering these in `core/agents/runtime.py` breaks stable features. Run `make test-stable` after any change to fast-path order or file/calendar modules.
 
