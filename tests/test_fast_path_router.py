@@ -39,6 +39,9 @@ async def test_router_uses_canonical_order_and_short_circuits(monkeypatch):
 
     calls: list[str] = []
 
+    monkeypatch.setattr(FastPathRouter, "_try_time_date", lambda *a, **kw: None)
+    monkeypatch.setattr(FastPathRouter, "_try_config_read", lambda *a, **kw: None)
+    monkeypatch.setattr(FastPathRouter, "_try_url_open", lambda *a, **kw: None)
     monkeypatch.setattr(
         module,
         "try_pure_math_fast_path",
@@ -140,3 +143,179 @@ async def test_router_generates_spec_file_content(monkeypatch):
     assert "file_write_content_generated" in result.warnings
     registry.select_for_task.assert_called_once()
     registry.get_chat.assert_called_once_with("primary")
+
+
+@pytest.mark.asyncio
+async def test_router_intent_rag_query_runs_only_file_search(monkeypatch):
+    """RAG_QUERY intent skips all routes except file search."""
+    from core.agents import fast_path_router as module
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        FastPathRouter, "_try_time_date", lambda *a, **kw: calls.append("time_date") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_config_read", lambda *a, **kw: calls.append("config_read") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_url_open", lambda *a, **kw: calls.append("url_open") or None
+    )
+    monkeypatch.setattr(
+        module, "try_pure_math_fast_path", lambda *a, **kw: calls.append("math") or None
+    )
+    monkeypatch.setattr(module, "try_file_write_calendar_fusion", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "try_file_write_fast_path", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        module, "is_reminder_write_query", lambda _q: calls.append("reminder") or False
+    )
+    monkeypatch.setattr(
+        module, "try_calendar_fast_path", lambda *a, **kw: calls.append("calendar") or None
+    )
+    monkeypatch.setattr(
+        module,
+        "try_file_search_fast_path",
+        lambda *a, **kw: calls.append("file_search") or "search-hit",
+    )
+
+    registry = MagicMock()
+    router = FastPathRouter(registry, {})
+    result = await router.try_all("cualquier consulta", _make_state(), intent="RAG_QUERY")
+
+    assert result is not None
+    assert result.kind == "file_search"
+    assert result.answer == "search-hit"
+    assert calls == ["file_search"], f"Expected only file_search, got {calls}"
+
+
+@pytest.mark.asyncio
+async def test_router_intent_agent_action_skips_time_and_config(monkeypatch):
+    """AGENT_ACTION intent skips time/date and config read."""
+    from core.agents import fast_path_router as module
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        FastPathRouter, "_try_time_date", lambda *a, **kw: calls.append("time_date") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_config_read", lambda *a, **kw: calls.append("config_read") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_url_open", lambda *a, **kw: calls.append("url_open") or None
+    )
+    monkeypatch.setattr(
+        module, "try_pure_math_fast_path", lambda *a, **kw: calls.append("math") or None
+    )
+    monkeypatch.setattr(module, "try_file_write_calendar_fusion", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        module, "try_file_write_fast_path", lambda *a, **kw: calls.append("file_write") or None
+    )
+    monkeypatch.setattr(
+        module, "is_reminder_write_query", lambda _q: calls.append("reminder_gate") or True
+    )
+
+    async def fake_extract(*a, **kw):
+        calls.append("reminder_extract")
+        from core.agents.reminder_intent_resolver import ReminderIntent
+
+        return ReminderIntent(action="none")
+
+    monkeypatch.setattr(module, "extract_reminder_intent", fake_extract)
+    monkeypatch.setattr(
+        module,
+        "heuristic_parse_reminder",
+        lambda *a, **kw: calls.append("reminder_heuristic") or None,
+    )
+    monkeypatch.setattr(
+        module,
+        "try_calendar_fast_path",
+        lambda *a, **kw: calls.append("calendar") or "calendar-answer",
+    )
+    monkeypatch.setattr(FastPathRouter, "_try_calendar_write", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        module, "try_file_search_fast_path", lambda *a, **kw: calls.append("file_search") or None
+    )
+
+    registry = MagicMock()
+    router = FastPathRouter(registry, {})
+    result = await router.try_all("cualquier consulta", _make_state(), intent="AGENT_ACTION")
+
+    assert result is not None
+    assert result.kind == "calendar_read"
+    assert "time_date" not in calls, f"time_date should be skipped for AGENT_ACTION, got {calls}"
+    assert (
+        "config_read" not in calls
+    ), f"config_read should be skipped for AGENT_ACTION, got {calls}"
+    assert "math" not in calls, f"math should be skipped for AGENT_ACTION, got {calls}"
+    assert "url_open" in calls, f"url_open should be in calls for AGENT_ACTION, got {calls}"
+    assert "calendar" in calls, f"calendar should be in calls for AGENT_ACTION, got {calls}"
+
+
+@pytest.mark.asyncio
+async def test_router_intent_config_runs_only_config_read(monkeypatch):
+    """CONFIG intent runs only config read route."""
+    from core.agents import fast_path_router as module
+    from core.agents.fast_path_router import FastPathResult
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        FastPathRouter, "_try_time_date", lambda *a, **kw: calls.append("time_date") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter,
+        "_try_config_read",
+        lambda *a, **kw: calls.append("config_read")
+        or FastPathResult(kind="config_read", answer="config-hit"),
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_url_open", lambda *a, **kw: calls.append("url_open") or None
+    )
+    monkeypatch.setattr(
+        module, "try_pure_math_fast_path", lambda *a, **kw: calls.append("math") or None
+    )
+
+    registry = MagicMock()
+    router = FastPathRouter(registry, {})
+    result = await router.try_all("cualquier consulta", _make_state(), intent="CONFIG")
+
+    assert result is not None
+    assert result.kind == "config_read"
+    assert result.answer == "config-hit"
+    assert calls == ["config_read"], f"Expected only config_read, got {calls}"
+
+
+@pytest.mark.asyncio
+async def test_router_intent_none_runs_full_canonical_order(monkeypatch):
+    """intent=None (default) preserves full canonical order."""
+    from core.agents import fast_path_router as module
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        FastPathRouter, "_try_time_date", lambda *a, **kw: calls.append("time_date") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_config_read", lambda *a, **kw: calls.append("config_read") or None
+    )
+    monkeypatch.setattr(
+        FastPathRouter, "_try_url_open", lambda *a, **kw: calls.append("url_open") or None
+    )
+    monkeypatch.setattr(
+        module, "try_pure_math_fast_path", lambda *a, **kw: calls.append("math") or "math-hit"
+    )
+
+    registry = MagicMock()
+    router = FastPathRouter(registry, {})
+    result = await router.try_all("cualquier consulta", _make_state(), intent=None)
+
+    assert result is not None
+    assert result.kind == "math"
+    assert result.answer == "math-hit"
+    assert calls[:4] == [
+        "time_date",
+        "config_read",
+        "url_open",
+        "math",
+    ], f"Expected full canonical order, got {calls}"

@@ -178,6 +178,146 @@ async def test_context_builder_respects_token_budget(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Test 5: ContextBuilder._consolidation_params() responds to RAM pressure
+# ---------------------------------------------------------------------------
+
+
+def test_context_builder_consolidation_params_dynamic(mocker):
+    from core.memory.context_builder import ContextBuilder
+
+    short_term = MagicMock()
+    long_term = MagicMock()
+    builder = ContextBuilder(short_term=short_term, long_term=long_term)
+
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="ok",
+    )
+    threshold, target = builder._consolidation_params()
+    assert threshold == 0.85
+    assert target == 0.60
+
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="critical",
+    )
+    threshold, target = builder._consolidation_params()
+    assert threshold == 0.60
+    assert target == 0.40
+
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="warn",
+    )
+    threshold, target = builder._consolidation_params()
+    assert threshold == 0.60
+    assert target == 0.40
+
+
+# ---------------------------------------------------------------------------
+# Test 6: ContextBuilder.build() skips working_memory under RAM pressure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_builder_build_skips_working_memory_under_pressure(mocker, tmp_path):
+    from core.memory.context_builder import ContextBuilder
+    from core.memory.long_term import LongTermStore
+    from core.memory.short_term import ShortTermStore
+
+    short_term = ShortTermStore(max_messages=50)
+    short_term.push_message({"role": "user", "content": "test query message"})
+
+    embed = _fake_embed()
+    vs = _mock_vector_store(tmp_path)
+    long_term = LongTermStore(vector_store=vs, agent_id="agent-test", embed=embed)
+
+    builder = ContextBuilder(short_term=short_term, long_term=long_term, token_budget=2000)
+    agent_state = _make_agent_state()
+    agent_state.working_memory = {"key": "x" * 800}
+
+    # Under OK pressure: working_memory consumes budget
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="ok",
+    )
+    result_ok = await builder.build("query", agent_state)
+
+    # Under CRITICAL pressure: working_memory is skipped, so more budget remains
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="critical",
+    )
+    result_critical = await builder.build("query", agent_state)
+    agent_state_critical = _make_agent_state()
+    agent_state_critical.working_memory = {"key": "x" * 800}
+    result_critical = await builder.build("query", agent_state_critical)
+
+    # With less budget consumed, total_tokens_estimated should be lower
+    # (or equal, if no RAG docs are included)
+    assert result_critical.total_tokens_estimated <= result_ok.total_tokens_estimated
+
+
+# ---------------------------------------------------------------------------
+# Test 7: ShortTermStore.distill_if_needed() uses lower threshold under pressure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_short_term_distill_if_needed_uses_lower_threshold_under_pressure(mocker):
+    store = ShortTermStore(max_messages=50)
+    mock_provider = MagicMock()
+    mock_provider.complete = AsyncMock(return_value="Resumen bajo presión.")
+
+    # Fill exactly 55% of 2000 ctx (1100 tokens) — above 50% threshold, below 75%
+    # 1 token ≈ 4 chars, so 1100 tokens ≈ 4400 chars
+    store.push_message({"role": "user", "content": "x" * 2200})
+    store.push_message({"role": "assistant", "content": "y" * 2200})
+
+    # Under OK pressure: 75% threshold → 1500 tokens needed, we have ~1100 → no distill
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="ok",
+    )
+    assert await store.distill_if_needed(mock_provider, 2000) is False
+
+    # Same store, same content, but under CRITICAL pressure: 50% threshold → 1000 needed
+    mocker.patch(
+        "core.observability.ram_monitor.current_ram_pressure",
+        return_value="critical",
+    )
+    assert await store.distill_if_needed(mock_provider, 2000) is True
+
+
+# ---------------------------------------------------------------------------
+# Test 8: ShortTermStore.distill_forced() always summarizes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_short_term_distill_forced_always_summarizes():
+    store = ShortTermStore(max_messages=50)
+    store.push_message({"role": "user", "content": "Mensaje de prueba."})
+
+    mock_provider = MagicMock()
+    mock_provider.complete = AsyncMock(return_value="Resumen forzado.")
+
+    assert await store.distill_forced(mock_provider) is True
+    messages = store.get_context().active_messages
+    assert len(messages) == 1
+    assert "resumido por presión de RAM" in messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_short_term_distill_forced_empty_store():
+    store = ShortTermStore(max_messages=50)
+    mock_provider = MagicMock()
+
+    assert await store.distill_forced(mock_provider) is False
+    mock_provider.complete.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_stored_episode_is_retrievable(tmp_path):
     from core.memory.long_term import LongTermStore, RetrievalContext

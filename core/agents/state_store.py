@@ -15,6 +15,7 @@ class ToolCall:
     args: dict
     result: str
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    latency_ms: float = 0.0
 
 
 @dataclass

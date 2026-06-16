@@ -150,6 +150,11 @@ async def test_runtime_updates_session_summary_after_run(tmp_path):
     mock_chat.complete = AsyncMock(
         return_value='{"action": "answer", "answer": "42 es la respuesta."}'
     )
+
+    async def _mock_stream(*args, **kwargs):
+        yield '{"action": "answer", "answer": "42 es la respuesta."}'
+
+    mock_chat.stream = _mock_stream
     mock_chat.is_available = MagicMock(return_value=True)
 
     mock_registry = MagicMock(spec=ProviderRegistry)
@@ -482,6 +487,18 @@ async def test_search_files_tool_reached_when_authorized(tmp_path):
 
     mock_chat = MagicMock()
     mock_chat.complete = fake_complete
+
+    stream_call_count = 0
+
+    async def _mock_stream(*args, **kwargs):
+        nonlocal stream_call_count
+        stream_call_count += 1
+        if stream_call_count == 1:
+            yield '{"action": "tool", "tool": "search_files", "args": {"pattern": "*.py"}}'
+        else:
+            yield '{"action": "answer", "answer": "Encontré 2 archivos."}'
+
+    mock_chat.stream = _mock_stream
     mock_registry = MagicMock(spec=ProviderRegistry)
     mock_registry.select_for_task = MagicMock(return_value="primary")
     mock_registry.get_chat = MagicMock(return_value=mock_chat)
@@ -567,6 +584,12 @@ async def test_reason_node_passes_grammar_to_complete(tmp_path):
 
     mock_chat = MagicMock()
     mock_chat.complete = fake_complete
+
+    async def _mock_stream(*args, **kwargs):
+        captured.update(kwargs)
+        yield '{"action": "answer", "answer": "respuesta con áéíóú ñ"}'
+
+    mock_chat.stream = _mock_stream
     mock_registry = MagicMock(spec=ProviderRegistry)
     mock_registry.select_for_task = MagicMock(return_value="primary")
     mock_registry.get_chat = MagicMock(return_value=mock_chat)

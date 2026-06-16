@@ -1,0 +1,17 @@
+================================================================================
+SEMANTIC COMPRESSOR — ORDER VALIDATION REPORT
+Generated: 20260604T191334 UTC
+================================================================================
+
+Test Case                                     Chunks Out     Order OK    
+-----------------------------------------------------------------------
+single chunk 12 sentences                     1              ✅           
+two chunks with overlapping indices           2              ✅           
+three chunks single source                    2              ✅           
+interleaved sources                           2              ✅           
+single sentence chunks (boundary case)        3              ✅           
+-----------------------------------------------------------------------
+
+Result: ALL PASS ✅
+
+All compressed chunks maintain strict chronological order.

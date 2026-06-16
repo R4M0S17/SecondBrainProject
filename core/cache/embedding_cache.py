@@ -53,7 +53,6 @@ if TYPE_CHECKING:
 EMBED_TIMEOUT_SEC: Final = 10
 EMBED_MAX_RETRIES: Final = 3
 EMBED_RETRY_BACKOFF_SEC: Final = 0.5
-CACHE_PERSIST_INTERVAL: Final = 50
 
 
 class EmbeddingCache:
@@ -84,7 +83,6 @@ class EmbeddingCache:
         self._total_get_latency_ms = 0.0
         self._total_put_latency_ms = 0.0
         self._lock = asyncio.Lock()
-        self._operations_since_checkpoint = 0
 
         if persist_db_path:
             self._store: CacheStore = SQLiteCacheStore(persist_db_path)
@@ -104,7 +102,7 @@ class EmbeddingCache:
     async def get(self, text: str) -> list[float] | None:
         """Retrieve embedding from cache by text (SHA256 key).
 
-        Checks expiry and returns None if not found or TTL expired.
+        Checks in-memory LRU first, then persistent store on miss.
         Records hit/miss metrics. Thread-safe via asyncio.Lock.
 
         Args:
@@ -119,26 +117,40 @@ class EmbeddingCache:
             if key in self._cache and not self._is_expired(key):
                 self._hits += 1
                 self._cache.move_to_end(key)
-                embedding = self._cache[key]
-            else:
-                self._misses += 1
-                embedding = None
-                # Clean up expired entry
-                if key in self._cache:
-                    del self._cache[key]
-                    if key in self._timestamps:
-                        del self._timestamps[key]
+                latency_ms = (time.time() - start_time) * 1000
+                self._total_get_latency_ms += latency_ms
+                return self._cache[key]
+            if key in self._cache:
+                del self._cache[key]
+                self._timestamps.pop(key, None)
 
+        # Check persistent store on cache miss
+        entry = await self._store.load_entry(key)
+        if entry is not None:
+            embedding, timestamp = entry
+            if self._ttl_seconds is not None and (time.time() - timestamp) > self._ttl_seconds:
+                await self._store.delete_entry(key)
+            else:
+                async with self._lock:
+                    self._cache[key] = embedding
+                    self._timestamps[key] = timestamp
+                    self._cache.move_to_end(key)
+                    self._hits += 1
+                latency_ms = (time.time() - start_time) * 1000
+                self._total_get_latency_ms += latency_ms
+                return embedding
+
+        async with self._lock:
+            self._misses += 1
         latency_ms = (time.time() - start_time) * 1000
         self._total_get_latency_ms += latency_ms
-        return embedding
+        return None
 
     async def put(self, text: str, embedding: list[float]) -> None:
         """Store embedding in cache with LRU eviction.
 
         Stores embedding with current timestamp. If cache exceeds max_size,
-        evicts least-recently-used entry. Triggers periodic checkpoint to
-        persistent store after CACHE_PERSIST_INTERVAL operations.
+        evicts least-recently-used entry. Persists to store asynchronously.
 
         Args:
             text: Text to cache embedding for
@@ -160,15 +172,11 @@ class EmbeddingCache:
                     del self._timestamps[lru_key]
                 self._evictions += 1
 
-            self._operations_since_checkpoint += 1
-
         latency_ms = (time.time() - start_time) * 1000
         self._total_put_latency_ms += latency_ms
 
-        # Periodic checkpoint: save to store after N operations
-        if self._operations_since_checkpoint >= CACHE_PERSIST_INTERVAL:
-            await self.checkpoint()
-            self._operations_since_checkpoint = 0
+        # Fire-and-forget persistence — don't block the hot path
+        asyncio.create_task(self._store.save_entry(key, embedding, timestamp))
 
     def hit_rate(self) -> float:
         total = self._hits + self._misses
@@ -221,6 +229,19 @@ class EmbeddingCache:
                         del self._timestamps[lru_key]
                     self._evictions += 1
         logger.info("Loaded {} cache entries from store", len(entries))
+
+    async def sweep_expired(self) -> int:
+        """Remove expired entries from the persistent store.
+
+        Returns:
+            Number of entries removed
+        """
+        if self._ttl_seconds is None:
+            return 0
+        count = await self._store.delete_expired_entries(self._ttl_seconds)
+        if count > 0:
+            logger.info("Embedding cache sweep: removed {} expired entries", count)
+        return count
 
     def stats(self) -> dict[str, float | str | int | None]:
         """Return cache statistics and metrics.

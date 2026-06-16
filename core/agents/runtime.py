@@ -5,6 +5,8 @@ import inspect
 import json
 import os
 import re
+import time
+import uuid as _uuid
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypedDict, cast
@@ -54,11 +56,15 @@ from core.inference.inference_warnings import (
 from core.inference.prompt_cache import sync_prompt_cache
 from core.inference.registry import Message, ProviderRegistry
 from core.memory.context_builder import AssembledContext, ContextBuilder
+from core.observability.ram_monitor import refresh_ram_pressure
+from core.observability.time_travel import TimeTravelRecorder
+from core.reflection.reflector import Reflector
 from core.tools.handlers.filesystem import PathNotAuthorizedError
 from core.tools.registry import ToolDefinition
 
 if TYPE_CHECKING:
     from core.agents.context_enricher import ContextEnricher
+    from core.inference.adaptive_context import AdaptiveContext
 
 # --------------------------------------------------------------------------- #
 # Hard limits (from spec)
@@ -89,6 +95,22 @@ CONFIRMATION_REQUIRED_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# Regex: detect queries asking for code examples (not file creation).
+# When matched, write_file is excluded from the LLM's available tools
+# to prevent false-positive tool activations on small models.
+_CODE_EXAMPLE_RE: re.Pattern = re.compile(
+    r"(dame|muestra|enseña|ejemplos?\s+(de|en|para|con)\s+|"
+    r"ejemplo\s+de\s+c[oó]digo\s+(en|con|para)\s+|"
+    r"aprender\s+a\s+programar\s+(en|con)\s+|"
+    r"c[oó]mo\s+programar\s+(en|con)\s+|"
+    r"c[oó]mo\s+se\s+programa\s+(en|con)\s+|"
+    r"explica\s+(el\s+)?c[oó]digo\s+(de|en)\s+|"
+    r"tutorial\s+(de|en|para)\s+)"
+    r".*"
+    r"\b(python|java|javascript|typescript|rust|go|ruby|php|c\+\+|c#|kotlin|swift)\b",
+    re.IGNORECASE,
+)
+
 # --------------------------------------------------------------------------- #
 # LangGraph state (plain dict — no checkpointing needed for local runtime)
 # --------------------------------------------------------------------------- #
@@ -109,6 +131,7 @@ class _RunState(TypedDict):
     pending_tool_name: str | None
     pending_tool_args: dict | None
     ambient_context: str  # A8 proactive context injection
+    image_attachments: list[dict] | None  # [{filename, mime_type, content(base64)}]
 
 
 # --------------------------------------------------------------------------- #
@@ -131,6 +154,8 @@ HISTORIAL COMPRIMIDO DE SESIÓN:
 MEMORIA RECUPERADA:
 {memory_context}
 
+DOCUMENTOS INDEXADOS (usa SOLO estos textos para responder, NO inventes información):
+{document_context}
 {ambient_context}
 
 INSTRUCCIONES DE RESPUESTA:
@@ -169,9 +194,12 @@ HISTORIAL COMPRIMIDO DE SESIÓN:
 MEMORIA RECUPERADA:
 {memory_context}
 
+DOCUMENTOS INDEXADOS (usa SOLO estos textos para responder, NO inventes información):
+{document_context}
 {ambient_context}
 
-Responde de forma natural y directa en texto plano. No uses JSON ni ningún formato especial.\
+Responde de forma natural y directa en texto plano. No uses JSON ni ningún formato especial.
+NO crees archivos a menos que el usuario explícitamente pida crear, escribir o guardar un archivo. Si pide código o contenido, muéstralo directamente en el chat.\
 """
 
 # English weekday/month names — avoids LC_TIME locale drift on small models.
@@ -282,6 +310,13 @@ def _build_system_prompt(
 ) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
+
+    doc_lines = [
+        f"- [{c.source_path}]({c.score:.2f}): {c.content[:300]}"
+        for c in context.retrieved_documents
+    ]
+    document_context = "\n".join(doc_lines) if doc_lines else ""
+
     instructions = agent_state.profile.preferences.get("instructions", "")
     instructions += _reminder_write_prompt_extra(query, tool_defs)
 
@@ -294,6 +329,14 @@ def _build_system_prompt(
                 params = "sin argumentos"
             detail_lines.append(f"- {td.name}({params}): {td.description}")
         tools_detail = "\n".join(detail_lines)
+        # Add clarification about write_file usage
+        if any(td.name == "write_file" for td in tool_defs):
+            tools_detail += (
+                "\n\nNOTA IMPORTANTE SOBRE write_file: SOLO usa write_file cuando el usuario "
+                "explícitamente pida crear, escribir o guardar un archivo. Si el usuario solo "
+                "pide código, explicación o contenido, respóndelo directamente en el chat SIN "
+                "usar write_file."
+            )
     else:
         tools_detail = "ninguna"
 
@@ -305,6 +348,7 @@ def _build_system_prompt(
         current_year=temporal["year"],
         session_summary=agent_state.session_summary or "(sesión nueva)",
         memory_context=memory_context,
+        document_context=document_context,
         ambient_context=ambient_context,
         available_tools_detail=tools_detail,
     )
@@ -315,8 +359,11 @@ def _build_stream_system_prompt(
 ) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
-    instructions = agent_state.profile.preferences.get("instructions", "")
 
+    doc_lines = [f"- {c.content[:300]}" for c in context.retrieved_documents]
+    document_context = "\n".join(doc_lines) if doc_lines else ""
+
+    instructions = agent_state.profile.preferences.get("instructions", "")
     temporal = _now_human()
     return _STREAM_SYSTEM_TEMPLATE.format(
         agent_name=agent_state.profile.name,
@@ -325,6 +372,7 @@ def _build_stream_system_prompt(
         current_year=temporal["year"],
         session_summary=agent_state.session_summary or "(sesión nueva)",
         memory_context=memory_context,
+        document_context=document_context,
         ambient_context=ambient_context,
     )
 
@@ -454,12 +502,29 @@ def _chat_supports_grammar_stream(chat: object) -> bool:
         sig = inspect.signature(stream_fn)
     except (TypeError, ValueError):
         return False
-    return "grammar" in sig.parameters
+    if "grammar" in sig.parameters:
+        return True
+    # Accept **kwargs (VAR_KEYWORD) — grammar can be passed through
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
 
 
 # --------------------------------------------------------------------------- #
 # AgentRuntime
 # --------------------------------------------------------------------------- #
+
+
+def _context_to_preview(context: dict | None) -> str | None:
+    """Extract a text preview from the assembled context dict."""
+    if not context or not isinstance(context, dict):
+        return None
+    sources = context.get("sources_used") or []
+    preview = ""
+    if sources:
+        preview += "Fuentes: " + ", ".join(str(s) for s in sources[:3])
+    tokens = context.get("total_tokens_estimated")
+    if tokens:
+        preview += f" | ~{tokens} tokens" if preview else f"~{tokens} tokens"
+    return preview or None
 
 
 class StreamRunComplete:
@@ -472,6 +537,16 @@ class StreamRunComplete:
         self.final_state = final_state
 
 
+class ContextSourcesEvent:
+    """Yielded before the first token when context assembly found sources."""
+
+    __slots__ = ("sources", "episode_count")
+
+    def __init__(self, sources: list[str], episode_count: int) -> None:
+        self.sources = sources
+        self.episode_count = episode_count
+
+
 class AgentRuntime:
     def __init__(
         self,
@@ -482,6 +557,12 @@ class AgentRuntime:
         tool_definitions: dict[str, ToolDefinition] | None = None,
         enricher: ContextEnricher | None = None,
         conversation_store: ConversationStore | None = None,
+        config_getter: Callable[[], dict[str, Any]] | None = None,
+        time_travel_recorder: TimeTravelRecorder | None = None,
+        reflector: Reflector | None = None,
+        engine_suspender: Any = None,
+        authorized_read_paths_getter: Callable[[], list[str]] | None = None,
+        adaptive_ctx: AdaptiveContext | None = None,
     ) -> None:
         self._registry = registry
         self._state_store = state_store
@@ -491,8 +572,27 @@ class AgentRuntime:
         self._enricher = enricher
         self._conv_store = conversation_store
         self._active_conversation_id: str | None = None
-        self._fast_path_router = FastPathRouter(self._registry, self._tool_registry)
+        self._config_getter = config_getter
+        self._engine_suspender = engine_suspender
+        self._authorized_read_paths_getter = authorized_read_paths_getter
+        self._adaptive_ctx = adaptive_ctx
+        self._fast_path_router = FastPathRouter(
+            self._registry,
+            self._tool_registry,
+            config_getter=config_getter,
+            authorized_read_paths_getter=authorized_read_paths_getter,
+        )
         self._graph = self._build_graph()
+        self._time_travel = time_travel_recorder
+        self._reflector = reflector
+
+    def _request_ctx_size(self, query: str) -> int | None:
+        if self._adaptive_ctx is None or not self._adaptive_ctx.enabled:
+            return None
+        from core.observability.ram_monitor import RamMonitor
+
+        available_gb = RamMonitor().snapshot()["available_gb"]
+        return self._adaptive_ctx.select(query, available_gb)
 
     def prepare_conversation(self, conversation_id: str | None, agent_id: str) -> None:
         """Hydrate short-term history and per-conversation summary before a run."""
@@ -517,10 +617,21 @@ class AgentRuntime:
         persist_session_summary(record, agent_state)
         self._conv_store.update_session_summary(conversation_id, record.session_summary)
 
+    def _web_search_enabled(self) -> bool:
+        """Return True if web_search is enabled via frontend toggle."""
+        if self._config_getter is None:
+            return False
+        config = self._config_getter()
+        return config.get("tool_permissions", {}).get("search_web", False)
+
     def _authorized_tools_for_grammar(self, agent_state: AgentState) -> tuple[str, ...]:
         if agent_state.profile.authorized_tools:
-            return tuple(sorted(agent_state.profile.authorized_tools))
-        return tuple(sorted(self._tool_registry.keys()))
+            tools = tuple(sorted(agent_state.profile.authorized_tools))
+        else:
+            tools = tuple(sorted(self._tool_registry.keys()))
+        if not self._web_search_enabled():
+            return tuple(t for t in tools if t != "web_search")
+        return tools
 
     def _finish_math_fast_path(
         self,
@@ -709,7 +820,12 @@ class AgentRuntime:
         return answer, agent_state
 
     def _try_file_search_fast_path(self, query: str, agent_state: AgentState) -> str | None:
-        return try_file_search_fast_path(query, list(agent_state.profile.authorized_tools or []))
+        paths = self._authorized_read_paths_getter() if self._authorized_read_paths_getter else None
+        return try_file_search_fast_path(
+            query,
+            list(agent_state.profile.authorized_tools or []),
+            authorized_paths=paths,
+        )
 
     def _finish_file_search_fast_path(
         self,
@@ -752,18 +868,27 @@ class AgentRuntime:
         self.save_conversation_session(conversation_id, agent_state)
         return result.answer, agent_state
 
-    def _apply_fast_path_result(
+    async def _apply_fast_path_result(
         self,
         query: str,
         conversation_id: str | None,
         result: FastPathResult,
         agent_state: AgentState,
     ) -> tuple[str, AgentState]:
-        if result.kind == "math":
+        if result.kind in (
+            "time_date",
+            "config_read",
+            "math",
+            "weather",
+            "dictionary",
+            "unit_conversion",
+            "system_info",
+        ):
             if result.warnings:
                 append_inference_warnings(list(result.warnings))
-            final_state = self._finish_math_fast_path(
-                query, conversation_id, result.answer or "", agent_state
+            warning = result.warnings[0] if result.warnings else f"{result.kind}_fast_path"
+            final_state = self._finish_calendar_fast_path(
+                query, conversation_id, result.answer or "", agent_state, warning=warning
             )
             return result.answer or "", final_state
 
@@ -779,8 +904,46 @@ class AgentRuntime:
         if result.kind == "reminder":
             return self._finish_reminder_fast_path(query, conversation_id, result, agent_state)
 
+        if result.kind == "calendar_write":
+            return self._finish_reminder_fast_path(query, conversation_id, result, agent_state)
+
+        if result.kind == "url_open":
+            import webbrowser
+
+            url = result.answer or ""
+            if url:
+                webbrowser.open(url)
+            final_state = self._finish_calendar_fast_path(
+                query, conversation_id, f"Opened {url}", agent_state, warning="url_open_fast_path"
+            )
+            return f"Opened {url}", final_state
+
         if result.kind == "calendar_read":
             warning = result.warnings[0] if result.warnings else "calendar_fast_path"
+            final_state = self._finish_calendar_fast_path(
+                query, conversation_id, result.answer or "", agent_state, warning=warning
+            )
+            return result.answer or "", final_state
+
+        if result.kind == "web_search":
+            # Handle follow-up summary request
+            if result.warnings and "web_search_follow_up" in result.warnings:
+                summary = await self._summarize_web_search_result(query, agent_state)
+                if summary:
+                    warning = "web_search_follow_up_summary"
+                    final_state = self._finish_calendar_fast_path(
+                        query, conversation_id, summary, agent_state, warning=warning
+                    )
+                    return summary, final_state
+                # Fallback: return raw result if summarization fails
+                raw = agent_state.working_memory.get("last_web_search_result", "")
+                warning = "web_search_follow_up_raw"
+                final_state = self._finish_calendar_fast_path(
+                    query, conversation_id, raw, agent_state, warning=warning
+                )
+                return raw, final_state
+
+            warning = "web_search_fast_path"
             final_state = self._finish_calendar_fast_path(
                 query, conversation_id, result.answer or "", agent_state, warning=warning
             )
@@ -795,6 +958,49 @@ class AgentRuntime:
             return result.answer or "", final_state
 
         raise ValueError(f"unknown fast path kind: {result.kind}")
+
+    async def _summarize_web_search_result(
+        self,
+        query: str,
+        agent_state: AgentState,
+    ) -> str | None:
+        """Use LLM to summarize the last web search result for follow-up queries."""
+        from core.inference.registry import TaskHint
+
+        raw_result = agent_state.working_memory.get("last_web_search_result")
+        original_query = agent_state.working_memory.get("last_web_search_query", "")
+        if not raw_result:
+            return None
+
+        try:
+            provider_name = self._registry.select_for_task(TaskHint.CHAT)
+            chat = self._registry.get_chat(provider_name)
+        except Exception as exc:
+            logger.warning("Web search summary: no chat provider: {}", exc)
+            return None
+
+        summary_prompt = f"""The user previously asked: "{original_query}"
+You searched the web and found these results:
+
+{raw_result[:3000]}
+
+Now the user asks: "{query}"
+
+Provide a clear, concise summary in the user's language that answers their follow-up question based on the search results above. Include source URLs where relevant."""
+
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that summarizes web search results clearly and concisely.",
+                },
+                {"role": "user", "content": summary_prompt},
+            ]
+            summary = await chat.complete(messages, max_tokens=500, temperature=0.3, n_ctx=1024)
+            return summary.strip()
+        except Exception as exc:
+            logger.warning("Web search summary: LLM failed: {}", exc)
+            return None
 
     # ---------------------------------------------------------------------- #
     # Public entry point
@@ -811,6 +1017,8 @@ class AgentRuntime:
         """
         from core.inference.registry import TaskHint  # avoid circular at module level
 
+        if self._engine_suspender:
+            self._engine_suspender.resume()
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
@@ -838,7 +1046,11 @@ class AgentRuntime:
         )
 
         full_tokens: list[str] = []
-        stream = cast(AsyncIterable[str], chat.stream(messages))
+        ctx = self._request_ctx_size(query)
+        stream_kwargs = {}
+        if ctx is not None:
+            stream_kwargs["n_ctx"] = ctx
+        stream = cast(AsyncIterable[str], chat.stream(messages, **stream_kwargs))
         async for token in stream:
             full_tokens.append(token)
             yield token
@@ -863,21 +1075,31 @@ class AgentRuntime:
         agent_id: str,
         conversation_id: str | None = None,
         intent_query: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> tuple[str, AgentState]:
+        if self._engine_suspender:
+            self._engine_suspender.resume()
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
+        refresh_ram_pressure()
 
         route_query = intent_query or query
-        fast_path_result = await self._fast_path_router.try_all(route_query, agent_state)
-        if fast_path_result is not None:
-            return self._apply_fast_path_result(
-                query, conversation_id, fast_path_result, agent_state
-            )
 
-        initial: _RunState = {
+        image_attachments = (
+            [
+                {"filename": a["filename"], "mime_type": a["mime_type"], "content": a["content"]}
+                for a in attachments
+                if a.get("type") == "image"
+            ]
+            if attachments
+            else None
+        )
+
+        # Start context assembly in parallel with fast path check
+        base_state: _RunState = {
             "agent_state": _state_to_dict(agent_state),
-            "query": query,
+            "query": route_query,
             "context": None,
             "messages": [],
             "iterations": 0,
@@ -890,7 +1112,32 @@ class AgentRuntime:
             "pending_tool_name": None,
             "pending_tool_args": None,
             "ambient_context": "",
+            "image_attachments": image_attachments,
         }
+        context_task = asyncio.create_task(self._context_assembly_node(base_state))
+
+        fast_path_result = await self._fast_path_router.try_all(
+            route_query, agent_state, intent=intent_query
+        )
+        if fast_path_result is not None:
+            context_task.cancel()
+            try:
+                await context_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            return await self._apply_fast_path_result(
+                query, conversation_id, fast_path_result, agent_state
+            )
+
+        # Fast path missed — await the already-running context assembly
+        prefetch_ready = context_task.done()
+        context_updates = await context_task
+        if prefetch_ready:
+            append_inference_warnings(["context_prefetch_ready"])
+        else:
+            append_inference_warnings(["context_prefetch_still_building"])
+        initial: _RunState = {**base_state, **context_updates}
+        initial["query"] = query  # Use original query, not route_query
 
         try:
             result = await asyncio.wait_for(
@@ -909,6 +1156,29 @@ class AgentRuntime:
             final_state.pending_tool_args = result.get("pending_tool_args")
         self._state_store.save(final_state)
         answer = result["final_answer"] or "No se pudo generar una respuesta."
+
+        # ── Reflection-Turn: review answer for quality issues ──────────
+        if self._reflector and not final_state.pending_tool_name:
+            ctx_str = _context_to_preview(result.get("context"))
+            critique = await self._reflector.critique(query, answer, context=ctx_str)
+            if critique.needs_correction and critique.score < 10:
+                logger.info(
+                    "Reflection triggered (score={}) for query '{}'",
+                    critique.score,
+                    query[:60],
+                )
+                correction_msg = (
+                    "La respuesta anterior puede contener errores. Por favor revísala "
+                    "y corrígela teniendo en cuenta estas observaciones:\n"
+                    + json.dumps(critique.issues, ensure_ascii=False)
+                )
+                corrected = await self._reflect_correction(result["messages"], correction_msg)
+                if corrected:
+                    answer = corrected
+                    result["final_answer"] = corrected
+                    logger.info("Reflection corrected answer for '{}'", query[:60])
+        # ─────────────────────────────────────────────────────────────────
+
         if not final_state.pending_tool_name:
             short_term = self._context_builder._short_term
             short_term.push_message({"role": "user", "content": query})
@@ -922,6 +1192,8 @@ class AgentRuntime:
         agent_id: str,
         conversation_id: str | None = None,
         intent_query: str | None = None,
+        slot_id: int | None = None,
+        attachments: list[dict] | None = None,
     ) -> AsyncIterator[str | StreamRunComplete]:
         """Run the tool loop, yielding answer-field tokens when the model replies directly.
 
@@ -930,23 +1202,29 @@ class AgentRuntime:
         When live streaming is unavailable or the model selects a tool, only the
         sentinel is yielded (caller should simulate tokens from ``answer``).
         """
+        if self._engine_suspender:
+            self._engine_suspender.resume()
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
+        refresh_ram_pressure()
 
         route_query = intent_query or query
-        fast_path_result = await self._fast_path_router.try_all(route_query, agent_state)
-        if fast_path_result is not None:
-            answer, final_state = self._apply_fast_path_result(
-                query, conversation_id, fast_path_result, agent_state
-            )
-            yield answer
-            yield StreamRunComplete(answer=answer, final_state=final_state)
-            return
 
-        state: _RunState = {
+        image_attachments = (
+            [
+                {"filename": a["filename"], "mime_type": a["mime_type"], "content": a["content"]}
+                for a in attachments
+                if a.get("type") == "image"
+            ]
+            if attachments
+            else None
+        )
+
+        # Start context assembly in parallel with fast path check
+        base_state: _RunState = {
             "agent_state": _state_to_dict(agent_state),
-            "query": query,
+            "query": route_query,
             "context": None,
             "messages": [],
             "iterations": 0,
@@ -959,23 +1237,146 @@ class AgentRuntime:
             "pending_tool_name": None,
             "pending_tool_args": None,
             "ambient_context": "",
+            "image_attachments": image_attachments,
+            "slot_id": slot_id,
         }
+
+        # ── Time-travel debug recording (defined early, used in fast path + main loop) ──
+        _tt = self._time_travel
+        _run_id = _uuid.uuid4().hex if _tt else None
+        _step_num = 0
+        # ────────────────────────────────────────────────────────────────────────────────
+
+        context_task = asyncio.create_task(self._context_assembly_node(base_state))
+
+        fast_path_result = await self._fast_path_router.try_all(
+            route_query, agent_state, intent=intent_query
+        )
+        if fast_path_result is not None:
+            context_task.cancel()
+            try:
+                await context_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            answer, final_state = await self._apply_fast_path_result(
+                query, conversation_id, fast_path_result, agent_state
+            )
+            if _tt:
+                await _tt.start_run(_run_id, agent_id, query, conversation_id)
+                await _tt.record_step(
+                    _uuid.uuid4().hex,
+                    _run_id,
+                    0,
+                    "fast_path",
+                    output_preview=answer[:500],
+                )
+                await _tt.end_run(_run_id, success=True)
+            yield answer
+            yield StreamRunComplete(answer=answer, final_state=final_state)
+            return
+
+        # Fast path missed — await context assembly
+        prefetch_ready = context_task.done()
+        context_updates = await context_task
+        if prefetch_ready:
+            append_inference_warnings(["context_prefetch_ready"])
+        else:
+            append_inference_warnings(["context_prefetch_still_building"])
+        state: _RunState = {**base_state, **context_updates}
+        state["query"] = query
+
+        # Emit context sources event before first token
+        ctx_info = context_updates.get("context") or {}
+        sources: list[str] = ctx_info.get("sources_used") or []
+        if sources:
+            yield ContextSourcesEvent(sources=list(sources), episode_count=len(sources))
+
+        if _tt:
+            await _tt.start_run(_run_id, agent_id, query, conversation_id)
+        # ─────────────────────────────────────────────────────────────
 
         try:
             async with asyncio.timeout(TIMEOUT_SECONDS):
                 state = {**state, **await self._context_assembly_node(state)}
 
+                if _tt:
+                    await _tt.record_step(
+                        _uuid.uuid4().hex,
+                        _run_id,
+                        _step_num,
+                        "context_assembly",
+                        output_preview=f"context ready, {len(state.get('messages', []))} messages",
+                    )
+
                 while True:
+                    _step_num += 1
                     reason_updates, token_iter = await self._reason_node_streaming(state)
+
+                    _tokens: list[tuple[str, bool]] = []
                     async for token in token_iter:
+                        _tokens.append((token, False))
                         yield token
+                    if _tokens:
+                        _tokens[-1] = (_tokens[-1][0], True)
+
                     state = {**state, **reason_updates}
+
+                    _step_id = _uuid.uuid4().hex if _tt else None
+                    if _tt:
+                        await _tt.record_step(
+                            _step_id,
+                            _run_id,
+                            _step_num,
+                            "reason_node",
+                            output_preview=(
+                                state.get("final_answer")
+                                or f"→ tool: {state.get('next_tool_name')}"
+                            )[:800],
+                            tool_name=state.get("next_tool_name"),
+                            tool_args=state.get("next_tool_args"),
+                        )
+                        if _tokens and _step_id:
+                            await _tt.record_tokens(_step_id, _tokens)
 
                     if self._route_after_reason(state) == "tool_node":
                         state = {**state, **await self._tool_node(state)}
                         if state.get("needs_confirmation"):
+                            if _tt:
+                                await _tt.record_step(
+                                    _uuid.uuid4().hex,
+                                    _run_id,
+                                    _step_num + 1,
+                                    "tool_node",
+                                    tool_name=state.get("pending_tool_name"),
+                                    tool_args=state.get("pending_tool_args"),
+                                    needs_confirmation=True,
+                                )
                             break
+
+                        _tool_result = state.get("_last_tool_result", "")
+                        if _tt:
+                            await _tt.record_step(
+                                _uuid.uuid4().hex,
+                                _run_id,
+                                _step_num + 1,
+                                "tool_node",
+                                tool_name=state.get("next_tool_name"),
+                                tool_args=state.get("next_tool_args"),
+                                tool_result_preview=(
+                                    str(_tool_result)[:800] if _tool_result else None
+                                ),
+                            )
+
                         state = {**state, **await self._observe_node(state)}
+                        _step_num += 1
+                        if _tt:
+                            await _tt.record_step(
+                                _uuid.uuid4().hex,
+                                _run_id,
+                                _step_num,
+                                "observe_node",
+                                output_preview=f"result ingested, {len(state.get('messages', []))} messages",
+                            )
                         continue
                     break
 
@@ -990,11 +1391,30 @@ class AgentRuntime:
             final_state.pending_tool_args = state.get("pending_tool_args")
         self._state_store.save(final_state)
         answer = state.get("final_answer") or "No se pudo generar una respuesta."
+
+        # ── Reflection-Turn (streaming): correct after tokens, before StreamRunComplete ──
+        if self._reflector and not state.get("needs_confirmation"):
+            ctx_str = _context_to_preview(state.get("context"))
+            critique = await self._reflector.critique(query, answer, context=ctx_str)
+            if critique.needs_correction and critique.score < 10:
+                correction_msg = (
+                    "La respuesta anterior puede contener errores. Por favor revísala "
+                    "y corrígela teniendo en cuenta estas observaciones:\n"
+                    + json.dumps(critique.issues, ensure_ascii=False)
+                )
+                corrected = await self._reflect_correction(state["messages"], correction_msg)
+                if corrected:
+                    answer = corrected
+                    logger.info("Reflection corrected streamed answer for '{}'", query[:60])
+        # ────────────────────────────────────────────────────────────────────────────────
+
         if not final_state.pending_tool_name:
             short_term = self._context_builder._short_term
             short_term.push_message({"role": "user", "content": query})
             short_term.push_message({"role": "assistant", "content": answer})
         self.save_conversation_session(conversation_id, final_state)
+        if _tt:
+            await _tt.end_run(_run_id, success=bool(answer) and not state.get("needs_confirmation"))
         yield StreamRunComplete(answer=answer, final_state=final_state)
 
     # ---------------------------------------------------------------------- #
@@ -1032,6 +1452,10 @@ class AgentRuntime:
     # ---------------------------------------------------------------------- #
 
     async def _context_assembly_node(self, state: _RunState) -> dict:
+        # If messages were already built by async prefetch, skip assembly
+        if state.get("messages") and len(state["messages"]) > 0:
+            return {}
+
         agent_state = _state_from_dict(state["agent_state"])
         provider_name = self._registry.select_for_task(
             __import__("core.inference.registry", fromlist=["TaskHint"]).TaskHint.CHAT
@@ -1041,7 +1465,8 @@ class AgentRuntime:
             self._state_store.save(agent_state)
             state = {**state, "agent_state": _state_to_dict(agent_state)}
 
-        assembled = await self._context_builder.build(state["query"], agent_state)
+        rag_top_k = agent_state.profile.preferences.get("rag_top_k", None)
+        assembled = await self._context_builder.build(state["query"], agent_state, top_k=rag_top_k)
         ambient_context = ""
         if self._enricher and not should_skip_context_enricher():
             ambient_context = await self._enricher.enrich(state["query"])
@@ -1054,7 +1479,15 @@ class AgentRuntime:
                 or t in agent_state.profile.authorized_tools
             )
             and t in self._tool_definitions
+            and (self._web_search_enabled() or t != "web_search")
         ]
+        # Dynamically exclude write_file for code-example-only queries
+        # (prevents small models from false-triggering write_file when
+        # the user is just asking for examples, not creating a file)
+        if any(td.name == "write_file" for td in tool_defs):
+            if _CODE_EXAMPLE_RE.search(state["query"]):
+                tool_defs = [td for td in tool_defs if td.name != "write_file"]
+                logger.debug("Excluded write_file for code-example query")
         system_prompt = _build_system_prompt(
             agent_state, assembled, tool_defs, ambient_context, query=state["query"]
         )
@@ -1069,10 +1502,30 @@ class AgentRuntime:
             [td.name for td in tool_defs],
         )
 
+        user_content = _date_preamble() + state["query"]
+        if state.get("image_attachments") and getattr(chat, "supports_vision", False):
+            content_blocks: list[dict] = [{"type": "text", "text": user_content}]
+            for img in state["image_attachments"]:
+                content_blocks.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"},
+                    }
+                )
+            user_message: dict = {"role": "user", "content": content_blocks}
+        elif state.get("image_attachments"):
+            user_message = {
+                "role": "user",
+                "content": user_content
+                + "\n\n[Nota: se adjuntó una imagen pero el modelo actual no soporta procesamiento de imágenes.]",
+            }
+        else:
+            user_message = {"role": "user", "content": user_content}
+
         messages: list[Message] = [
             {"role": "system", "content": system_prompt},
             *assembled.session_history,
-            {"role": "user", "content": _date_preamble() + state["query"]},
+            user_message,
         ]
 
         return {
@@ -1103,30 +1556,48 @@ class AgentRuntime:
                 list(agent_state.profile.authorized_tools),
                 model_id=os.getenv("CEREBRO_LLAMACPP_MODEL", ""),
             )
-        grammar = build_agent_response_grammar(self._authorized_tools_for_grammar(agent_state))
+        tools_for_grammar = self._authorized_tools_for_grammar(agent_state)
+        if _CODE_EXAMPLE_RE.search(state.get("query", "")):
+            tools_for_grammar = tuple(t for t in tools_for_grammar if t != "write_file")
+        grammar = build_agent_response_grammar(tools_for_grammar)
 
+        slot_id: int | None = state.get("slot_id")
         token_queue: asyncio.Queue[str | None] = asyncio.Queue()
         use_live_stream = _chat_supports_grammar_stream(chat)
 
         async def _collect_stream() -> str:
             parser = AgentAnswerStreamParser()
             chunks: list[str] = []
-            stream = cast(AsyncIterable[str], chat.stream(messages, grammar=grammar))
+            stream_kwargs: dict = {"grammar": grammar}
+            if slot_id is not None:
+                stream_kwargs["slot_id"] = slot_id
+            ctx = self._request_ctx_size(state["query"])
+            if ctx is not None:
+                stream_kwargs["n_ctx"] = ctx
+            stream = cast(AsyncIterable[str], chat.stream(messages, **stream_kwargs))
             async for delta in stream:
                 chunks.append(delta)
                 for token in parser.feed(delta):
                     await token_queue.put(token)
+            await token_queue.put(None)
             return "".join(chunks)
 
+        raw_response: str
         if use_live_stream:
             raw_response = await _collect_stream()
-            await token_queue.put(None)
         else:
-            raw_response = await chat.complete(messages, grammar=grammar)
-            await token_queue.put(None)
-
+            ctx = self._request_ctx_size(state["query"])
+            complete_kwargs = {"grammar": grammar}
+            if ctx is not None:
+                complete_kwargs["n_ctx"] = ctx
+            raw_response = await chat.complete(messages, **complete_kwargs)
         logger.debug("Reason node raw response: {}", raw_response[:200])
         updates = self._build_reason_updates(state, iterations, raw_response)
+
+        parser = AgentAnswerStreamParser()
+        for token in parser.feed(raw_response):
+            await token_queue.put(token)
+        await token_queue.put(None)
 
         async def _drain_tokens() -> AsyncIterator[str]:
             while True:
@@ -1216,12 +1687,15 @@ class AgentRuntime:
                 if filtered_args != tool_args:
                     dropped = set(tool_args) - accepted
                     logger.debug("Tool '{}': dropped unknown args {}", tool_name, dropped)
+                t0 = time.perf_counter()
                 if inspect.iscoroutinefunction(handler):
                     result_text = str(await handler(**filtered_args))
                 else:
                     result_text = str(await asyncio.to_thread(handler, **filtered_args))
+                tool_latency_ms = (time.perf_counter() - t0) * 1000
             except PathNotAuthorizedError as exc:
                 result_text = str(exc)
+                tool_latency_ms = 0.0
                 logger.warning(
                     "Path not authorized for tool '{}': {} (allowed: {})",
                     tool_name,
@@ -1230,10 +1704,16 @@ class AgentRuntime:
                 )
             except Exception as e:
                 result_text = f"Error ejecutando '{tool_name}': {e}"
+                tool_latency_ms = 0.0
                 logger.exception("Tool '{}' raised an exception", tool_name)
 
         # Record in agent state tool_trace
-        tc = ToolCall(tool_name=tool_name or "unknown", args=tool_args, result=result_text)
+        tc = ToolCall(
+            tool_name=tool_name or "unknown",
+            args=tool_args,
+            result=result_text,
+            latency_ms=tool_latency_ms,
+        )
         updated_state = _state_to_dict(_state_from_dict(state["agent_state"]))
         updated_state["tool_trace"].append(
             {
@@ -1241,6 +1721,7 @@ class AgentRuntime:
                 "args": tc.args,
                 "result": tc.result,
                 "timestamp": tc.timestamp,
+                "latency_ms": tc.latency_ms,
             }
         )
 
@@ -1296,6 +1777,39 @@ class AgentRuntime:
             agent_state.session_summary = new_exchange
 
         return {"agent_state": _state_to_dict(agent_state)}
+
+    # ── Reflection-Turn helpers ────────────────────────────────────────────
+
+    async def _reflect_correction(
+        self,
+        messages: list[dict],
+        correction_msg: str,
+    ) -> str | None:
+        """Request a corrected answer from the LLM given the issues found."""
+        if not messages:
+            return None
+        corrected_messages = list(messages) + [
+            {"role": "user", "content": correction_msg},
+        ]
+        try:
+            provider_name = self._registry.select_for_task(
+                __import__("core.inference.registry", fromlist=["TaskHint"]).TaskHint.CHAT
+            )
+            chat = self._registry.get_chat(provider_name)
+            raw = await asyncio.wait_for(
+                chat.complete(corrected_messages, temperature=0.1),
+                timeout=15.0,
+            )
+            # Parse the response — same logic as the main parser
+            from core.agents.llm_parse_utils import extract_json_object
+
+            parsed = extract_json_object(raw)
+            if parsed and "answer" in parsed:
+                return str(parsed["answer"])
+            return raw.strip()
+        except Exception:
+            logger.exception("Reflection correction failed")
+            return None
 
     # ---------------------------------------------------------------------- #
     # Routing

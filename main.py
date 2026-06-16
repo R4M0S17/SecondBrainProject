@@ -7,8 +7,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import re
+import signal
+import subprocess
+import sys
 from pathlib import Path
 
+import httpx
+import numpy as np
+import psutil
 import uvicorn
 
 from core.agents.context_enricher import ContextEnricher
@@ -19,29 +26,74 @@ from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
 from core.agents.state_store import AgentStateStore
 from core.cache.embedding_cache import CachedEmbeddingProvider, EmbeddingCache
 from core.inference.embedding_factory import build_embedding_provider, default_embeddings_backend
+from core.inference.engine import InferenceEngine
 from core.inference.model_manager import ModelManager
 from core.inference.platform import mlx_available
-from core.inference.providers.llamacpp_provider import LlamaCppChatProvider
+from core.inference.providers.llamacpp_provider import _VISION_MODEL_RE, LlamaCppChatProvider
 from core.inference.registry import ProviderRegistry
+from core.knowledge_sync.models import SyncSourceConfig
+from core.knowledge_sync.orchestrator import KnowledgeSyncOrchestrator
+from core.knowledge_sync.router import router as ks_router
 from core.memory.context_builder import ContextBuilder
 from core.memory.long_term import LongTermStore
 from core.memory.short_term import ShortTermStore
 from core.memory.vector_store import VectorStore
+from core.observability.time_travel import TimeTravelRecorder
+from core.rag.query_engine import RAGQueryEngine
+from core.reflection.reflector import Reflector
 from core.tools.registry import (
     ToolRegistry,
+    register_automation_tools,
     register_calendar_tools,
     register_filesystem_tools,
     register_macos_tools,
     register_math_tools,
+    register_web_tools,
 )
+from core.utils.compressor import SemanticCompressor
 from ui.tray.server import app, app_state
+
+
+def _prompt_lite_profile() -> None:
+    """If ≤10 GB RAM and running interactively, offer the lite-8gb profile."""
+    if not sys.stdin.isatty():
+        return
+    if os.environ.get("CEREBRO_SKIP_LITE_PROMPT"):
+        return
+    # If user already set any CEREBRO_* env vars, they have their own config
+    if any(k.startswith("CEREBRO_") for k in os.environ):
+        return
+    try:
+        total_ram_gb = psutil.virtual_memory().total / (1024**3)
+    except Exception:
+        return
+    if total_ram_gb > 10:
+        return
+
+    print(f"\n💻 System RAM: {total_ram_gb:.0f} GB — lite-8gb profile recommended")
+    print("   (local embeddings, no MLX, ContextEnricher off, lower RAM usage)")
+    answer = input("Use lite profile? [Y/n]: ").strip().lower()
+    if answer in ("", "y", "yes"):
+        os.environ.setdefault("CEREBRO_LLAMACPP_SIMPLE", "true")
+        os.environ.setdefault("CEREBRO_PROACTIVE_CONTEXT", "false")
+        os.environ.setdefault("CEREBRO_MLX_ENABLED", "false")
+        os.environ.setdefault("CEREBRO_EMBEDDINGS_BACKEND", "local")
+        os.environ.setdefault("CEREBRO_RAM_PRIMARY_GB", "0.8")
+        os.environ.setdefault("CEREBRO_RAM_FALLBACK_GB", "0.4")
+        print("✅ lite-8gb profile activated\n")
+
+
+_prompt_lite_profile()
 
 DB_PATH = os.path.expanduser(os.getenv("CEREBRO_DB", "~/.cerebro/db"))
 STATE_DIR = os.path.expanduser(os.getenv("CEREBRO_STATE", "~/.cerebro/state"))
 PORT = int(os.getenv("CEREBRO_PORT", "7842"))
+EMBEDDING_CACHE_DB = os.path.join(DB_PATH, "embedding_cache.sqlite")
+EMBEDDING_CACHE_TTL_DAYS = int(os.getenv("CEREBRO_EMBEDDING_CACHE_TTL_DAYS", "30"))
+EMBEDDING_CACHE_TTL_SECONDS = EMBEDDING_CACHE_TTL_DAYS * 86400
 RAM_PRIMARY_GB = float(os.getenv("CEREBRO_RAM_PRIMARY_GB", "1.0"))
 RAM_FALLBACK_GB = float(os.getenv("CEREBRO_RAM_FALLBACK_GB", "0.3"))
-MLX_MODEL = os.getenv("CEREBRO_MLX_MODEL", "mlx-community/Phi-4-mini-instruct-4bit")
+MLX_MODEL = os.getenv("CEREBRO_MLX_MODEL", "mlx-community/Qwen3.5-2B-MLX-4bit")
 MLX_ENABLED = os.getenv("CEREBRO_MLX_ENABLED", "auto")  # "auto" | "true" | "false"
 INFERENCE_BACKEND = os.getenv(
     "CEREBRO_INFERENCE_BACKEND", "llamacpp"
@@ -50,10 +102,11 @@ LLAMACPP_URL = os.getenv("CEREBRO_LLAMACPP_URL", "http://127.0.0.1:8080")
 LLAMACPP_EMBED_URL = os.getenv("CEREBRO_LLAMACPP_EMBED_URL", "http://127.0.0.1:8082")
 LLAMACPP_MODEL = os.getenv(
     "CEREBRO_LLAMACPP_MODEL",
-    "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
+    "Qwen3.5-2B-UD-Q4_K_XL.gguf",
 )
 LLAMACPP_PROFILE = os.getenv("CEREBRO_LLAMACPP_PROFILE", "chat")
 LLAMACPP_SIMPLE = os.getenv("CEREBRO_LLAMACPP_SIMPLE", "true").lower() == "true"
+REFLECTION_MODEL_URL = os.getenv("CEREBRO_REFLECTION_MODEL_URL", "")
 
 CEREBRO_FILES_PATH = os.path.expanduser(os.getenv("CEREBRO_FILES_PATH", "~/Desktop/CerebroFiles"))
 Path(CEREBRO_FILES_PATH).mkdir(parents=True, exist_ok=True)
@@ -89,10 +142,116 @@ def _make_embed_provider():
     return build_embedding_provider(embed_url=LLAMACPP_EMBED_URL, embed_model=EMBED_MODEL)
 
 
+def _setup_llamacpp(
+    *, embed_url: str, llm_url: str
+) -> tuple[CachedEmbeddingProvider, LlamaCppChatProvider]:
+    embed_base = build_embedding_provider(embed_url=embed_url, embed_model=EMBED_MODEL)
+    embed = CachedEmbeddingProvider(
+        embed_base,
+        EmbeddingCache(
+            max_size=200,
+            persist_db_path=EMBEDDING_CACHE_DB,
+            ttl_seconds=EMBEDDING_CACHE_TTL_SECONDS,
+        ),
+    )
+    llamacpp_chat = LlamaCppChatProvider(
+        model=LLAMACPP_MODEL,
+        base_url=llm_url,
+        profile=LLAMACPP_PROFILE,
+    )
+    return embed, llamacpp_chat
+
+
+def _ensure_chat_args() -> None:
+    """Ensure config/chat.args points to LLAMACPP_MODEL with mmproj for vision.
+
+    If the file was stale (e.g. from a previous hot-swap), rewrite it and
+    restart the engine so the new args take effect.
+    """
+    args_path = Path(__file__).parent / "config" / "chat.args"
+    if not args_path.is_file():
+        return
+    content = args_path.read_text()
+    model_line = f"--model bin/models/{LLAMACPP_MODEL}"
+    new_content = re.sub(
+        r"^--model\s+.*$",
+        model_line,
+        content,
+        flags=re.MULTILINE,
+    )
+    if _VISION_MODEL_RE.search(LLAMACPP_MODEL):
+        if not re.search(r"^--mmproj\s+", new_content, re.MULTILINE):
+            new_content += "--mmproj bin/models/mmproj-F16.gguf\n"
+    else:
+        new_content = re.sub(r"^--mmproj\s+.*$\n?", "", new_content, flags=re.MULTILINE)
+    if new_content == content:
+        return
+
+    args_path.write_text(new_content)
+    logger = __import__("loguru").logger
+    logger.info("chat.args was stale — rewrote to match {}. Restarting engine.", LLAMACPP_MODEL)
+    try:
+        import time as _time
+
+        pid = subprocess.run(
+            ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if pid.returncode == 0 and pid.stdout.strip():
+            for p in pid.stdout.strip().split("\n"):
+                try:
+                    os.kill(int(p), signal.SIGTERM)
+                except OSError:
+                    pass
+            _time.sleep(2)
+        engine_script = Path(__file__).parent / "bin" / "start_engine.sh"
+        if engine_script.is_file():
+            subprocess.Popen(
+                ["bash", str(engine_script), "chat"],
+                cwd=Path(__file__).parent,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            logger.info("Engine restarted with {}. Waiting for health…", LLAMACPP_MODEL)
+            _time.sleep(1)
+    except Exception as exc:
+        logger.warning("Failed to restart engine after chat.args update: {}", exc)
+
+
 def _build_app_state() -> None:
     from loguru import logger
 
     from core.inference.fleet.orchestrator import FleetOrchestrator
+
+    _ensure_chat_args()
+
+    # ── EngineSuspender: SIGSTOP engine after inactivity ─────────────
+    from core.inference.engine_suspender import EngineSuspender
+
+    engine_suspender = EngineSuspender(timeout_s=180)
+    try:
+        _pid = subprocess.run(
+            ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if _pid.returncode == 0 and _pid.stdout.strip():
+            engine_suspender.bind_pid(int(_pid.stdout.strip()))
+            engine_suspender.start_background()
+    except Exception:
+        logger.warning("EngineSuspender: could not find engine PID — suspender disabled")
+    app_state.engine_suspender = engine_suspender
+
+    # ── AdaptiveContext: shrink ctx-size under RAM pressure ───────────
+    from core.inference.adaptive_context import AdaptiveContext
+
+    app_state.adaptive_ctx = AdaptiveContext()
+
+    # ─────────────────────────────────────────────────────────────────
 
     # Fleet orchestration for intelligent startup model selection
     fleet = FleetOrchestrator()
@@ -115,7 +274,14 @@ def _build_app_state() -> None:
         from core.inference.providers.claude_api_provider import ClaudeApiChatProvider
 
         embed_base = _make_embed_provider()
-        embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
+        embed = CachedEmbeddingProvider(
+            embed_base,
+            EmbeddingCache(
+                max_size=200,
+                persist_db_path=EMBEDDING_CACHE_DB,
+                ttl_seconds=EMBEDDING_CACHE_TTL_SECONDS,
+            ),
+        )
         claude_model = os.environ.get("CEREBRO_CLAUDE_MODEL", "claude-sonnet-4-6")
         chat_provider = ClaudeApiChatProvider(model=claude_model)
         registry.register("claude", chat_provider, embed)
@@ -126,6 +292,7 @@ def _build_app_state() -> None:
         llm_router = LLMRouter(base_url=LLAMACPP_URL, model=LLAMACPP_MODEL)
         app_state.model_manager = None
         use_simple = LLAMACPP_SIMPLE
+
         if not use_simple:
             try:
                 model_manager = ModelManager()
@@ -149,60 +316,35 @@ def _build_app_state() -> None:
         )
 
         if use_simple:
-            embed_base = _make_embed_provider()
-            embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
-            llamacpp_chat = LlamaCppChatProvider(
-                model=LLAMACPP_MODEL,
-                base_url=LLAMACPP_URL,
-                profile=LLAMACPP_PROFILE,
-            )
-            registry.register("llamacpp", llamacpp_chat, embed)
-            registry.set_primary("llamacpp")
-            if use_mlx:
-                from core.inference.providers.mlx_provider import (
-                    MlxChatProvider,
-                    MlxEmbeddingProviderStub,
-                )
-
-                registry.register(
-                    "mlx", MlxChatProvider(model_repo=MLX_MODEL), MlxEmbeddingProviderStub()
-                )
-                logger.info("Inference: llama.cpp simple → {} | MLX secondary", LLAMACPP_URL)
-            else:
-                logger.info("Inference: llama.cpp simple → {}", LLAMACPP_URL)
+            embed_url = LLAMACPP_EMBED_URL
+            llm_url = LLAMACPP_URL
         else:
             assert model_manager is not None
-            embed_base = build_embedding_provider(
-                embed_url=model_manager.embed_url,
-                embed_model=EMBED_MODEL,
-            )
-            embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
-            llamacpp_chat = LlamaCppChatProvider(
-                model=LLAMACPP_MODEL,
-                base_url=model_manager.specialist_url,
-                profile=LLAMACPP_PROFILE,
-            )
-            registry.register("llamacpp", llamacpp_chat, embed)
-            if use_mlx:
-                from core.inference.providers.mlx_provider import (
-                    MlxChatProvider,
-                    MlxEmbeddingProviderStub,
-                )
+            embed_url = model_manager.embed_url
+            llm_url = model_manager.specialist_url
+        embed, llamacpp_chat = _setup_llamacpp(embed_url=embed_url, llm_url=llm_url)
 
-                registry.register(
-                    "mlx", MlxChatProvider(model_repo=MLX_MODEL), MlxEmbeddingProviderStub()
-                )
-                logger.info(
-                    "Inference: llama.cpp model swapping (specialist {}, embeddings {}) | MLX secondary",
-                    model_manager.specialist_url,
-                    model_manager.embed_url,
-                )
-            else:
-                logger.info(
-                    "Inference: llama.cpp model swapping (specialist {}, embeddings {})",
-                    model_manager.specialist_url,
-                    model_manager.embed_url,
-                )
+        registry.register("llamacpp", llamacpp_chat, embed)
+        registry.set_primary("llamacpp")
+
+        if use_mlx:
+            from core.inference.providers.mlx_provider import (
+                MlxChatProvider,
+                MlxEmbeddingProviderStub,
+            )
+
+            registry.register(
+                "mlx", MlxChatProvider(model_repo=MLX_MODEL), MlxEmbeddingProviderStub()
+            )
+            logger.info(
+                "Inference: llama.cpp {} | MLX secondary",
+                "model-swap" if not use_simple else f"simple → {LLAMACPP_URL}",
+            )
+        else:
+            logger.info(
+                "Inference: llama.cpp {}",
+                "model-swap" if not use_simple else f"simple → {LLAMACPP_URL}",
+            )
     else:
         # MLX-only mode (CEREBRO_INFERENCE_BACKEND=mlx)
         if not use_mlx:
@@ -211,12 +353,45 @@ def _build_app_state() -> None:
                 "Set CEREBRO_INFERENCE_BACKEND=llamacpp, CEREBRO_INFERENCE_BACKEND=claude "
                 "(with ANTHROPIC_API_KEY), or ensure MLX is available on Apple Silicon."
             )
+
+        # Kill any stale llama.cpp engine to free ~2.5 GB RAM
+        try:
+            _pid = subprocess.run(
+                ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if _pid.returncode == 0 and _pid.stdout.strip():
+                for p in _pid.stdout.strip().split("\n"):
+                    try:
+                        os.kill(int(p), signal.SIGTERM)
+                        logger.info("Killed stale llama.cpp on :8080 to free RAM for MLX")
+                    except OSError:
+                        pass
+                import time as _time
+
+                _time.sleep(2)
+        except Exception:
+            pass
+
         from core.inference.providers.mlx_provider import MlxChatProvider, MlxEmbeddingProviderStub
 
         embed_base = _make_embed_provider()
-        embed = CachedEmbeddingProvider(embed_base, EmbeddingCache(max_size=200))
+        embed = CachedEmbeddingProvider(
+            embed_base,
+            EmbeddingCache(
+                max_size=200,
+                persist_db_path=EMBEDDING_CACHE_DB,
+                ttl_seconds=EMBEDDING_CACHE_TTL_SECONDS,
+            ),
+        )
         registry.register("mlx", MlxChatProvider(model_repo=MLX_MODEL), MlxEmbeddingProviderStub())
         logger.info("Inference: MLX only")
+
+    if "claude" in registry.available_providers() and registry.primary_name != "claude":
+        registry.register_emergency("claude")
+        logger.info("Emergency fallback provider: claude")
 
     embed_backend = default_embeddings_backend()
     logger.info(
@@ -230,7 +405,101 @@ def _build_app_state() -> None:
 
     short_term = ShortTermStore()
     long_term = LongTermStore(vector_store=vector_store, agent_id=GENERAL_AGENT_ID, embed=embed)
-    context_builder = ContextBuilder(short_term=short_term, long_term=long_term)
+
+    llm_engine = InferenceEngine(
+        model=LLAMACPP_MODEL,
+        base_url=LLAMACPP_URL,
+    )
+
+    # ── Semantic Compressor ────────────────────────────────────────────
+    compressor_embed_fn = None
+    if os.getenv("CEREBRO_LLAMACPP_EMBED_URL"):
+        try:
+            resp = httpx.get(f"{LLAMACPP_EMBED_URL.rstrip('/')}/health", timeout=2.0)
+            if resp.status_code == 200:
+
+                async def _embed_for_compressor(texts: list[str]) -> np.ndarray:
+                    results = []
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as _client:
+                        for text in texts:
+                            r = await _client.post(
+                                f"{LLAMACPP_EMBED_URL.rstrip('/')}/v1/embeddings",
+                                json={"model": EMBED_MODEL, "input": text},
+                            )
+                            r.raise_for_status()
+                            results.append(r.json()["data"][0]["embedding"])
+                    return np.array(results, dtype=np.float32)
+
+                compressor_embed_fn = _embed_for_compressor
+                logger.info(
+                    "SemanticCompressor inicializado usando Path A (Neural) → {}",
+                    LLAMACPP_EMBED_URL,
+                )
+            else:
+                logger.warning(
+                    "Embed server at {} responded {}, falling back to Path B (TF-IDF)",
+                    LLAMACPP_EMBED_URL,
+                    resp.status_code,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Embed server at {} unreachable ({}), falling back to Path B (TF-IDF)",
+                LLAMACPP_EMBED_URL,
+                exc,
+            )
+    else:
+        logger.info("SemanticCompressor inicializado usando Path B (TF-IDF)")
+
+    compressor = SemanticCompressor(embed_fn=compressor_embed_fn)
+
+    context_builder = ContextBuilder(
+        short_term=short_term,
+        long_term=long_term,
+        vector_store=vector_store,
+        inference_engine=llm_engine,
+        embed_provider=embed,
+        compressor=compressor,
+    )
+
+    rag_embed_fn = embed.embed if hasattr(embed, "embed") else None
+    rag_engine = RAGQueryEngine(
+        store=vector_store,
+        engine=llm_engine,
+        compressor=compressor,
+        embed_fn=rag_embed_fn,
+    )
+    app_state.rag_engine = rag_engine
+
+    # ── Knowledge Sync Orchestrator ────────────────────────────────────
+    app_state.knowledge_sync_orchestrator = KnowledgeSyncOrchestrator(
+        registry=registry,
+        vector_store=vector_store,
+        inference_engine=llm_engine,
+        embed_provider=embed,
+        state_dir=STATE_DIR,
+        interest_tags=(
+            os.getenv("CEREBRO_INTEREST_TAGS", "").split(",")
+            if os.getenv("CEREBRO_INTEREST_TAGS")
+            else None
+        ),
+    )
+
+    app.include_router(ks_router)
+
+    for src_cfg in app_state._config.get("knowledge_sync", {}).get("sources", []):
+        app_state.knowledge_sync_orchestrator.add_source(SyncSourceConfig(**src_cfg))
+    # ───────────────────────────────────────────────────────────────────
+
+    # ── Desktop Automation (Recorder + Workflow Store) ────────────────
+    from core.automation.recorder import Recorder
+    from core.automation.workflow_store import WorkflowStore
+
+    automation_db = os.path.join(DB_PATH, "automation.sqlite")
+    recorder = Recorder()
+    workflow_store = WorkflowStore(db_path=automation_db)
+    app_state.recorder = recorder
+    app_state.workflow_store = workflow_store
+    # ────────────────────────────────────────────────────────────────────
 
     cal_registry = ToolRegistry()
     register_calendar_tools(cal_registry)
@@ -240,7 +509,14 @@ def _build_app_state() -> None:
         authorized_write_paths=AUTHORIZED_WRITE_PATHS,
     )
     register_macos_tools(cal_registry)
+    register_automation_tools(
+        cal_registry,
+        recorder=recorder,
+        workflow_store=workflow_store,
+        chat_provider_getter=lambda: registry.get_chat() if registry else None,
+    )
     register_math_tools(cal_registry)
+    register_web_tools(cal_registry)
 
     if INFERENCE_BACKEND == "llamacpp":
         from core.agents.runtime import _SYSTEM_TEMPLATE
@@ -254,6 +530,7 @@ def _build_app_state() -> None:
             current_year="<dynamic>",
             session_summary="<dynamic>",
             memory_context="<dynamic>",
+            document_context="",
             ambient_context="",
             available_tools_detail="<tools>",
         )
@@ -273,6 +550,21 @@ def _build_app_state() -> None:
         macos_permissions=app_state.macos_permissions,
     )
 
+    time_travel_db = os.path.join(DB_PATH, "time_travel.sqlite")
+    time_travel = TimeTravelRecorder(db_path=time_travel_db, ttl_days=7, max_runs=500)
+    app_state.time_travel_recorder = time_travel
+
+    # ── Reflection-Turn (optional small model for answer critique) ─────────
+    _reflector_provider = None
+    if REFLECTION_MODEL_URL:
+        _reflector_provider = LlamaCppChatProvider(
+            model="reflection",
+            base_url=REFLECTION_MODEL_URL,
+            profile="chat",
+        )
+    reflector = Reflector(provider=_reflector_provider, enabled=True)
+    # ────────────────────────────────────────────────────────────────────────
+
     runtime = AgentRuntime(
         registry=registry,
         state_store=state_store,
@@ -281,6 +573,12 @@ def _build_app_state() -> None:
         tool_definitions=cal_registry.definitions(),
         enricher=enricher,
         conversation_store=app_state.conv_store,
+        config_getter=lambda: app_state._config,
+        time_travel_recorder=time_travel,
+        reflector=reflector,
+        engine_suspender=engine_suspender,
+        authorized_read_paths_getter=lambda: app_state.authorized_read_paths,
+        adaptive_ctx=app_state.adaptive_ctx,
     )
 
     # A7: Task planner for multi-step decomposition
@@ -296,6 +594,7 @@ def _build_app_state() -> None:
     app_state.enricher = enricher
     app_state.planner = planner
     app_state.embedding_provider = embed
+    app_state.inference_engine = llm_engine
 
     if INFERENCE_BACKEND == "llamacpp":
         from core.inference.health_monitor import LlamaServerHealthMonitor

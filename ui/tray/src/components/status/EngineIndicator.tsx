@@ -3,6 +3,7 @@ interface EngineIndicatorProps {
   provider?: string;
   llamaServer?: "up" | "restarting" | "down" | null;
   servicesOff?: boolean;
+  engineState?: "active" | "suspended" | "unknown";
 }
 
 export default function EngineIndicator({
@@ -10,12 +11,13 @@ export default function EngineIndicator({
   provider,
   llamaServer,
   servicesOff,
+  engineState,
 }: EngineIndicatorProps) {
   if (servicesOff) {
     return (
       <div className="flex items-center gap-1">
-        <div className="w-[6px] h-[6px] rounded-full bg-[#8b8fa8]" />
-        <span className="text-[#8b8fa8]">Turned off</span>
+        <div className="w-[6px] h-[6px] rounded-full bg-outline" />
+        <span className="text-outline">Turned off</span>
       </div>
     );
   }
@@ -30,11 +32,20 @@ export default function EngineIndicator({
 
   const label = provider === "mlx" ? "MLX" : "llama.cpp";
 
+  if (engineState === "suspended") {
+    return (
+      <div className="flex items-center gap-1">
+        <div className="w-[6px] h-[6px] rounded-full bg-[#60a5fa] opacity-60" />
+        <span className="text-[#60a5fa] opacity-60">{label} suspended</span>
+      </div>
+    );
+  }
+
   if (llamaServer === "restarting") {
     return (
       <div className="flex items-center gap-1">
-        <div className="w-[6px] h-[6px] rounded-full bg-[#fbbf24] animate-pulse" />
-        <span className="text-[#fbbf24]">{label} restarting</span>
+        <div className="w-[6px] h-[6px] rounded-full bg-tertiary-fixed-dim animate-pulse" />
+        <span className="text-tertiary-fixed-dim">{label} restarting</span>
       </div>
     );
   }
@@ -44,10 +55,10 @@ export default function EngineIndicator({
     <div className="flex items-center gap-1">
       <div
         className={`w-[6px] h-[6px] rounded-full ${
-          isUp ? "bg-[#4ade80]" : "bg-[#ffb4ab]"
+          isUp ? "bg-success-green" : "bg-error"
         }`}
       />
-      <span className={isUp ? "text-[#4ade80]" : "text-[#ffb4ab]"}>
+      <span className={isUp ? "text-success-green" : "text-error"}>
         {isUp ? `${label} OK` : `${label} down`}
       </span>
     </div>

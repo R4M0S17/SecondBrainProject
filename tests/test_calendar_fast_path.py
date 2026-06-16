@@ -219,6 +219,79 @@ def test_calendar_fast_path_events_on_day(tmp_path):
     assert "solo viernes" not in result
 
 
+def test_calendar_fast_path_events_tomorrow_without_article(tmp_path):
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    tomorrow = now + timedelta(days=1)
+    day_after = now + timedelta(days=2)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("solo manana", tomorrow.replace(hour=11, minute=0)),
+                _vevent("pasado manana", day_after.replace(hour=11, minute=0)),
+            ]
+        )
+    )
+    result = try_calendar_fast_path(
+        "que tengo para mañana?",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "solo manana" in result
+    assert "pasado manana" not in result
+
+
+def test_calendar_fast_path_events_next_monday_phrase(tmp_path):
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC)
+    days_until_mon = (0 - now.weekday()) % 7 or 7
+    monday = (now + timedelta(days=days_until_mon)).replace(
+        hour=9, minute=0, second=0, microsecond=0
+    )
+    tuesday = monday + timedelta(days=1)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("solo lunes", monday),
+                _vevent("solo martes", tuesday),
+            ]
+        )
+    )
+    result = try_calendar_fast_path(
+        "que tengo el próximo lunes?",
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "solo lunes" in result
+    assert "solo martes" not in result
+
+
+def test_calendar_fast_path_specific_date_beyond_30_days(tmp_path):
+    ics = tmp_path / "cal.ics"
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    target = now + timedelta(days=65)
+    other = target + timedelta(days=1)
+    ics.write_bytes(
+        _make_ics(
+            [
+                _vevent("evento objetivo", target.replace(hour=15, minute=0)),
+                _vevent("evento otro dia", other.replace(hour=10, minute=0)),
+            ]
+        )
+    )
+    query = f"que tengo el {target.strftime('%Y-%m-%d')} en el calendario?"
+    result = try_calendar_fast_path(
+        query,
+        GENERAL_TOOLS,
+        ics_path=str(ics),
+    )
+    assert result is not None
+    assert "evento objetivo" in result
+    assert "evento otro dia" not in result
+
+
 def test_calendar_fast_path_count_events(tmp_path):
     ics = tmp_path / "cal.ics"
     now = datetime.now(UTC)

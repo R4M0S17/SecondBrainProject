@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Literal, TypedDict
 
 import psutil
 
 RamPressure = Literal["ok", "warn", "critical"]
+
+_ram_pressure: ContextVar[RamPressure] = ContextVar("_ram_pressure", default="ok")
+
+
+def set_ram_pressure(p: RamPressure) -> None:
+    _ram_pressure.set(p)
+
+
+def current_ram_pressure() -> RamPressure:
+    return _ram_pressure.get()
+
+
+def refresh_ram_pressure() -> RamPressure:
+    snap = RamMonitor().snapshot()
+    _ram_pressure.set(snap["pressure"])
+    return snap["pressure"]
 
 
 class RamSnapshot(TypedDict):

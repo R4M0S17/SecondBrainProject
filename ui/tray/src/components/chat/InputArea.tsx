@@ -1,11 +1,13 @@
 import { useRef, useState, KeyboardEvent, ChangeEvent } from "react";
 import { useChatStore } from "../../stores/chat";
+import { useSettingsStore } from "../../stores/settings";
 import { useServicesStore } from "../../stores/services";
 import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
 import { ApiError } from "../../api/errors";
-import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles } from "../../api/client";
-import CommandAutocomplete from "./CommandAutocomplete";
+import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles, startIndex, getConfig } from "../../api/client";
+import CommandAutocomplete, { COMMANDS } from "./CommandAutocomplete";
 import type { FileAttachment } from "../../api/types";
+import { AGENTS } from "../../api/types";
 
 interface UploadedFile {
   file: File;
@@ -60,6 +62,9 @@ function isImageLikeFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
+const MAX_IMAGE_DIM = 1024;
+const JPEG_QUALITY = 0.85;
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -69,6 +74,35 @@ function readFileAsDataUrl(file: File): Promise<string> {
     };
     reader.onerror = () => reject(reader.error ?? new Error(`Failed to read ${file.name}`));
     reader.readAsDataURL(file);
+  });
+}
+
+function resizeImage(
+  dataUrl: string,
+  maxDim: number = MAX_IMAGE_DIM,
+  quality: number = JPEG_QUALITY,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      const scale = maxDim / Math.max(width, height);
+      if (scale >= 1) {
+        resolve(dataUrl.split(",", 2)[1] ?? "");
+        return;
+      }
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(dataUrl.split(",", 2)[1] ?? ""); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality).split(",", 2)[1] ?? "");
+    };
+    img.onerror = () => reject(new Error("Failed to decode image"));
+    img.src = dataUrl;
   });
 }
 
@@ -83,10 +117,13 @@ async function buildLocalAttachment(file: File): Promise<FileAttachment | null> 
   }
 
   if (isImageLikeFile(file)) {
+    const raw = await readFileAsDataUrl(file);
+    const dataUrl = `data:${file.type};base64,${raw}`;
+    const resized = await resizeImage(dataUrl);
     return {
       filename: file.name,
-      mime_type: file.type,
-      content: await readFileAsDataUrl(file),
+      mime_type: "image/jpeg",
+      content: resized,
       type: "image",
     };
   }
@@ -97,6 +134,7 @@ async function buildLocalAttachment(file: File): Promise<FileAttachment | null> 
 export default function InputArea() {
   const [text, setText] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [selectedCmdIndex, setSelectedCmdIndex] = useState(-1);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +151,9 @@ export default function InputArea() {
     activeAgent,
     conversationId,
     setConversationId,
+    setSearchingWeb,
+    setSearchingSources,
+    clearMessages,
   } = useChatStore();
   const { refresh, setSwapEvent, status } = useSystemStore();
   const servicesOff = useServicesStore((s) => s.servicesOff);
@@ -123,22 +164,62 @@ export default function InputArea() {
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setText(val);
-    setShowAutocomplete(val.startsWith("/"));
-    // Auto-grow textarea (max 4 lines)
+    const show = val.startsWith("/");
+    setShowAutocomplete(show);
+    if (show) {
+      const matches = COMMANDS.filter((c) => c.name.startsWith(val.toLowerCase()));
+      setSelectedCmdIndex(matches.length > 0 ? 0 : -1);
+    } else {
+      setSelectedCmdIndex(-1);
+    }
     const ta = textareaRef.current;
     if (ta) {
-      ta.style.height = "44px";
-      ta.style.height = `${Math.min(ta.scrollHeight, 88)}px`;
+      const lineHeight = 20;
+      const padding = 12;
+      const minHeight = lineHeight + padding;
+      if (!val) {
+        ta.style.height = `${minHeight}px`;
+      } else {
+        ta.style.height = `${minHeight}px`;
+        ta.style.height = `${Math.min(ta.scrollHeight, 4 * lineHeight + padding)}px`;
+      }
     }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    const matches = showAutocomplete
+      ? COMMANDS.filter((c) => c.name.startsWith(text.toLowerCase()))
+      : [];
+
+    if (showAutocomplete && matches.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedCmdIndex((prev) => (prev < matches.length - 1 ? prev + 1 : 0));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedCmdIndex((prev) => (prev > 0 ? prev - 1 : matches.length - 1));
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const idx = selectedCmdIndex >= 0 ? selectedCmdIndex : 0;
+        handleCommandSelect(matches[idx].name);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
+      return;
     }
     if (e.key === "Escape") {
-      if (isLoading) {
+      if (showAutocomplete) {
+        setShowAutocomplete(false);
+        setSelectedCmdIndex(-1);
+      } else if (isLoading) {
         cancelRequest();
       } else {
         textareaRef.current?.blur();
@@ -162,11 +243,16 @@ export default function InputArea() {
       return;
     }
 
+    const matchedCmd = COMMANDS.find((c) => c.name === query);
+    if (matchedCmd) {
+      handleCommand(matchedCmd);
+      return;
+    }
+
     setText("");
     setShowAutocomplete(false);
     if (textareaRef.current) textareaRef.current.style.height = "44px";
 
-    // Build message content with file info
     let messageContent = query;
     if (uploadedFiles.length > 0) {
       const fileNames = uploadedFiles.map((uf) => uf.file.name).join(", ");
@@ -208,8 +294,6 @@ export default function InputArea() {
       }
 
       if (activeAgent === "calendar") {
-        // Calendar agent uses tool execution which requires the non-streaming path.
-        // Fake streaming UX by replaying the answer character-by-character.
         const response = await queryAgent(
           {
             question: query,
@@ -225,6 +309,9 @@ export default function InputArea() {
           hasPendingConfirm = true;
           const convId = response.conversation_id;
           const toolName = response.metadata.pending_tool.name;
+          if (toolName === "web_search" || toolName === "web_fetch") {
+            setSearchingWeb(true);
+          }
           const toolPath =
             typeof response.metadata.pending_tool.args?.path === "string"
               ? (response.metadata.pending_tool.args.path as string)
@@ -263,7 +350,6 @@ export default function InputArea() {
           updateMessage(assistantId, { metadata: response.metadata });
         }
       } else {
-        let conversationId: string | undefined;
         let streamConversationId: string | undefined;
         const metadata = await queryAgentStream(
           {
@@ -272,7 +358,15 @@ export default function InputArea() {
             conversation_id: conversationId ?? undefined,
             attachments: attachments.length > 0 ? attachments : undefined,
           },
-          (token) => appendToken(assistantId, token),
+          (token) => {
+            if (useChatStore.getState().searchingSources) {
+              useChatStore.getState().setSearchingSources(null);
+            }
+            if (useChatStore.getState().searchingWeb) {
+              useChatStore.getState().setSearchingWeb(false);
+            }
+            appendToken(assistantId, token);
+          },
           ctrl.signal,
           (id) => {
             streamConversationId = id;
@@ -284,6 +378,9 @@ export default function InputArea() {
             } else {
               setTimeout(() => setSwapEvent(null), 1500);
             }
+          },
+          (event) => {
+            setSearchingSources({ count: event.episode_count, sources: event.sources });
           },
         );
 
@@ -346,9 +443,154 @@ export default function InputArea() {
     }
   };
 
+  const handleCommand = async (cmd: { name: string; description: string }) => {
+    addMessage({ role: "user", content: cmd.name });
+    setText("");
+    setShowAutocomplete(false);
+    setSelectedCmdIndex(-1);
+    if (textareaRef.current) textareaRef.current.style.height = "44px";
+
+    switch (cmd.name) {
+      case "/help": {
+        const cmdList = COMMANDS.map(
+          (c) => `\`${c.name}\` — ${c.description}`,
+        ).join("\n");
+        addMessage({
+          role: "assistant",
+          content: `Available commands:\n\n${cmdList}`,
+        });
+        break;
+      }
+      case "/clear": {
+        clearMessages();
+        addMessage({ role: "assistant", content: "Conversation cleared." });
+        break;
+      }
+      case "/model": {
+        const model = useSettingsStore.getState().activeModel || "local";
+        addMessage({
+          role: "assistant",
+          content: `Currently running model: **${model}**`,
+        });
+        break;
+      }
+      case "/status": {
+        const s = useSystemStore.getState().status;
+        if (!s) {
+          addMessage({ role: "assistant", content: "System status not available." });
+        } else {
+          addMessage({
+            role: "assistant",
+            content: [
+              `**Engine**: ${s.engine_ok ? "✅ Active" : "❌ Offline"}`,
+              `**Model**: ${s.model}`,
+              `**Provider**: ${s.provider}`,
+              `**Latency**: ${s.p95_latency_ms}ms (p95)`,
+              `**RAM**: ${s.ram_used_gb.toFixed(1)}/${s.ram_total_gb.toFixed(1)} GB (${s.ram_pressure})`,
+              `**CPU**: ${s.cpu_percent}%`,
+              `**Indexed files**: ${s.indexed_files}`,
+              `**Queries**: ${s.queries_total}`,
+              `**Memory hits**: ${s.memory_hits}`,
+              `**Tool calls**: ${s.tool_call_count}`,
+            ].join("\n"),
+          });
+        }
+        break;
+      }
+      case "/agents": {
+        const agentList = AGENTS.map((a) => `\`${a.id}\` — ${a.label}`).join("\n");
+        addMessage({
+          role: "assistant",
+          content: `Available agents:\n\n${agentList}`,
+        });
+        break;
+      }
+      case "/index": {
+        const indexMsg = addMessage({
+          role: "assistant",
+          content: "Starting re-index of watched folders...",
+        });
+        try {
+          const result = await startIndex([]);
+          updateMessage(indexMsg, {
+            content: `Indexing started with job ID: \`${result.job_id}\``,
+          });
+        } catch (e: unknown) {
+          updateMessage(indexMsg, {
+            content: `Index failed: ${(e as Error).message}`,
+          });
+        }
+        break;
+      }
+      case "/memory": {
+        const s = useSystemStore.getState().status;
+        addMessage({
+          role: "assistant",
+          content: s
+            ? `Memory recall hits: **${s.memory_hits}**\nIndexed files: **${s.indexed_files}**`
+            : "System status not available.",
+        });
+        break;
+      }
+      case "/export": {
+        const { messages } = useChatStore.getState();
+        const blob = new Blob(
+          [
+            JSON.stringify(
+              {
+                exported_at: new Date().toISOString(),
+                model: useSettingsStore.getState().activeModel,
+                messages: messages.map((m) => ({
+                  role: m.role,
+                  content: m.content,
+                  timestamp: m.timestamp,
+                })),
+              },
+              null,
+              2,
+            ),
+          ],
+          { type: "application/json" },
+        );
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `cerebro-export-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        addMessage({ role: "assistant", content: "Conversation exported." });
+        break;
+      }
+      case "/refresh": {
+        void refresh();
+        addMessage({ role: "assistant", content: "System status refreshed." });
+        break;
+      }
+      case "/settings": {
+        try {
+          const config = await getConfig();
+          const lines = Object.entries(config).map(
+            ([k, v]) => `\`${k}\`: ${typeof v === "string" ? v : JSON.stringify(v)}`,
+          );
+          addMessage({
+            role: "assistant",
+            content: `Current configuration:\n\n${lines.join("\n")}`,
+          });
+        } catch {
+          addMessage({
+            role: "assistant",
+            content: "Could not fetch configuration.",
+          });
+        }
+        break;
+      }
+    }
+  };
+
   const handleCommandSelect = (cmd: string) => {
     setText(cmd + " ");
     setShowAutocomplete(false);
+    setSelectedCmdIndex(-1);
     textareaRef.current?.focus();
   };
 
@@ -367,29 +609,17 @@ export default function InputArea() {
     ];
 
     const validFiles = files.filter((file) => supportedTypes.includes(file.type));
-    
+
     const newFiles = validFiles.map((file) => ({
       file,
       preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
     }));
 
     setUploadedFiles((prev) => [...prev, ...newFiles]);
-    
-    // Reset file input
+
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  };
-
-  const removeFile = (index: number) => {
-    setUploadedFiles((prev) => {
-      const updated = [...prev];
-      if (updated[index].preview) {
-        URL.revokeObjectURL(updated[index].preview);
-      }
-      updated.splice(index, 1);
-      return updated;
-    });
   };
 
   const clearAllFiles = () => {
@@ -399,60 +629,26 @@ export default function InputArea() {
     setUploadedFiles([]);
   };
 
-  return (
-    <div className="bg-[#1c1b23] border-t border-[#242736] p-3 shrink-0">
-      {/* File preview area */}
-      {uploadedFiles.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {uploadedFiles.map((uf, idx) => (
-            <div
-              key={idx}
-              className="relative bg-[#242736] border border-[#344152] rounded p-2 flex items-center gap-2 text-xs text-[#e5e0ed]"
-            >
-              {uf.preview ? (
-                <img src={uf.preview} alt={uf.file.name} className="w-12 h-12 rounded object-cover" />
-              ) : (
-                <div className="w-12 h-12 bg-[#1c1b23] rounded flex items-center justify-center text-[#8b8fa8]">
-                  📄
-                </div>
-              )}
-              <div className="flex flex-col flex-1 min-w-0">
-                <span className="truncate font-medium">{uf.file.name}</span>
-                <span className="text-[#8b8fa8]">{(uf.file.size / 1024).toFixed(1)} KB</span>
-              </div>
-              <button
-                onClick={() => removeFile(idx)}
-                className="ml-1 text-[#8b8fa8] hover:text-[#e5e0ed] transition-colors"
-                aria-label="Remove file"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+  const engineOk = status?.engine_ok ?? false;
+  const latency = status?.p95_latency_ms ?? 0;
 
-      <div className="relative flex items-end gap-2 bg-[#201f27] border border-[#242736] rounded p-1 focus-within:border-[#94a3b8] transition-colors">
+  return (
+    <div className="relative w-full shrink-0">
+      <div className="input-glow flex items-center bg-surface-container-low border border-outline-variant/50 rounded-xl p-2 transition-all duration-300">
         {/* Command autocomplete */}
         {showAutocomplete && (
-          <CommandAutocomplete query={text} onSelect={handleCommandSelect} />
+          <CommandAutocomplete query={text} selectedIndex={selectedCmdIndex} onSelect={handleCommandSelect} />
         )}
 
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            servicesOff
-              ? "Engine is off — use Turn on to chat again"
-              : "Ask anything…"
-          }
-          rows={1}
-          className="flex-1 bg-transparent border-none outline-none resize-none text-[14px] leading-[20px] text-[#e5e0ed] placeholder:text-[#8b8fa8] custom-scrollbar py-2 px-2 h-[44px]"
-          aria-label="Chat input"
-          disabled={inputDisabled}
-        />
+        {/* Add / file upload button */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="p-2 text-on-surface-variant hover:text-primary-container transition-colors"
+          aria-label="Add files"
+          title="Upload files (images, PDFs, documents)"
+        >
+          <span className="material-symbols-outlined text-[20px]">add</span>
+        </button>
 
         {/* Hidden file input */}
         <input
@@ -465,48 +661,53 @@ export default function InputArea() {
           aria-label="File upload"
         />
 
-        {/* File upload button */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          aria-label="Chat input"
+          className="flex-1 bg-transparent border-none outline-none resize-none text-on-surface text-sm focus:ring-0 focus:outline-none placeholder:text-outline/50 px-2 custom-scrollbar"
+          placeholder={
+            servicesOff
+              ? "Engine is off — use Turn on to chat again"
+              : "Ask Cerebro or issue a command..."
+          }
+          value={text}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
           disabled={inputDisabled}
-          className="w-[44px] h-[44px] bg-[#242736] text-[#8b8fa8] rounded flex items-center justify-center transition-colors hover:bg-[#344152] hover:text-[#e5e0ed] active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
-          aria-label="Upload files"
-          title="Upload files (images, PDFs, documents)"
-        >
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-          </svg>
-        </button>
+        />
 
-        {isLoading ? (
-          <button
-            onClick={cancelRequest}
-            className="w-[44px] h-[44px] bg-[#444652] text-[#e5e0ed] rounded flex items-center justify-center transition-colors hover:bg-[#5a5768] active:opacity-80"
-            aria-label="Cancel request"
-            title="Cancel (Esc)"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="1" />
-            </svg>
+        <div className="flex items-center gap-2 pr-2 text-on-surface-variant">
+          {/* Mic button */}
+          <button className="p-2 hover:text-primary transition-colors" aria-label="Voice input" title="Voice input">
+            <span className="material-symbols-outlined text-[20px]">mic</span>
           </button>
-        ) : (
-          <button
-            onClick={() => void send()}
-            disabled={!text.trim() || servicesOff}
-            className={`w-[44px] h-[44px] rounded flex items-center justify-center transition-colors active:opacity-80 ${
-              text.trim()
-                ? "bg-[#94a3b8] hover:bg-[#6b7a90] text-[#0f1117]"
-                : "bg-[#242736] text-[#8b8fa8] cursor-not-allowed"
-            }`}
-            aria-label="Send message"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
-        )}
+
+          {isLoading ? (
+            <button
+              onClick={cancelRequest}
+              className="p-1.5 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors"
+              aria-label="Cancel request"
+              title="Cancel (Esc)"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => void send()}
+              disabled={!text.trim() || isLoading || servicesOff}
+              className="p-1.5 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors disabled:opacity-30"
+              aria-label="Send message"
+            >
+              <span className="material-symbols-outlined text-[18px]">send</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Status footer */}
+      <div className="text-center mt-3 text-xs text-outline/50 font-label-mono">
+        Engine Status: {engineOk ? "Active" : "Offline"} • Latency {latency}ms
       </div>
     </div>
   );

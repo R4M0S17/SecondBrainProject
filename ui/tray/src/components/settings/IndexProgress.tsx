@@ -36,14 +36,14 @@ export default function IndexProgress() {
 
   return (
     <div className="space-y-1">
-      <div className="flex justify-between text-[11px] text-[#8b8fa8]">
+      <div className="flex justify-between text-[11px] text-outline">
         <span>Indexing…</span>
         {status.files_indexed > 0 && (
           <span>{status.files_indexed} files</span>
         )}
       </div>
-      <div className="h-[2px] bg-[#242736] rounded-full overflow-hidden">
-        <div className="h-full bg-[#94a3b8] animate-pulse w-full" />
+      <div className="h-[2px] bg-surface-container rounded-full overflow-hidden">
+        <div className="h-full bg-primary-container animate-pulse w-full" />
       </div>
     </div>
   );

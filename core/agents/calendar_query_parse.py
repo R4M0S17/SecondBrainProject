@@ -7,47 +7,93 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 
-_WEEKDAY_FRAGMENT = (
+_WEEKDAY_BASE_FRAGMENT = (
     r"lunes|martes|mi[eé]rcoles|miercoles|jueves|viernes|s[aá]bado|sabado|domingo|"
     r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
 )
+_QUALIFIED_WEEKDAY_FRAGMENT = (
+    r"(?:este|esta|pr[oó]ximo|proximo|next|this)\s+" rf"(?:{_WEEKDAY_BASE_FRAGMENT})"
+)
+_WEEKDAY_FRAGMENT = rf"(?:{_QUALIFIED_WEEKDAY_FRAGMENT}|{_WEEKDAY_BASE_FRAGMENT})"
 _REL_DAY_FRAGMENT = r"ma[nñ]ana|manana|tomorrow|hoy|today|pasado\s+ma[nñ]ana|day\s+after\s+tomorrow"
+_DATE_TEXT_FRAGMENT = (
+    r"\d{1,2}\s+de\s+"
+    r"(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|"
+    r"octubre|noviembre|diciembre)"
+    r"(?:\s+de\s+\d{4})?"
+    r"|"
+    r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?"
+    r"|"
+    r"\d{1,2}\s+"
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+    r"(?:\s+\d{4})?"
+    r"|"
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+"
+    r"\d{1,2}(?:,\s*\d{4})?"
+)
+_ANCHOR_FRAGMENT = (
+    rf"(?:{_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|\d{{4}}-\d{{2}}-\d{{2}}|{_DATE_TEXT_FRAGMENT})"
+)
+_CALENDAR_CONTEXT_RE = re.compile(
+    r"\b(?:calendario|agenda|eventos?|reuniones?|citas?|tengo|hay|calendar|schedule|meetings?)\b",
+    re.IGNORECASE,
+)
+_LOOSE_ON_RE = re.compile(
+    r"\b(?:para(?:\s+el|\s+la)?|el|la|on)\s+(?P<fragment>.+?)\s*$",
+    re.IGNORECASE,
+)
+_TRAILING_CALENDAR_CONTEXT_RE = re.compile(
+    r"\b(?:en\s+(?:mi\s+)?(?:calendario|agenda)|in\s+(?:my\s+)?(?:calendar|schedule))\b.*$",
+    re.IGNORECASE,
+)
+_SPANISH_WEEKDAY_TO_EN: dict[str, str] = {
+    "lunes": "monday",
+    "martes": "tuesday",
+    "miercoles": "wednesday",
+    "miércoles": "wednesday",
+    "jueves": "thursday",
+    "viernes": "friday",
+    "sabado": "saturday",
+    "sábado": "saturday",
+    "domingo": "sunday",
+}
 
 _AFTER_RE = re.compile(
     rf"\b(?:despu[eé]s|despues|tras|after|following)\s+"
     rf"(?:de(?:l|l\s+la)?\s+)?"
-    rf"({_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|\d{{4}}-\d{{2}}-\d{{2}}|.+?)"
+    rf"({_ANCHOR_FRAGMENT}|.+?)"
     rf"(?:\s+a\s+las\s+[\d:hapm\.]+)?",
     re.IGNORECASE,
 )
 
 _BEFORE_RE = re.compile(
-    rf"\b(?:antes|before|until|hasta)\s+"
-    rf"(?:de(?:l|l\s+la)?\s+)?"
-    rf"({_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|\d{{4}}-\d{{2}}-\d{{2}})",
+    rf"\b(?:antes|before|until|hasta)\s+" rf"(?:de(?:l|l\s+la)?\s+)?" rf"({_ANCHOR_FRAGMENT})",
     re.IGNORECASE,
 )
 
 _ON_RE = re.compile(
     rf"\b(?:"
-    rf"(?:qu[eé]|que)\s+tengo\s+(?:el|para\s+el|para\s+la)\s+|"
-    rf"(?:qu[eé]|que)\s+hay\s+(?:el|para\s+el)\s+|"
-    rf"eventos?\s+(?:del|de\s+el|para\s+el|el)\s+|"
-    rf"reuniones?\s+(?:del|de\s+el|para\s+el|el)\s+|"
-    rf"citas?\s+(?:del|de\s+el|para\s+el|el)\s+|"
-    rf"agenda\s+(?:del|de|para\s+el)\s+|"
-    rf"calendario\s+(?:del|de|para\s+el)\s+|"
-    rf"para\s+el\s+|"
+    rf"(?:qu[eé]|que)\s+tengo\s+(?:el|la|para(?:\s+el|\s+la)?)\s+|"
+    rf"(?:qu[eé]|que)\s+hay\s+(?:el|para(?:\s+el|\s+la)?)\s+|"
+    rf"(?:tengo|hay)\s+(?:reuniones?|eventos?|citas?)\s+|"
+    rf"eventos?\s+(?:del|de\s+el|para(?:\s+el|\s+la)?|el)\s+|"
+    rf"reuniones?\s+(?:del|de\s+el|para(?:\s+el|\s+la)?|el)\s+|"
+    rf"citas?\s+(?:del|de\s+el|para(?:\s+el|\s+la)?|el)\s+|"
+    rf"agenda\s+(?:del|de|para(?:\s+el|\s+la)?)\s+|"
+    rf"calendario\s+(?:del|de|para(?:\s+el|\s+la)?)\s+|"
+    rf"para(?:\s+el|\s+la)?\s+|"
     rf"on\s+"
     rf")"
-    rf"({_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|\d{{4}}-\d{{2}}-\d{{2}})",
+    rf"({_ANCHOR_FRAGMENT})",
     re.IGNORECASE,
 )
 
 # "eventos del jueves", "reuniones del viernes"
 _ON_SHORT_RE = re.compile(
     rf"\b(?:eventos?|reuniones?|citas?|agenda|calendario)\s+del?\s+"
-    rf"({_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT})\b",
+    rf"({_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|{_DATE_TEXT_FRAGMENT})\b",
     re.IGNORECASE,
 )
 
@@ -79,7 +125,33 @@ def _parse_anchor_fragment(fragment: str) -> datetime | None:
     text = fragment.strip().rstrip("?.!")
     if not text:
         return None
-    return _parse_event_datetime(text)
+    parsed = _parse_event_datetime(text)
+    if parsed is not None:
+        return parsed
+    normalized = _normalize_spanish_weekday_hint(text)
+    if normalized == text:
+        return None
+    return _parse_event_datetime(normalized)
+
+
+def _normalize_spanish_weekday_hint(text: str) -> str:
+    raw = text.strip()
+    lowered = raw.lower()
+    if not lowered:
+        return raw
+
+    match = re.match(
+        r"^(?:(este|esta|pr[oó]ximo|proximo)\s+)?(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)$",
+        lowered,
+    )
+    if not match:
+        return raw
+
+    qualifier, weekday = match.groups()
+    weekday_en = _SPANISH_WEEKDAY_TO_EN.get(weekday, weekday)
+    if qualifier in {"este", "esta", "próximo", "proximo"}:
+        return weekday_en
+    return weekday_en
 
 
 def _format_anchor_label(anchor_day: date) -> str:
@@ -126,6 +198,46 @@ def extract_calendar_date_filter(query: str) -> CalendarDateFilter | None:
             has_time=anchor_dt is not None,
             anchor_dt=anchor_dt,
         )
+    loose = _extract_loose_on_filter(text)
+    if loose is not None:
+        return loose
+    return None
+
+
+def _extract_loose_on_filter(text: str) -> CalendarDateFilter | None:
+    """Fallback parser for day-scoped asks not covered by strict regex patterns."""
+    if not _CALENDAR_CONTEXT_RE.search(text):
+        return None
+    cleaned = _TRAILING_CALENDAR_CONTEXT_RE.sub("", text).strip().rstrip("?!.")
+    m = _LOOSE_ON_RE.search(cleaned)
+    if m:
+        fragment = m.group("fragment").strip()
+        if fragment:
+            anchor_day, anchor_dt = _anchor_day_from_fragment(fragment)
+            if anchor_day is not None:
+                return CalendarDateFilter(
+                    kind=DateFilterKind.ON,
+                    anchor_day=anchor_day,
+                    anchor_label=_format_anchor_label(anchor_day),
+                    has_time=anchor_dt is not None,
+                    anchor_dt=anchor_dt,
+                )
+    # Fallback: try last word as a day anchor (only if it looks like a day word)
+    words = cleaned.split()
+    if words:
+        last = words[-1].strip().rstrip("?!.")
+        if last and re.match(
+            rf"^(?:{_WEEKDAY_FRAGMENT}|{_REL_DAY_FRAGMENT}|{_DATE_TEXT_FRAGMENT})$", last, re.I
+        ):
+            anchor_day, anchor_dt = _anchor_day_from_fragment(last)
+            if anchor_day is not None:
+                return CalendarDateFilter(
+                    kind=DateFilterKind.ON,
+                    anchor_day=anchor_day,
+                    anchor_label=_format_anchor_label(anchor_day),
+                    has_time=anchor_dt is not None,
+                    anchor_dt=anchor_dt,
+                )
     return None
 
 
@@ -182,3 +294,43 @@ def scope_phrase_for_filter(date_filter: CalendarDateFilter | None) -> str:
     if date_filter.kind == DateFilterKind.BEFORE:
         return f"antes del {date_filter.anchor_label}"
     return f"el {date_filter.anchor_label}"
+
+
+def hours_window_for_filter(
+    date_filter: CalendarDateFilter | None,
+    *,
+    base_hours: int,
+    lookahead_days_after: int = 30,
+    max_days: int = 370,
+) -> int:
+    """Expand search window so day-scoped queries include the requested date."""
+    if date_filter is None:
+        return max(1, base_hours)
+
+    local = _local_tz()
+    now = datetime.now().astimezone(local)
+    max_hours = 24 * max_days
+
+    def _clamp(hours: int) -> int:
+        return max(1, min(hours, max_hours))
+
+    if date_filter.kind == DateFilterKind.ON:
+        end = datetime.combine(
+            date_filter.anchor_day, time.max.replace(microsecond=0), tzinfo=local
+        )
+    elif date_filter.kind == DateFilterKind.BEFORE:
+        if date_filter.has_time and date_filter.anchor_dt is not None:
+            end = date_filter.anchor_dt.astimezone(local)
+        else:
+            end = datetime.combine(date_filter.anchor_day, time.min, tzinfo=local)
+    else:  # AFTER
+        if date_filter.has_time and date_filter.anchor_dt is not None:
+            anchor = date_filter.anchor_dt.astimezone(local)
+        else:
+            anchor = datetime.combine(
+                date_filter.anchor_day, time.max.replace(microsecond=0), tzinfo=local
+            )
+        end = anchor + timedelta(days=lookahead_days_after)
+
+    delta_hours = int((end - now).total_seconds() // 3600) + 1
+    return max(base_hours, _clamp(delta_hours))

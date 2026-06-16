@@ -61,8 +61,8 @@ export default function FleetSettings() {
             disabled={applying || mode === opt}
             className={`flex-1 py-2 rounded-[6px] text-[12px] font-semibold capitalize transition-colors ${
               mode === opt
-                ? "bg-[#242736] border border-[#94a3b8] text-[#e5e0ed]"
-                : "bg-[#1a1d27] border border-[#242736] text-[#474554] hover:border-[#474554]"
+                ? "bg-surface-container border border-primary-container text-on-surface"
+                : "bg-surface-container border border-outline-variant text-outline hover:border-outline"
             }`}
           >
             {opt}
@@ -76,7 +76,7 @@ export default function FleetSettings() {
           value={pinnedModelId}
           onChange={(e) => void handlePinnedModel(e.target.value)}
           disabled={applying}
-          className="w-full bg-[#0f1117] border border-[#242736] rounded px-2 py-1.5 text-[12px] font-mono text-[#c9c4d7] focus:outline-none focus:border-[#474554]"
+          className="w-full bg-background border border-outline-variant rounded px-2 py-1.5 text-[12px] font-mono text-on-surface-variant focus:outline-none focus:border-outline"
         >
           {Object.entries(byFamily).map(([family, entries]) => (
             <optgroup key={family} label={family}>
@@ -94,19 +94,19 @@ export default function FleetSettings() {
       {/* RAM safety margin — Auto mode only */}
       {mode === "auto" && (
         <div className="flex items-center justify-between">
-          <span className="text-[11px] font-mono text-[#8b8fa8]">
+          <span className="text-[11px] font-mono text-outline">
             RAM safety margin · {ramMargin}%
           </span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setRamMargin((v) => Math.max(5, v - 5))}
-              className="w-6 h-6 flex items-center justify-center bg-[#0f1117] border border-[#242736] rounded text-[#c9c4d7] hover:border-[#474554] transition-colors"
+              className="w-6 h-6 flex items-center justify-center bg-background border border-outline-variant rounded text-on-surface-variant hover:border-outline transition-colors"
             >
               −
             </button>
             <button
               onClick={() => setRamMargin((v) => Math.min(50, v + 5))}
-              className="w-6 h-6 flex items-center justify-center bg-[#0f1117] border border-[#242736] rounded text-[#c9c4d7] hover:border-[#474554] transition-colors"
+              className="w-6 h-6 flex items-center justify-center bg-background border border-outline-variant rounded text-on-surface-variant hover:border-outline transition-colors"
             >
               +
             </button>
@@ -115,7 +115,7 @@ export default function FleetSettings() {
       )}
 
       {/* Swap stats */}
-      <p className="text-[10px] font-mono text-[#474554]">
+      <p className="text-[10px] font-mono text-outline">
         {fleetStatus?.model_swaps_session ?? 0} swaps this session
       </p>
     </div>

@@ -116,6 +116,7 @@ export interface StatusResponse {
   ram_total_gb: number;
   ram_used_gb: number;
   ram_available_gb: number;
+  cpu_percent: number;
   queries_total: number;
   avg_latency_ms: number;
   p95_latency_ms: number;
@@ -173,6 +174,11 @@ export interface FleetModelsResponse {
   active_model_id: string;
 }
 
+export interface ContextSourcesEvent {
+  sources: string[];
+  episode_count: number;
+}
+
 export interface ModelSwapEvent {
   phase: "started" | "complete";
   from_model: string;
@@ -200,9 +206,16 @@ export interface AppConfig {
   };
   dnd_enabled: boolean;
   embedding_model: string;
-  inference_backend: "llamacpp" | "claude";
+  inference_backend: "llamacpp" | "claude" | "mlx";
   /** When false, MLX secondary provider is disabled (persisted for lite / 8 GB setups). */
   mlx_enabled?: boolean;
+  /** Knowledge sync configuration. */
+  knowledge_sync?: {
+    enabled: boolean;
+    sources?: SyncSource[];
+    interest_tags?: string[];
+    max_items_per_sync?: number;
+  };
 }
 
 export interface LocalModel {
@@ -227,6 +240,12 @@ export interface LlamaCppModelsResponse {
   active_model: string | null;
 }
 
+export interface DocumentInfo {
+  source_path: string;
+  file_modified: number;
+  filename: string;
+}
+
 export type AgentId = "auto" | "general" | "thesis" | "code" | "calendar";
 
 export interface Agent {
@@ -247,11 +266,130 @@ export const AGENTS: Agent[] = [
   { id: "calendar", label: "Calendar", description: "Schedule & tasks" },
 ];
 
+// ── Time-Travel Debugger types ──────────────────────────────────────────
+
+export interface DebugRun {
+  id: string;
+  agent_id: string;
+  query: string;
+  conversation_id: string | null;
+  created_at: number;
+  duration_ms: number | null;
+  success: boolean;
+}
+
+export interface DebugStep {
+  id: string;
+  run_id: string;
+  step_number: number;
+  node_name: string;
+  input_preview: string | null;
+  output_preview: string | null;
+  tool_name: string | null;
+  tool_args_json: string | null;
+  tool_result_preview: string | null;
+  needs_confirmation: boolean;
+  timestamp: number;
+}
+
+export interface DebugStepDetail extends DebugStep {
+  tokens: { token_order: number; token_text: string; is_final: number }[];
+}
+
+// ── Desktop Automation types ──────────────────────────────────────────
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  applescript: string;
+  parameters: { name: string; type: string; description: string }[];
+  tags: string[];
+  created_at: number;
+  updated_at: number;
+  run_count: number;
+  last_run: number | null;
+}
+
+// ── Claude models ───────────────────────────────────────────────────────
+
 export interface ClaudeModel {
   id: string;
   label: string;
   context_k: number;
   note: string;
+}
+
+// ── Knowledge Sync types ──────────────────────────────────────────────
+
+export type SyncSourceType = "rss" | "github" | "web" | "arxiv" | "youtube" | "pubmed";
+export type SyncStatusType = "idle" | "syncing" | "error";
+
+export interface SyncSource {
+  id: string;
+  source_type: SyncSourceType;
+  uri: string;
+  label: string;
+  enabled: boolean;
+  interval_minutes: number;
+  max_items_per_sync: number;
+  filter_min_relevance: number;
+  tags: string[];
+  schedule_cron: string;
+  status: SyncStatusType;
+  last_sync_at: number | null;
+  last_error: string;
+  items_indexed: number;
+}
+
+export interface SyncResult {
+  source_id: string;
+  fetched: number;
+  filtered_out: number;
+  indexed: number;
+  errors: string[];
+  duration_ms: number;
+}
+
+export interface SyncTriggerPayload {
+  force?: boolean;
+  source_id?: string;
+}
+
+export interface SyncSourceFormData {
+  id: string;
+  source_type: SyncSourceType;
+  uri: string;
+  label: string;
+  interval_minutes: number;
+  tags: string[];
+  schedule_cron: string;
+}
+
+export interface SyncProgressEvent {
+  stage: string;
+  source: string;
+  [key: string]: unknown;
+}
+
+export interface SyncExportPayload {
+  version: number;
+  exported_at: string;
+  sources: {
+    id: string;
+    source_type: string;
+    uri: string;
+    label: string;
+    interval_minutes: number;
+    tags: string[];
+    schedule_cron: string;
+  }[];
+}
+
+export interface SyncImportResponse {
+  status: string;
+  added: number;
+  errors: string[];
 }
 
 export const CLAUDE_MODELS: ClaudeModel[] = [

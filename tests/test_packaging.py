@@ -113,7 +113,7 @@ class TestCheckModels:
     def test_returns_true_when_gguf_file_exists(self, tmp_path):
         models_dir = tmp_path / "models"
         models_dir.mkdir()
-        (models_dir / "phi4-mini.gguf").touch()
+        (models_dir / "Qwen_Qwen3.5-2B-Q4_K_M.gguf").touch()
         s = _make_session(tmp_path)
         assert s.check_models(models_dir=models_dir) is True
 
@@ -257,7 +257,7 @@ class TestWizardRouter:
     def test_model_step_returns_ok_true_when_gguf_exists(self, tmp_path):
         models_dir = tmp_path / "models"
         models_dir.mkdir()
-        (models_dir / "phi4-mini.gguf").touch()
+        (models_dir / "Qwen_Qwen3.5-2B-Q4_K_M.gguf").touch()
         client = _make_client(tmp_path)
         with patch("ui.tray.wizard._MODELS_DIR", models_dir):
             r = client.post("/wizard/step/model")

@@ -1,117 +1,58 @@
 import { useEffect, useState } from "react";
-import { updateConfig } from "../../api/client";
+import { useSystemStore, selectLlamaServerState } from "../../stores/system";
 import { useServicesStore } from "../../stores/services";
-import {
-  useSystemStore,
-  selectIsClaudeMode,
-  selectRamPressure,
-  selectSwapInProgress,
-  selectLlamaServerState,
-} from "../../stores/system";
+import { getEngineActivity } from "../../api/client";
 import EngineIndicator from "./EngineIndicator";
-import RamGauge from "./RamGauge";
-import LatencyBadge from "./LatencyBadge";
-import FilesCounter from "./FilesCounter";
-import ModelBadge from "./ModelBadge";
-import VramGauge from "./VramGauge";
-import FleetPanel from "./FleetPanel";
 
 export default function StatusBar() {
-  const { status, health, fleetStatus, startPolling } = useSystemStore();
-  const servicesOff = useServicesStore((s) => s.servicesOff);
-  const llamaServer = selectLlamaServerState(useSystemStore.getState());
-  const swapInProgress = useSystemStore(selectSwapInProgress);
-  const [fleetPanelOpen, setFleetPanelOpen] = useState(false);
-
-  async function applyLiteProfileFromStatus(): Promise<void> {
-    try {
-      await updateConfig({
-        inference_backend: "llamacpp",
-        model: "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-        mlx_enabled: false,
-      });
-    } catch (e) {
-      console.error("lite profile save failed", e);
-    }
-  }
-
+  const [engineState, setEngineState] = useState<"active" | "suspended" | "unknown">("unknown");
+  const startPolling = useSystemStore((s) => s.startPolling);
   useEffect(() => {
     startPolling(10_000);
   }, [startPolling]);
 
-  const isCloud = selectIsClaudeMode(status);
+  useEffect(() => {
+    const fetchEngineState = async () => {
+      try {
+        const data = await getEngineActivity();
+        setEngineState(data.engine_state);
+      } catch {
+        // ignore — endpoint may not exist yet
+      }
+    };
+    fetchEngineState();
+    const interval = setInterval(fetchEngineState, 10_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const status = useSystemStore((s) => s.status);
+  const servicesOff = useServicesStore((s) => s.servicesOff);
+  const llamaServer = selectLlamaServerState(useSystemStore.getState());
 
   const engineOk = status?.engine_ok ?? false;
-  const modelId = status?.current_model_id ?? status?.model ?? "—";
-  const quantization = status?.quantization ?? "";
-  const files = status?.indexed_files ?? 0;
   const ramUsed = status?.ram_used_gb ?? 0;
-  const ramTotal =
-    status?.ram_total_gb ??
-    (status?.ram_used_gb ?? 0) + (status?.ram_available_gb ?? 0);
-  const ramPressure = selectRamPressure(status);
-  const p95 = (status?.p95_latency_ms ?? 0) / 1000;
-  const queries = status?.queries_total ?? 0;
-
-  const hw = fleetStatus?.hardware;
-  const vramUsed = hw ? hw.gpu_vram_total_gb - hw.gpu_vram_available_gb : 0;
-  const showVram = hw && hw.gpu_backend !== "none";
+  const ramTotal = status?.ram_total_gb ?? (status?.ram_used_gb ?? 0) + (status?.ram_available_gb ?? 0);
+  const cpuAvg = status?.cpu_percent ?? 0;
+  const uptime = "—";
 
   return (
-    <footer
-      className="flex justify-between items-center w-full px-3 bg-[#1c1b23] border-t border-[#242736] h-[28px] shrink-0 font-mono text-[10px] text-[#c9c4d7] uppercase tracking-wider"
-      aria-label="System status"
-    >
-      {/* Left group */}
-      <div className="flex items-center gap-3">
+    <footer aria-label="System status" className="fixed bottom-0 left-0 w-full flex justify-between items-center px-4 md:px-6 py-1 z-50 bg-surface-container-lowest/50 backdrop-blur-sm border-t border-outline-variant/10 text-on-surface-variant/70 text-[11px] font-label-mono shrink-0">
+      <div className="flex items-center gap-2">
+        <span>Cerebro OS</span>
+        <span className="opacity-30">•</span>
         <EngineIndicator
           ok={engineOk}
           provider={status?.provider}
           llamaServer={llamaServer}
           servicesOff={servicesOff}
+          engineState={engineState}
         />
-        <span className="opacity-20">•</span>
-        <ModelBadge
-          modelId={modelId}
-          quantization={quantization}
-          swapInProgress={swapInProgress}
-          onClick={() => setFleetPanelOpen(true)}
-        />
-        <span className="opacity-20">•</span>
-        <FilesCounter count={files} />
       </div>
-
-      {/* Right group */}
-      <div className="flex items-center gap-3">
-        {isCloud ? (
-          <span className="opacity-60">cloud inference</span>
-        ) : (
-          <>
-            <RamGauge
-              used={ramUsed}
-              total={ramTotal}
-              ramPressure={ramPressure}
-              onApplyLiteProfile={applyLiteProfileFromStatus}
-            />
-            {showVram && (
-              <>
-                <span className="opacity-20">·</span>
-                <VramGauge
-                  used={vramUsed}
-                  total={hw!.gpu_vram_total_gb}
-                  unified={hw!.unified_memory}
-                />
-              </>
-            )}
-            <span className="opacity-20">•</span>
-          </>
-        )}
-        <LatencyBadge p95={p95} />
-        <span className="opacity-20">•</span>
-        <span>{queries} queries</span>
+      <div className="flex gap-4">
+        <span>RAM {ramUsed.toFixed(1)}/{ramTotal.toFixed(1)}GB</span>
+        {cpuAvg > 0 && <span>CPU {Math.round(cpuAvg)}%</span>}
+        <span>Uptime {uptime}</span>
       </div>
-
-      <FleetPanel open={fleetPanelOpen} onClose={() => setFleetPanelOpen(false)} />
     </footer>
   );
 }

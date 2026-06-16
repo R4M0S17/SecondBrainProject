@@ -1,0 +1,20 @@
+================================================================================
+SEMANTIC COMPRESSOR — LATENCY BENCHMARK REPORT
+Generated: 20260604T171646 UTC
+================================================================================
+
+Query                                    Baseline (ms)    Compressed (ms)    Reduction (%) 
+----------------------------------------------------------------------------------------
+¿Cuál es la derivada de una función c... 1636.8           303.0              81.5          
+Explain the concept of gradient desce... 1643.8           716.1              56.4          
+What is the capital of France and wha... 1642.3           891.1              45.7          
+Describe the process of photosynthesi... 1638.5           671.5              59.0          
+How does quantum entanglement work in... 1636.9           558.1              65.9          
+----------------------------------------------------------------------------------------
+MEAN                                     1639.7           627.9              61.7          
+
+Target reduction: >70%
+Result: FAIL ❌ (61.7%)
+
+Memory Profile (tracemalloc, compressor.compress call):
+  (see peak memory in report body above)

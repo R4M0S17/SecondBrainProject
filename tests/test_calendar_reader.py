@@ -80,6 +80,13 @@ def test_birthday_jxa_template_has_calendar_discovery_and_apostrophe_pattern():
     assert "s birthday" in t
 
 
+def test_applescript_upcoming_template_limits_upper_bound():
+    t = calendar_reader_mod._AS_FETCH_UPCOMING
+    assert "cutoffDate" in t
+    assert "start date ≤ cutoffDate" in t
+    assert "{hours_ahead}" in t
+
+
 def test_contacts_birthday_fallback_chain_uses_contacts_when_calendar_empty():
     t0 = datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC)
     ev = CalendarEvent(title="Cumpleaños de Pat", start=t0, end=t0 + timedelta(hours=24))

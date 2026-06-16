@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -17,6 +18,10 @@ _PROFILE_CTX: dict[str, int] = {
     "coding": 8192,
     "deep": 6144,
 }
+
+_VISION_MODEL_RE = re.compile(
+    r"\b(UD|VL|vision|multimodal|mmproj|llava|llama-vision)\b", re.IGNORECASE
+)
 
 
 class LlamaCppUnavailableError(Exception):
@@ -35,6 +40,8 @@ class LlamaCppChatProvider:
         self._base_url = base_url.rstrip("/")
         self._profile = profile
         self._timeout = httpx.Timeout(float(timeout))
+        self._ram_override_ctx: int | None = None
+        self.supports_vision: bool = bool(_VISION_MODEL_RE.search(model))
 
     async def complete(self, messages: list[Message], **kwargs) -> str:
         run_ram_preflight()
@@ -45,6 +52,10 @@ class LlamaCppChatProvider:
             "temperature": kwargs.get("temperature"),
             "grammar": kwargs.get("grammar"),
         }
+        if "n_ctx" in kwargs:
+            payload["n_ctx"] = kwargs["n_ctx"]
+        if "cache_prompt" in kwargs:
+            payload["cache_prompt"] = kwargs["cache_prompt"]
         # remove None values — llama-server uses its own defaults when omitted
         payload = {k: v for k, v in payload.items() if v is not None}
         try:
@@ -56,7 +67,9 @@ class LlamaCppChatProvider:
                 data = cast(dict[str, Any], response.json())
                 tokens_used, source = resolve_token_usage(data, messages)
                 log_context_usage(tokens_used, self.context_window(), source)
-                return str(data["choices"][0]["message"]["content"]).strip()
+                msg = data["choices"][0]["message"]
+                content: str = (msg.get("content") or msg.get("reasoning_content") or "").strip()
+                return content
         except httpx.TimeoutException as e:
             raise InferenceTimeoutError("llama-server chat timed out") from e
         except httpx.ConnectError as e:
@@ -72,6 +85,10 @@ class LlamaCppChatProvider:
             "stream": True,
             "grammar": kwargs.get("grammar"),
         }
+        if "n_ctx" in kwargs:
+            payload["n_ctx"] = kwargs["n_ctx"]
+        if "cache_prompt" in kwargs:
+            payload["cache_prompt"] = kwargs["cache_prompt"]
         payload = {k: v for k, v in payload.items() if v is not None}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
@@ -103,7 +120,13 @@ class LlamaCppChatProvider:
         return self._model
 
     def context_window(self) -> int:
+        if self._ram_override_ctx is not None:
+            return self._ram_override_ctx
         return _PROFILE_CTX.get(self._profile, 2048)
+
+    def reduce_context(self, factor: float = 0.5) -> None:
+        base = _PROFILE_CTX.get(self._profile, 2048)
+        self._ram_override_ctx = max(512, int(base * factor))
 
     def is_available(self) -> bool:
         try:

@@ -14,17 +14,17 @@ export default function WizardDots({ step, total, label }: WizardDotsProps) {
           <React.Fragment key={idx}>
             <div
               className={`w-2 h-2 rounded-full transition-colors ${
-                idx <= step ? "bg-primary" : "border border-[#8b8fa8]"
+                idx <= step ? "bg-primary-container" : "border border-outline"
               }`}
             />
             {idx < total - 1 && (
-              <div className="w-8 h-[1px] bg-[#242736]" />
+              <div className="w-8 h-[1px] bg-surface-container" />
             )}
           </React.Fragment>
         ))}
       </div>
       <p className="text-[11px] font-bold tracking-[0.05em] uppercase leading-[16px]">
-        <span className="text-[#8b8fa8]">Step {step + 1} of {total} · </span>
+        <span className="text-outline">Step {step + 1} of {total} · </span>
         <span className="text-[#e8eaf0]">{label}</span>
       </p>
     </div>

@@ -17,7 +17,7 @@ test-stable:
 	$(PYTHON) -m pytest tests/test_stable_fast_paths.py tests/test_file_write_fast_path.py tests/test_file_write_calendar_fusion.py tests/test_calendar_fast_path.py tests/test_file_search_fast_path.py tests/test_math_fast_path.py -v -m "not live" --tb=short
 
 smoke:
-	bash scripts/smoke.sh
+	$(PYTHON) -m pytest tests/test_smoke_live.py -v --tb=short
 
 run:
 	$(PYTHON) main.py
@@ -58,9 +58,27 @@ desktop-launch:
 desktop-stop:
 	bash scripts/cerebro_desktop_stop.sh
 
-# Desktop .app build uses cerebro/ui/tray (icons + Tauri project live there).
-desktop-icon desktop-app desktop-install:
-	$(MAKE) -C cerebro $@
+# Desktop .app build (ui/tray — Tauri project).
+desktop-icon:
+	cd ui/tray && npm run tauri -- icon app-icon.png
+
+DESKTOP_APP := ui/tray/src-tauri/target/release/bundle/macos/Cerebro.app
+DESKTOP_DMG := ui/tray/src-tauri/target/release/bundle/dmg
+
+desktop-app: desktop-config
+	cd ui/tray && npm run build
+	cd ui/tray && CARGO_TARGET_DIR="$(CURDIR)/ui/tray/src-tauri/target" npm run tauri:build:release
+	@test -d "$(DESKTOP_APP)" || (echo "Build finished but $(DESKTOP_APP) not found." >&2; exit 1)
+	@echo ""
+	@echo "Built: $(DESKTOP_APP)"
+	@ls -1 "$(DESKTOP_DMG)"/*.dmg 2>/dev/null && echo "DMG:   $(DESKTOP_DMG)/" || true
+	@echo "Install: make desktop-install"
+
+desktop-install:
+	@test -d "$(DESKTOP_APP)" || (echo "Run make desktop-app first." >&2; exit 1)
+	cp -R "$(DESKTOP_APP)" /Applications/
+	@echo "Installed → /Applications/Cerebro.app"
+	@echo "Open from Applications or Spotlight; Keep in Dock from the app icon menu."
 
 # ── Packaging (Module 13) ─────────────────────────────────────────────────────
 

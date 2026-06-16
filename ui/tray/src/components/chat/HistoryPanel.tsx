@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useHistoryStore } from "../../stores/history";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 export default function HistoryPanel() {
   const {
@@ -19,29 +20,29 @@ export default function HistoryPanel() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* Sidebar — conversation list */}
-      <div className="w-56 shrink-0 border-r border-[#242736] flex flex-col overflow-hidden">
-        <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-[#8b8fa8]">
+      <div className="w-56 shrink-0 border-r border-outline-variant flex flex-col overflow-hidden">
+        <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-outline">
           History
         </div>
         <div className="flex-1 overflow-y-auto custom-scrollbar">
           {isLoading && conversations.length === 0 && (
-            <p className="px-3 py-2 text-[13px] text-[#8b8fa8]">Loading…</p>
+            <p className="px-3 py-2 text-[13px] text-outline">Loading…</p>
           )}
           {!isLoading && conversations.length === 0 && (
-            <p className="px-3 py-2 text-[13px] text-[#8b8fa8]">No past conversations.</p>
+            <p className="px-3 py-2 text-[13px] text-outline">No past conversations.</p>
           )}
           {conversations.map((conv) => (
             <button
               key={conv.conv_id}
               onClick={() => void loadConversation(conv.conv_id)}
-              className={`w-full text-left px-3 py-2 border-b border-[#1a1921] transition-colors hover:bg-[#242736] ${
-                activeConvId === conv.conv_id ? "bg-[#242736]" : ""
+              className={`w-full text-left px-3 py-2 border-b border-surface-container-low transition-colors hover:bg-surface-container ${
+                activeConvId === conv.conv_id ? "bg-surface-container" : ""
               }`}
             >
-              <p className="text-[13px] text-[#e5e0ed] truncate">
+              <p className="text-[13px] text-on-surface truncate">
                 {conv.first_user_message || "Empty conversation"}
               </p>
-              <p className="text-[11px] text-[#8b8fa8] mt-0.5">
+              <p className="text-[11px] text-outline mt-0.5">
                 {conv.agent_id} · {conv.message_count} msgs
               </p>
             </button>
@@ -52,20 +53,20 @@ export default function HistoryPanel() {
       {/* Main area — conversation detail */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-3">
         {!activeConv && !isLoading && (
-          <p className="text-[13px] text-[#8b8fa8]">Select a conversation to view.</p>
+          <p className="text-[13px] text-outline">Select a conversation to view.</p>
         )}
         {isLoading && activeConvId && (
-          <p className="text-[13px] text-[#8b8fa8]">Loading…</p>
+          <p className="text-[13px] text-outline">Loading…</p>
         )}
         {activeConv && (
           <>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] text-[#8b8fa8]">
+              <span className="text-[11px] text-outline">
                 {activeConv.agent_id} · {activeConv.messages.length} messages
               </span>
               <button
                 onClick={() => setActiveConvId(null)}
-                className="text-[11px] text-[#8b8fa8] hover:text-[#e5e0ed] transition-colors"
+                className="text-[11px] text-outline hover:text-on-surface transition-colors"
               >
                 Close
               </button>
@@ -78,17 +79,21 @@ export default function HistoryPanel() {
                     msg.role === "user" ? "items-end" : "items-start"
                   }`}
                 >
-                  <span className="text-[11px] text-[#8b8fa8]">
+                  <span className="text-[11px] text-outline">
                     {msg.role === "user" ? "You" : "Cerebro"}
                   </span>
                   <div
-                    className={`max-w-[80%] rounded px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap ${
+                    className={`max-w-[80%] rounded px-3 py-2 text-[13px] leading-relaxed ${
                       msg.role === "user"
-                        ? "bg-[#2e2d3a] text-[#e5e0ed]"
-                        : "bg-[#1a1921] text-[#e5e0ed]"
+                        ? "bg-surface-container-high text-on-surface"
+                        : "bg-surface-container-low text-on-surface"
                     }`}
                   >
-                    {msg.content}
+                    {msg.role === "user" ? (
+                      <span className="whitespace-pre-wrap">{msg.content}</span>
+                    ) : (
+                      <MarkdownRenderer content={msg.content} />
+                    )}
                   </div>
                 </div>
               ))}

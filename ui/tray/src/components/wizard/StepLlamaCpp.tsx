@@ -95,22 +95,22 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
             disabled={liteSaving || liteApplied}
             className={`w-full py-2.5 rounded-lg font-semibold text-[13px] transition-all ${
               liteApplied
-                ? "bg-[#242736] text-[#8b8fa8] cursor-default"
+                ? "bg-surface-container text-outline cursor-default"
                 : liteSaving
-                  ? "bg-[#242736] text-[#8b8fa8] cursor-wait"
+                  ? "bg-surface-container text-outline cursor-wait"
                   : "bg-[#6366f1] text-white hover:opacity-90 active:scale-[0.99]"
             }`}
           >
             {liteApplied ? "8 GB safe profile saved" : liteSaving ? "Saving…" : "Use 8 GB safe profile"}
           </button>
           {liteError && (
-            <p className="text-[12px] text-[#ffb4ab] text-center">{liteError}</p>
+            <p className="text-[12px] text-error text-center">{liteError}</p>
           )}
           {liteApplied && (
-            <p className="text-[11px] text-[#8b8fa8] text-center">
+            <p className="text-[11px] text-outline text-center">
               Start the stack with{" "}
-              <code className="text-[#94a3b8] bg-[#201f27] px-1 rounded">make lite</code> or run{" "}
-              <code className="text-[#94a3b8] bg-[#201f27] px-1 rounded">make engine-lite</code>{" "}
+              <code className="text-primary-container bg-surface-container px-1 rounded">make lite</code> or run{" "}
+              <code className="text-primary-container bg-surface-container px-1 rounded">make engine-lite</code>{" "}
               before the chat server, then continue.
             </p>
           )}
@@ -118,26 +118,26 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
       )}
 
       {/* Status block */}
-      <div className="bg-[#0f1117] rounded-lg p-[14px_16px] flex items-center justify-between border border-[#242736]/50">
+      <div className="bg-background rounded-lg p-[14px_16px] flex items-center justify-between border border-outline-variant/50">
         <div className="flex items-center gap-3">
           {running === null ? (
-            <div className="w-2 h-2 rounded-full border-2 border-[#8b8fa8] border-t-transparent animate-spin" />
+            <div className="w-2 h-2 rounded-full border-2 border-outline border-t-transparent animate-spin" />
           ) : skippedReason ? (
-            <div className="w-2 h-2 rounded-full bg-[#a78bfa]" />
+            <div className="w-2 h-2 rounded-full bg-secondary" />
           ) : running ? (
-            <div className="w-2 h-2 rounded-full bg-[#4ade80] status-dot-pulse" />
+            <div className="w-2 h-2 rounded-full bg-success-green status-dot-pulse" />
           ) : (
-            <div className="w-2 h-2 rounded-full bg-[#ffb4ab]" />
+            <div className="w-2 h-2 rounded-full bg-error" />
           )}
           <span
             className={`text-[14px] font-medium ${
               running === null
-                ? "text-[#8b8fa8]"
+                ? "text-outline"
                 : skippedReason
-                  ? "text-[#a78bfa]"
+                  ? "text-secondary"
                   : running
-                    ? "text-[#4ade80]"
-                    : "text-[#ffb4ab]"
+                    ? "text-success-green"
+                    : "text-error"
             }`}
           >
             {running === null
@@ -153,10 +153,10 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
           <div
             className={`font-bold text-[10px] px-2 py-1 rounded uppercase tracking-wider ${
               skippedReason
-                ? "bg-[#a78bfa]/15 text-[#a78bfa]"
+                ? "bg-secondary/15 text-secondary"
                 : running
-                  ? "bg-[#4ade80]/15 text-[#4ade80]"
-                  : "bg-[#ffb4ab]/15 text-[#ffb4ab]"
+                  ? "bg-success-green/15 text-success-green"
+                  : "bg-error/15 text-error"
             }`}
           >
             {skippedReason ? "Skipped" : running ? "Detected" : "Not found"}
@@ -165,9 +165,9 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
       </div>
 
       {!skippedReason && !running && running !== null && (
-        <p className="text-[12px] text-[#8b8fa8] text-center">
+        <p className="text-[12px] text-outline text-center">
           Run{" "}
-          <code className="text-[#94a3b8] bg-[#201f27] px-1 rounded">
+          <code className="text-primary-container bg-surface-container px-1 rounded">
             {recommendLite ? "make engine-lite" : "make engine"}
           </code>{" "}
           in a terminal, then wait for detection above.

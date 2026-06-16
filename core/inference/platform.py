@@ -15,7 +15,7 @@ def mlx_available() -> bool:
         return False
     if not is_apple_silicon():
         return False
-    if psutil.virtual_memory().total < 12 * 1024**3:
+    if psutil.virtual_memory().total < 4 * 1024**3:
         return False
     try:
         import mlx.core  # noqa: F401

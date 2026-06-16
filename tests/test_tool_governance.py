@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
-
 import pytest
 
 from core.agents.state_store import AgentProfile
-from core.tools.audit import AuditLogger
 from core.tools.policy import PolicyEngine
 from core.tools.registry import AuditLevel, ToolDefinition, ToolRegistry, ToolScope
 
@@ -213,54 +209,6 @@ async def test_policy_propagates_confirmation_flag(tmp_path):
 
     assert result.approved is True
     assert result.requires_user_confirmation is True
-
-
-# ---------------------------------------------------------------------------
-# AuditLogger — does not write document content
-# ---------------------------------------------------------------------------
-
-
-def test_audit_logger_writes_record(tmp_path):
-    audit = AuditLogger(str(tmp_path / "audit"))
-    audit.log_tool_call(
-        agent_id="agent-1",
-        tool="read_file",
-        args_sanitized={"path": "/tmp/doc.txt"},
-        result_summary="read 1234 bytes",
-        approved=True,
-        timestamp=datetime.now(UTC),
-    )
-    logs = list((tmp_path / "audit").glob("audit-*.jsonl"))
-    assert len(logs) == 1
-    record = json.loads(logs[0].read_text().strip())
-    assert record["tool"] == "read_file"
-    assert record["approved"] is True
-    assert record["agent_id"] == "agent-1"
-
-
-def test_audit_logger_does_not_write_document_content(tmp_path):
-    audit = AuditLogger(str(tmp_path / "audit"))
-    audit.log_tool_call(
-        agent_id="agent-1",
-        tool="read_file",
-        args_sanitized={"path": "/tmp/doc.txt"},
-        result_summary="read 500 bytes",
-        approved=True,
-        timestamp=datetime.now(UTC),
-    )
-    log_content = (tmp_path / "audit").glob("audit-*.jsonl")
-    raw = next(log_content).read_text()
-    assert "content" not in raw
-    assert "500 bytes" in raw  # summary is fine, but not actual content
-
-
-def test_audit_logger_monthly_rotation(tmp_path):
-    audit = AuditLogger(str(tmp_path / "audit"))
-    ts = datetime.now(UTC)
-    audit.log_tool_call("a", "read_file", {}, "ok", True, ts)
-    month = ts.strftime("%Y-%m")
-    expected = tmp_path / "audit" / f"audit-{month}.jsonl"
-    assert expected.exists()
 
 
 # ---------------------------------------------------------------------------

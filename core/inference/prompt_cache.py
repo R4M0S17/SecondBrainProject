@@ -1,4 +1,4 @@
-"""Fingerprint-based invalidation for llama.cpp prompt caches."""
+"""Fingerprint-based invalidation for llama.cpp prompt caches with size bounding."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ import os
 import re
 from pathlib import Path
 
+import psutil
+
 _DEFAULT_CACHE = os.path.join("bin", "cache", "chat.cache")
+_MAX_CACHE_MB = int(os.getenv("CEREBRO_MAX_CACHE_MB", "256"))
 
 # Volatile system-prompt sections — must not bust the cache every turn.
 _DATE_LINE_RE = re.compile(r"FECHA Y HORA ACTUAL: [^\n]+\n")
@@ -59,6 +62,22 @@ def prompt_cache_fingerprint(
 
 def _sidecar_path(cache_path: Path) -> Path:
     return cache_path.with_name(cache_path.name + ".sha256")
+
+
+def enforce_cache_size() -> None:
+    """Trim cache if it exceeds threshold and RAM is under pressure."""
+    cache = prompt_cache_path()
+    if not cache.exists():
+        return
+    size_mb = cache.stat().st_size / (1024 * 1024)
+    if size_mb <= _MAX_CACHE_MB:
+        return
+    ram = psutil.virtual_memory()
+    if ram.available > 2 * 1024**3 and ram.percent < 70:
+        return
+    cache.unlink(missing_ok=True)
+    sidecar = _sidecar_path(cache)
+    sidecar.unlink(missing_ok=True)
 
 
 def sync_prompt_cache(

@@ -197,29 +197,39 @@ def _ical_component_to_event(component) -> CalendarEvent | None:
 # Apple Calendar backend (macOS only)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# JXA script: two-phase query.
-# Phase 1: whose() date filter for non-recurring future events (fast).
-# AppleScript read: JXA ``whose`` date ranges often return nothing on modern Calendar.app.
-_AS_FETCH_UPCOMING = """\
-tell application "Calendar"
-    set now to current date
-    set skipCal to {{{skip_list}}}
-    set out to ""
-    repeat with cal in calendars
-        set cName to name of cal
-        if skipCal contains cName then
-        else
-            try
-                repeat with ev in (every event of cal whose start date ≥ now)
-                    set t to summary of ev
-                    if t is missing value then set t to ""
-                    set out to out & t & "{sep}" & (start date of ev as string) & "{sep}" & (end date of ev as string) & linefeed
-                end repeat
-            end try
-        end if
-    end repeat
-    return out
-end tell
+# JXA script: fetch upcoming events using date-range filter via whose().
+# Much faster than loading all events; Calendar.app handles recurring event
+# expansion internally. Returns JSON for Python processing.
+_JXA_FETCH_UPCOMING = """\
+var app = Application("Calendar");
+var skipNames = {skip_list_json};
+var now = new Date();
+var cutoff = new Date(now.getTime() + {hours_ahead} * 3600000);
+var events = [];
+
+var cals = app.calendars();
+for (var i = 0; i < cals.length; i++) {{
+    var cal = cals[i];
+    var name = cal.name();
+    if (skipNames.indexOf(name) >= 0) continue;
+    try {{
+        var evts = cal.events.whose({{_and: [
+            {{startDate: {{_greaterThanEquals: now}}}},
+            {{startDate: {{_lessThanEquals: cutoff}}}}
+        ]}})();
+        for (var j = 0; j < evts.length; j++) {{
+            try {{
+                var ev = evts[j];
+                events.push({{
+                    title: ev.summary() || "",
+                    start: ev.startDate().toISOString(),
+                    end: (ev.endDate() || ev.startDate()).toISOString()
+                }});
+            }} catch(e) {{}}
+        }}
+    }} catch(e) {{}}
+}}
+JSON.stringify(events);
 """
 
 
@@ -247,15 +257,15 @@ def _parse_applescript_date_string(raw: str) -> datetime | None:
 
 
 def _fetch_upcoming_via_applescript(hours_ahead: int) -> tuple[list[CalendarEvent], str]:
-    """Return upcoming events using AppleScript (reliable) and filter window in Python."""
-    skip_list = ", ".join(f'"{n}"' for n in sorted(_SKIPPED_CALENDAR_NAMES))
-    script = _AS_FETCH_UPCOMING.format(sep=_AS_RECORD_SEP, skip_list=skip_list)
+    """Return upcoming events using JXA whose() date filter (reliable + fast)."""
+    skip_list_json = json.dumps(sorted(_SKIPPED_CALENDAR_NAMES))
+    script = _JXA_FETCH_UPCOMING.format(skip_list_json=skip_list_json, hours_ahead=hours_ahead)
     try:
         result = subprocess.run(
-            ["osascript", "-e", script],
+            ["osascript", "-l", "JavaScript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=max(8, int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "18"))),
+            timeout=max(8, int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "30"))),
         )
     except subprocess.TimeoutExpired:
         return [], "osascript timed out"
@@ -266,97 +276,158 @@ def _fetch_upcoming_via_applescript(hours_ahead: int) -> tuple[list[CalendarEven
     if result.returncode != 0:
         return [], stderr or f"exit {result.returncode}"
 
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return [], ""
+
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        return [], f"JSON parse error: {exc}"
+
+    if not isinstance(data, list):
+        return [], "unexpected JSON shape"
+
     now = datetime.now().astimezone()
     cutoff = now + timedelta(hours=hours_ahead)
     events: list[CalendarEvent] = []
-    for line in (result.stdout or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(_AS_RECORD_SEP)
-        if len(parts) < 2:
-            continue
-        title = parts[0].strip()
-        start = _parse_applescript_date_string(parts[1])
-        if start is None or start < now or start > cutoff:
-            continue
-        end = start
-        if len(parts) >= 3:
-            parsed_end = _parse_applescript_date_string(parts[2])
-            if parsed_end is not None:
-                end = parsed_end
-        events.append(
-            CalendarEvent(
-                title=title,
-                start=start,
-                end=end,
-                description="",
-                location="",
+    for item in data:
+        try:
+            title = (item.get("title") or "").strip()
+            if not title:
+                continue
+            start = datetime.fromisoformat(item["start"].replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            start = start.astimezone()
+            if start < now or start > cutoff:
+                continue
+            end = start
+            if "end" in item:
+                parsed_end = datetime.fromisoformat(item["end"].replace("Z", "+00:00"))
+                if parsed_end.tzinfo is None:
+                    parsed_end = parsed_end.replace(tzinfo=UTC)
+                end = parsed_end.astimezone()
+            events.append(
+                CalendarEvent(
+                    title=title,
+                    start=start,
+                    end=end,
+                    description=item.get("description", ""),
+                    location=item.get("location", ""),
+                )
             )
-        )
+        except Exception as exc:
+            logger.debug("Skipping malformed JXA calendar event: {}", exc)
     events.sort(key=lambda e: e.start)
     return events, ""
 
 
-# Phase 2: yearly recurring events (birthdays, anniversaries).
-#   Apple Calendar stores recurring events with their ORIGINAL startDate (e.g. 2021),
-#   so whose(startDate >= now) misses them entirely. We scan for FREQ=YEARLY events,
-#   compute the next annual occurrence, then fetch details only for matches (two-pass
-#   to minimise IPC calls: startDate first, summary only for events in window).
+# Phase 2: recurring events.
+#   Apple Calendar stores recurring events with their ORIGINAL startDate,
+#   so whose(startDate >= now) misses events whose original date is in the past
+#   but whose next occurrence is in the search window (e.g. yearly birthdays).
+#   We scan ALL events for any recurrence rule, compute the next occurrence
+#   in JS (handles DAILY, WEEKLY, MONTHLY, YEARLY), and dedup with Phase 1.
 _JXA_TEMPLATE = """\
 var app = Application("Calendar");
 var events = [];
+var seen = new Set();
 var now = new Date();
 var cutoff = new Date(now.getTime() + {hours_ahead} * 3600000);
 
-function nextAnnual(d) {{
-    var next = new Date(now.getFullYear(), d.getMonth(), d.getDate(),
-                        d.getHours(), d.getMinutes(), d.getSeconds());
-    if (next < now) next.setFullYear(next.getFullYear() + 1);
-    return next;
+function addEvent(title, start, end, desc, loc) {{
+    if (!title) return;
+    var key = title + "|" + start.toISOString();
+    if (seen.has(key)) return;
+    seen.add(key);
+    events.push({{
+        title: title,
+        start: start.toISOString(),
+        end: (end || start).toISOString(),
+        description: desc || "",
+        location: loc || ""
+    }});
+}}
+
+function nextOccurrence(orig, freq) {{
+    if (freq === "FREQ=YEARLY") {{
+        var next = new Date(now.getFullYear(), orig.getMonth(), orig.getDate(),
+                            orig.getHours(), orig.getMinutes(), orig.getSeconds());
+        if (next < now) next.setFullYear(next.getFullYear() + 1);
+        return next;
+    }}
+    if (freq === "FREQ=MONTHLY") {{
+        var next = new Date(now.getFullYear(), now.getMonth(), orig.getDate(),
+                            orig.getHours(), orig.getMinutes(), orig.getSeconds());
+        if (next < now) next.setMonth(next.getMonth() + 1);
+        return next;
+    }}
+    if (freq === "FREQ=WEEKLY") {{
+        var msWeek = 7 * 24 * 3600000;
+        var diff = orig.getTime();
+        var elapsed = now.getTime() - diff;
+        var weeks = Math.ceil(elapsed / msWeek);
+        var next = new Date(diff + weeks * msWeek);
+        if (next < now) next = new Date(next.getTime() + msWeek);
+        return next;
+    }}
+    if (freq === "FREQ=DAILY") {{
+        var msDay = 24 * 3600000;
+        var diff = orig.getTime();
+        var elapsed = now.getTime() - diff;
+        var days = Math.ceil(elapsed / msDay);
+        var next = new Date(diff + days * msDay);
+        if (next < now) next = new Date(next.getTime() + msDay);
+        return next;
+    }}
+    return null;
+}}
+
+function extractFreq(recurrenceStr) {{
+    if (!recurrenceStr) return null;
+    var parts = recurrenceStr.split(";");
+    for (var i = 0; i < parts.length; i++) {{
+        var p = parts[i].trim();
+        if (p.indexOf("FREQ=") === 0) return p;
+    }}
+    return null;
 }}
 
 app.calendars().forEach(function(cal) {{
     try {{
-        // Phase 1: future non-recurring events via fast date filter
+        // Phase 1: fast date-filtered fetch for non-recurring + recently-expanded
         var future = cal.events.whose({{_and: [
             {{startDate: {{_greaterThanEquals: now}}}},
             {{startDate: {{_lessThanEquals: cutoff}}}}
         ]}})();
         future.forEach(function(ev) {{
             try {{
+                var title = (ev.summary() || "").trim();
+                if (!title) return;
                 var start = ev.startDate();
-                events.push({{
-                    title: ev.summary() || "",
-                    start: start.toISOString(),
-                    end: (ev.endDate() || start).toISOString(),
-                    description: ev.description() || "",
-                    location: ev.location() || ""
-                }});
+                addEvent(title, start, ev.endDate() || start,
+                         ev.description(), ev.location());
             }} catch(e) {{}}
         }});
 
-        // Phase 2: yearly recurring events — two-pass to minimise IPC overhead
-        var yearly = cal.events.whose({{recurrence: {{_contains: "FREQ=YEARLY"}}}})();
-        var inWindow = [];
-        for (var i = 0; i < yearly.length; i++) {{
+        // Phase 2: recurring events — scan all events for any recurrence rule
+        var allEvents = cal.events();
+        for (var i = 0; i < allEvents.length; i++) {{
             try {{
-                var orig = yearly[i].startDate();
-                var next = nextAnnual(orig);
-                if (next >= now && next <= cutoff) inWindow.push({{i: i, next: next}});
-            }} catch(e) {{}}
-        }}
-        for (var j = 0; j < inWindow.length; j++) {{
-            try {{
-                var ev = yearly[inWindow[j].i];
-                var next = inWindow[j].next;
-                events.push({{
-                    title: ev.summary() || "",
-                    start: next.toISOString(),
-                    end: new Date(next.getTime() + 3600000).toISOString(),
-                    description: "",
-                    location: ""
-                }});
+                var ev = allEvents[i];
+                var title = (ev.summary() || "").trim();
+                if (!title) continue;
+                var rec = ev.recurrence();
+                if (!rec) continue;
+                var freq = extractFreq(String(rec));
+                if (!freq) continue;
+                var orig = ev.startDate();
+                var next = nextOccurrence(orig, freq);
+                if (next && next >= now && next <= cutoff) {{
+                    addEvent(title, next, new Date(next.getTime() + 3600000),
+                             "", "");
+                }}
             }} catch(e) {{}}
         }}
     }} catch(e) {{}}
@@ -369,7 +440,7 @@ class AppleCalendarBackend:
     """Query Apple Calendar via osascript JavaScript for Automation (macOS only)."""
 
     _DEFAULT_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_TIMEOUT", "35"))
-    _FAST_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "12"))
+    _FAST_TIMEOUT_SEC = int(os.getenv("CEREBRO_CALENDAR_OSASCRIPT_FAST_TIMEOUT", "30"))
 
     def __init__(self, *, timeout_sec: int | None = None) -> None:
         self._timeout_sec = timeout_sec if timeout_sec is not None else self._DEFAULT_TIMEOUT_SEC
@@ -379,11 +450,20 @@ class AppleCalendarBackend:
         events: list[CalendarEvent] = []
         for item in data:
             try:
+                title = (item.get("title") or "").strip()
+                if not title:
+                    continue
+                start = datetime.fromisoformat(item["start"])
+                end = datetime.fromisoformat(item["end"]) if "end" in item else start
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=UTC)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=UTC)
                 events.append(
                     CalendarEvent(
-                        title=item.get("title", ""),
-                        start=datetime.fromisoformat(item["start"]),
-                        end=datetime.fromisoformat(item["end"]),
+                        title=title,
+                        start=start,
+                        end=end,
                         description=item.get("description", ""),
                         location=item.get("location", ""),
                     )
@@ -752,11 +832,14 @@ class BirthdayBackend:
         events: list[CalendarEvent] = []
         for item in data:
             try:
+                title = (item.get("title") or "").strip()
+                if not title:
+                    continue
                 start = datetime.fromisoformat(item["start"])
                 if start.tzinfo is None:
                     start = start.replace(tzinfo=UTC)
                 end = start + timedelta(hours=24)
-                events.append(CalendarEvent(title=item["title"], start=start, end=end))
+                events.append(CalendarEvent(title=title, start=start, end=end))
             except Exception as exc:
                 logger.debug("Skipping malformed birthday entry: {}", exc)
         return events

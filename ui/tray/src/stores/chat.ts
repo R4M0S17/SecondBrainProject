@@ -20,6 +20,11 @@ export interface PendingConfirmation {
   onDeny: () => void;
 }
 
+export interface SearchingSources {
+  count: number;
+  sources: string[];
+}
+
 interface ChatState {
   messages: Message[];
   isLoading: boolean;
@@ -28,6 +33,8 @@ interface ChatState {
   /** Durable session key — same as API ``conversation_id`` for this chat surface. */
   conversationId: string | null;
   pendingConfirmation: PendingConfirmation | null;
+  searchingSources: SearchingSources | null;
+  searchingWeb: boolean;
 
   addMessage: (msg: Omit<Message, "id" | "timestamp">) => string;
   updateMessage: (id: string, patch: Partial<Message>) => void;
@@ -40,6 +47,8 @@ interface ChatState {
   setPendingConfirmation: (conf: PendingConfirmation | null) => void;
   setConversationId: (id: string | null) => void;
   clearMessages: () => void;
+  setSearchingSources: (s: SearchingSources | null) => void;
+  setSearchingWeb: (s: boolean) => void;
 }
 
 function genId(): string {
@@ -53,6 +62,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeAgent: "auto",
   conversationId: null,
   pendingConfirmation: null,
+  searchingSources: null,
+  searchingWeb: false,
 
   addMessage: (msg) => {
     const id = genId();
@@ -106,5 +117,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setConversationId: (id) => set({ conversationId: id }),
 
-  clearMessages: () => set({ messages: [], conversationId: null }),
+  setSearchingSources: (s) => set({ searchingSources: s }),
+  setSearchingWeb: (s) => set({ searchingWeb: s }),
+
+  clearMessages: () => set({ messages: [], conversationId: null, searchingSources: null, searchingWeb: false }),
 }));
