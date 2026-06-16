@@ -64,6 +64,7 @@ from core.tools.registry import ToolDefinition
 
 if TYPE_CHECKING:
     from core.agents.context_enricher import ContextEnricher
+    from core.inference.adaptive_context import AdaptiveContext
 
 # --------------------------------------------------------------------------- #
 # Hard limits (from spec)
@@ -92,6 +93,22 @@ CONFIRMATION_REQUIRED_TOOLS: frozenset[str] = frozenset(
         "create_calendar_event",
         "add_reminder",
     }
+)
+
+# Regex: detect queries asking for code examples (not file creation).
+# When matched, write_file is excluded from the LLM's available tools
+# to prevent false-positive tool activations on small models.
+_CODE_EXAMPLE_RE: re.Pattern = re.compile(
+    r"(dame|muestra|enseña|ejemplos?\s+(de|en|para|con)\s+|"
+    r"ejemplo\s+de\s+c[oó]digo\s+(en|con|para)\s+|"
+    r"aprender\s+a\s+programar\s+(en|con)\s+|"
+    r"c[oó]mo\s+programar\s+(en|con)\s+|"
+    r"c[oó]mo\s+se\s+programa\s+(en|con)\s+|"
+    r"explica\s+(el\s+)?c[oó]digo\s+(de|en)\s+|"
+    r"tutorial\s+(de|en|para)\s+)"
+    r".*"
+    r"\b(python|java|javascript|typescript|rust|go|ruby|php|c\+\+|c#|kotlin|swift)\b",
+    re.IGNORECASE,
 )
 
 # --------------------------------------------------------------------------- #
@@ -137,6 +154,8 @@ HISTORIAL COMPRIMIDO DE SESIÓN:
 MEMORIA RECUPERADA:
 {memory_context}
 
+DOCUMENTOS INDEXADOS (usa SOLO estos textos para responder, NO inventes información):
+{document_context}
 {ambient_context}
 
 INSTRUCCIONES DE RESPUESTA:
@@ -175,6 +194,8 @@ HISTORIAL COMPRIMIDO DE SESIÓN:
 MEMORIA RECUPERADA:
 {memory_context}
 
+DOCUMENTOS INDEXADOS (usa SOLO estos textos para responder, NO inventes información):
+{document_context}
 {ambient_context}
 
 Responde de forma natural y directa en texto plano. No uses JSON ni ningún formato especial.
@@ -289,6 +310,13 @@ def _build_system_prompt(
 ) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
+
+    doc_lines = [
+        f"- [{c.source_path}]({c.score:.2f}): {c.content[:300]}"
+        for c in context.retrieved_documents
+    ]
+    document_context = "\n".join(doc_lines) if doc_lines else ""
+
     instructions = agent_state.profile.preferences.get("instructions", "")
     instructions += _reminder_write_prompt_extra(query, tool_defs)
 
@@ -320,6 +348,7 @@ def _build_system_prompt(
         current_year=temporal["year"],
         session_summary=agent_state.session_summary or "(sesión nueva)",
         memory_context=memory_context,
+        document_context=document_context,
         ambient_context=ambient_context,
         available_tools_detail=tools_detail,
     )
@@ -330,6 +359,10 @@ def _build_stream_system_prompt(
 ) -> str:
     memory_lines = [f"- {c.content[:200]}" for c in context.retrieved_memory]
     memory_context = "\n".join(memory_lines) if memory_lines else "(sin episodios previos)"
+
+    doc_lines = [f"- {c.content[:300]}" for c in context.retrieved_documents]
+    document_context = "\n".join(doc_lines) if doc_lines else ""
+
     instructions = agent_state.profile.preferences.get("instructions", "")
     temporal = _now_human()
     return _STREAM_SYSTEM_TEMPLATE.format(
@@ -339,6 +372,7 @@ def _build_stream_system_prompt(
         current_year=temporal["year"],
         session_summary=agent_state.session_summary or "(sesión nueva)",
         memory_context=memory_context,
+        document_context=document_context,
         ambient_context=ambient_context,
     )
 
@@ -468,7 +502,10 @@ def _chat_supports_grammar_stream(chat: object) -> bool:
         sig = inspect.signature(stream_fn)
     except (TypeError, ValueError):
         return False
-    return "grammar" in sig.parameters
+    if "grammar" in sig.parameters:
+        return True
+    # Accept **kwargs (VAR_KEYWORD) — grammar can be passed through
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
 
 
 # --------------------------------------------------------------------------- #
@@ -523,6 +560,9 @@ class AgentRuntime:
         config_getter: Callable[[], dict[str, Any]] | None = None,
         time_travel_recorder: TimeTravelRecorder | None = None,
         reflector: Reflector | None = None,
+        engine_suspender: Any = None,
+        authorized_read_paths_getter: Callable[[], list[str]] | None = None,
+        adaptive_ctx: AdaptiveContext | None = None,
     ) -> None:
         self._registry = registry
         self._state_store = state_store
@@ -533,12 +573,26 @@ class AgentRuntime:
         self._conv_store = conversation_store
         self._active_conversation_id: str | None = None
         self._config_getter = config_getter
+        self._engine_suspender = engine_suspender
+        self._authorized_read_paths_getter = authorized_read_paths_getter
+        self._adaptive_ctx = adaptive_ctx
         self._fast_path_router = FastPathRouter(
-            self._registry, self._tool_registry, config_getter=config_getter
+            self._registry,
+            self._tool_registry,
+            config_getter=config_getter,
+            authorized_read_paths_getter=authorized_read_paths_getter,
         )
         self._graph = self._build_graph()
         self._time_travel = time_travel_recorder
         self._reflector = reflector
+
+    def _request_ctx_size(self, query: str) -> int | None:
+        if self._adaptive_ctx is None or not self._adaptive_ctx.enabled:
+            return None
+        from core.observability.ram_monitor import RamMonitor
+
+        available_gb = RamMonitor().snapshot()["available_gb"]
+        return self._adaptive_ctx.select(query, available_gb)
 
     def prepare_conversation(self, conversation_id: str | None, agent_id: str) -> None:
         """Hydrate short-term history and per-conversation summary before a run."""
@@ -766,7 +820,12 @@ class AgentRuntime:
         return answer, agent_state
 
     def _try_file_search_fast_path(self, query: str, agent_state: AgentState) -> str | None:
-        return try_file_search_fast_path(query, list(agent_state.profile.authorized_tools or []))
+        paths = self._authorized_read_paths_getter() if self._authorized_read_paths_getter else None
+        return try_file_search_fast_path(
+            query,
+            list(agent_state.profile.authorized_tools or []),
+            authorized_paths=paths,
+        )
 
     def _finish_file_search_fast_path(
         self,
@@ -816,7 +875,15 @@ class AgentRuntime:
         result: FastPathResult,
         agent_state: AgentState,
     ) -> tuple[str, AgentState]:
-        if result.kind in ("time_date", "config_read", "math"):
+        if result.kind in (
+            "time_date",
+            "config_read",
+            "math",
+            "weather",
+            "dictionary",
+            "unit_conversion",
+            "system_info",
+        ):
             if result.warnings:
                 append_inference_warnings(list(result.warnings))
             warning = result.warnings[0] if result.warnings else f"{result.kind}_fast_path"
@@ -929,7 +996,7 @@ Provide a clear, concise summary in the user's language that answers their follo
                 },
                 {"role": "user", "content": summary_prompt},
             ]
-            summary = await chat.complete(messages, max_tokens=500, temperature=0.3)
+            summary = await chat.complete(messages, max_tokens=500, temperature=0.3, n_ctx=1024)
             return summary.strip()
         except Exception as exc:
             logger.warning("Web search summary: LLM failed: {}", exc)
@@ -950,6 +1017,8 @@ Provide a clear, concise summary in the user's language that answers their follo
         """
         from core.inference.registry import TaskHint  # avoid circular at module level
 
+        if self._engine_suspender:
+            self._engine_suspender.resume()
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
@@ -977,7 +1046,11 @@ Provide a clear, concise summary in the user's language that answers their follo
         )
 
         full_tokens: list[str] = []
-        stream = cast(AsyncIterable[str], chat.stream(messages))
+        ctx = self._request_ctx_size(query)
+        stream_kwargs = {}
+        if ctx is not None:
+            stream_kwargs["n_ctx"] = ctx
+        stream = cast(AsyncIterable[str], chat.stream(messages, **stream_kwargs))
         async for token in stream:
             full_tokens.append(token)
             yield token
@@ -1004,6 +1077,8 @@ Provide a clear, concise summary in the user's language that answers their follo
         intent_query: str | None = None,
         attachments: list[dict] | None = None,
     ) -> tuple[str, AgentState]:
+        if self._engine_suspender:
+            self._engine_suspender.resume()
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
@@ -1127,6 +1202,8 @@ Provide a clear, concise summary in the user's language that answers their follo
         When live streaming is unavailable or the model selects a tool, only the
         sentinel is yielded (caller should simulate tokens from ``answer``).
         """
+        if self._engine_suspender:
+            self._engine_suspender.resume()
         self.prepare_conversation(conversation_id, agent_id)
         agent_state = self._state_store.load(agent_id)
         agent_state.execution_count += 1
@@ -1388,7 +1465,8 @@ Provide a clear, concise summary in the user's language that answers their follo
             self._state_store.save(agent_state)
             state = {**state, "agent_state": _state_to_dict(agent_state)}
 
-        assembled = await self._context_builder.build(state["query"], agent_state)
+        rag_top_k = agent_state.profile.preferences.get("rag_top_k", None)
+        assembled = await self._context_builder.build(state["query"], agent_state, top_k=rag_top_k)
         ambient_context = ""
         if self._enricher and not should_skip_context_enricher():
             ambient_context = await self._enricher.enrich(state["query"])
@@ -1403,6 +1481,13 @@ Provide a clear, concise summary in the user's language that answers their follo
             and t in self._tool_definitions
             and (self._web_search_enabled() or t != "web_search")
         ]
+        # Dynamically exclude write_file for code-example-only queries
+        # (prevents small models from false-triggering write_file when
+        # the user is just asking for examples, not creating a file)
+        if any(td.name == "write_file" for td in tool_defs):
+            if _CODE_EXAMPLE_RE.search(state["query"]):
+                tool_defs = [td for td in tool_defs if td.name != "write_file"]
+                logger.debug("Excluded write_file for code-example query")
         system_prompt = _build_system_prompt(
             agent_state, assembled, tool_defs, ambient_context, query=state["query"]
         )
@@ -1471,7 +1556,10 @@ Provide a clear, concise summary in the user's language that answers their follo
                 list(agent_state.profile.authorized_tools),
                 model_id=os.getenv("CEREBRO_LLAMACPP_MODEL", ""),
             )
-        grammar = build_agent_response_grammar(self._authorized_tools_for_grammar(agent_state))
+        tools_for_grammar = self._authorized_tools_for_grammar(agent_state)
+        if _CODE_EXAMPLE_RE.search(state.get("query", "")):
+            tools_for_grammar = tuple(t for t in tools_for_grammar if t != "write_file")
+        grammar = build_agent_response_grammar(tools_for_grammar)
 
         slot_id: int | None = state.get("slot_id")
         token_queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -1483,22 +1571,33 @@ Provide a clear, concise summary in the user's language that answers their follo
             stream_kwargs: dict = {"grammar": grammar}
             if slot_id is not None:
                 stream_kwargs["slot_id"] = slot_id
+            ctx = self._request_ctx_size(state["query"])
+            if ctx is not None:
+                stream_kwargs["n_ctx"] = ctx
             stream = cast(AsyncIterable[str], chat.stream(messages, **stream_kwargs))
             async for delta in stream:
                 chunks.append(delta)
                 for token in parser.feed(delta):
                     await token_queue.put(token)
+            await token_queue.put(None)
             return "".join(chunks)
 
+        raw_response: str
         if use_live_stream:
             raw_response = await _collect_stream()
-            await token_queue.put(None)
         else:
-            raw_response = await chat.complete(messages, grammar=grammar)
-            await token_queue.put(None)
-
+            ctx = self._request_ctx_size(state["query"])
+            complete_kwargs = {"grammar": grammar}
+            if ctx is not None:
+                complete_kwargs["n_ctx"] = ctx
+            raw_response = await chat.complete(messages, **complete_kwargs)
         logger.debug("Reason node raw response: {}", raw_response[:200])
         updates = self._build_reason_updates(state, iterations, raw_response)
+
+        parser = AgentAnswerStreamParser()
+        for token in parser.feed(raw_response):
+            await token_queue.put(token)
+        await token_queue.put(None)
 
         async def _drain_tokens() -> AsyncIterator[str]:
             while True:

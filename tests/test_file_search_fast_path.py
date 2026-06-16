@@ -131,17 +131,62 @@ async def test_runtime_file_search_fast_path_skips_llm(tmp_path, monkeypatch):
     registry.select_for_task = MagicMock(return_value="llamacpp")
     registry.get_chat = MagicMock()
 
+    context_builder = MagicMock()
+    context_builder.maybe_consolidate = AsyncMock(return_value=False)
+    context_builder.build = AsyncMock(
+        return_value=MagicMock(session_history=[], memory_context="", sources=[])
+    )
+
     runtime = AgentRuntime(
         registry=registry,
         state_store=AgentStateStore(state_dir=str(tmp_path / "state")),
-        context_builder=MagicMock(),
+        context_builder=context_builder,
         tool_registry={},
         tool_definitions={},
-    )
-    runtime._context_builder.build = AsyncMock(
-        return_value=MagicMock(session_history=[], memory_context="", sources=[])
     )
 
     answer, _state = await runtime.run("busca archivos findme.md", "general-v1")
     assert "findme.md" in answer
     registry.get_chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_runtime_file_search_fast_path_uses_live_authorized_paths(tmp_path, monkeypatch):
+    """Verify that watched_folders (passed via authorized_read_paths_getter) are searched."""
+    # Only set env to "tmp_path/a" initially
+    path_a = tmp_path / "a"
+    path_b = tmp_path / "b"
+    path_a.mkdir()
+    path_b.mkdir()
+    (path_a / "from_a.txt").write_text("aaa")
+    (path_b / "from_b.txt").write_text("bbb")
+
+    monkeypatch.setenv("CEREBRO_AUTHORIZED_READ_PATHS", str(path_a))
+
+    # Mock app_state.authorized_read_paths to include path_b (simulates watched_folders merge)
+    merged_paths = [str(path_a), str(path_b)]
+    registry = MagicMock(spec=ProviderRegistry)
+    registry.select_for_task = MagicMock(return_value="llamacpp")
+    registry.get_chat = MagicMock()
+
+    context_builder = MagicMock()
+    context_builder.maybe_consolidate = AsyncMock(return_value=False)
+    context_builder.build = AsyncMock(
+        return_value=MagicMock(session_history=[], memory_context="", sources=[])
+    )
+
+    runtime = AgentRuntime(
+        registry=registry,
+        state_store=AgentStateStore(state_dir=str(tmp_path / "state")),
+        context_builder=context_builder,
+        tool_registry={},
+        tool_definitions={},
+        authorized_read_paths_getter=lambda: merged_paths,
+    )
+
+    # This file is only in path_b — not in env CEREBRO_AUTHORIZED_READ_PATHS
+    answer, _state = await runtime.run("busca archivos from_b.txt", "general-v1")
+    assert "from_b.txt" in answer, (
+        "file in watched_folders (path_b) should be found even though "
+        "it's not in CEREBRO_AUTHORIZED_READ_PATHS"
+    )

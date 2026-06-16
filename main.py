@@ -10,10 +10,12 @@ import os
 import re
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import httpx
 import numpy as np
+import psutil
 import uvicorn
 
 from core.agents.context_enricher import ContextEnricher
@@ -29,6 +31,9 @@ from core.inference.model_manager import ModelManager
 from core.inference.platform import mlx_available
 from core.inference.providers.llamacpp_provider import _VISION_MODEL_RE, LlamaCppChatProvider
 from core.inference.registry import ProviderRegistry
+from core.knowledge_sync.models import SyncSourceConfig
+from core.knowledge_sync.orchestrator import KnowledgeSyncOrchestrator
+from core.knowledge_sync.router import router as ks_router
 from core.memory.context_builder import ContextBuilder
 from core.memory.long_term import LongTermStore
 from core.memory.short_term import ShortTermStore
@@ -48,6 +53,38 @@ from core.tools.registry import (
 from core.utils.compressor import SemanticCompressor
 from ui.tray.server import app, app_state
 
+
+def _prompt_lite_profile() -> None:
+    """If ≤10 GB RAM and running interactively, offer the lite-8gb profile."""
+    if not sys.stdin.isatty():
+        return
+    if os.environ.get("CEREBRO_SKIP_LITE_PROMPT"):
+        return
+    # If user already set any CEREBRO_* env vars, they have their own config
+    if any(k.startswith("CEREBRO_") for k in os.environ):
+        return
+    try:
+        total_ram_gb = psutil.virtual_memory().total / (1024**3)
+    except Exception:
+        return
+    if total_ram_gb > 10:
+        return
+
+    print(f"\n💻 System RAM: {total_ram_gb:.0f} GB — lite-8gb profile recommended")
+    print("   (local embeddings, no MLX, ContextEnricher off, lower RAM usage)")
+    answer = input("Use lite profile? [Y/n]: ").strip().lower()
+    if answer in ("", "y", "yes"):
+        os.environ.setdefault("CEREBRO_LLAMACPP_SIMPLE", "true")
+        os.environ.setdefault("CEREBRO_PROACTIVE_CONTEXT", "false")
+        os.environ.setdefault("CEREBRO_MLX_ENABLED", "false")
+        os.environ.setdefault("CEREBRO_EMBEDDINGS_BACKEND", "local")
+        os.environ.setdefault("CEREBRO_RAM_PRIMARY_GB", "0.8")
+        os.environ.setdefault("CEREBRO_RAM_FALLBACK_GB", "0.4")
+        print("✅ lite-8gb profile activated\n")
+
+
+_prompt_lite_profile()
+
 DB_PATH = os.path.expanduser(os.getenv("CEREBRO_DB", "~/.cerebro/db"))
 STATE_DIR = os.path.expanduser(os.getenv("CEREBRO_STATE", "~/.cerebro/state"))
 PORT = int(os.getenv("CEREBRO_PORT", "7842"))
@@ -56,7 +93,7 @@ EMBEDDING_CACHE_TTL_DAYS = int(os.getenv("CEREBRO_EMBEDDING_CACHE_TTL_DAYS", "30
 EMBEDDING_CACHE_TTL_SECONDS = EMBEDDING_CACHE_TTL_DAYS * 86400
 RAM_PRIMARY_GB = float(os.getenv("CEREBRO_RAM_PRIMARY_GB", "1.0"))
 RAM_FALLBACK_GB = float(os.getenv("CEREBRO_RAM_FALLBACK_GB", "0.3"))
-MLX_MODEL = os.getenv("CEREBRO_MLX_MODEL", "mlx-community/Phi-4-mini-instruct-4bit")
+MLX_MODEL = os.getenv("CEREBRO_MLX_MODEL", "mlx-community/Qwen3.5-2B-MLX-4bit")
 MLX_ENABLED = os.getenv("CEREBRO_MLX_ENABLED", "auto")  # "auto" | "true" | "false"
 INFERENCE_BACKEND = os.getenv(
     "CEREBRO_INFERENCE_BACKEND", "llamacpp"
@@ -191,6 +228,31 @@ def _build_app_state() -> None:
 
     _ensure_chat_args()
 
+    # ── EngineSuspender: SIGSTOP engine after inactivity ─────────────
+    from core.inference.engine_suspender import EngineSuspender
+
+    engine_suspender = EngineSuspender(timeout_s=180)
+    try:
+        _pid = subprocess.run(
+            ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if _pid.returncode == 0 and _pid.stdout.strip():
+            engine_suspender.bind_pid(int(_pid.stdout.strip()))
+            engine_suspender.start_background()
+    except Exception:
+        logger.warning("EngineSuspender: could not find engine PID — suspender disabled")
+    app_state.engine_suspender = engine_suspender
+
+    # ── AdaptiveContext: shrink ctx-size under RAM pressure ───────────
+    from core.inference.adaptive_context import AdaptiveContext
+
+    app_state.adaptive_ctx = AdaptiveContext()
+
+    # ─────────────────────────────────────────────────────────────────
+
     # Fleet orchestration for intelligent startup model selection
     fleet = FleetOrchestrator()
     fleet_selection = fleet.select_on_startup()
@@ -291,6 +353,28 @@ def _build_app_state() -> None:
                 "Set CEREBRO_INFERENCE_BACKEND=llamacpp, CEREBRO_INFERENCE_BACKEND=claude "
                 "(with ANTHROPIC_API_KEY), or ensure MLX is available on Apple Silicon."
             )
+
+        # Kill any stale llama.cpp engine to free ~2.5 GB RAM
+        try:
+            _pid = subprocess.run(
+                ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if _pid.returncode == 0 and _pid.stdout.strip():
+                for p in _pid.stdout.strip().split("\n"):
+                    try:
+                        os.kill(int(p), signal.SIGTERM)
+                        logger.info("Killed stale llama.cpp on :8080 to free RAM for MLX")
+                    except OSError:
+                        pass
+                import time as _time
+
+                _time.sleep(2)
+        except Exception:
+            pass
+
         from core.inference.providers.mlx_provider import MlxChatProvider, MlxEmbeddingProviderStub
 
         embed_base = _make_embed_provider()
@@ -326,13 +410,8 @@ def _build_app_state() -> None:
         model=LLAMACPP_MODEL,
         base_url=LLAMACPP_URL,
     )
-    context_builder = ContextBuilder(
-        short_term=short_term,
-        long_term=long_term,
-        vector_store=vector_store,
-        inference_engine=llm_engine,
-    )
 
+    # ── Semantic Compressor ────────────────────────────────────────────
     compressor_embed_fn = None
     if os.getenv("CEREBRO_LLAMACPP_EMBED_URL"):
         try:
@@ -372,8 +451,44 @@ def _build_app_state() -> None:
         logger.info("SemanticCompressor inicializado usando Path B (TF-IDF)")
 
     compressor = SemanticCompressor(embed_fn=compressor_embed_fn)
-    rag_engine = RAGQueryEngine(store=vector_store, engine=llm_engine, compressor=compressor)
+
+    context_builder = ContextBuilder(
+        short_term=short_term,
+        long_term=long_term,
+        vector_store=vector_store,
+        inference_engine=llm_engine,
+        embed_provider=embed,
+        compressor=compressor,
+    )
+
+    rag_embed_fn = embed.embed if hasattr(embed, "embed") else None
+    rag_engine = RAGQueryEngine(
+        store=vector_store,
+        engine=llm_engine,
+        compressor=compressor,
+        embed_fn=rag_embed_fn,
+    )
     app_state.rag_engine = rag_engine
+
+    # ── Knowledge Sync Orchestrator ────────────────────────────────────
+    app_state.knowledge_sync_orchestrator = KnowledgeSyncOrchestrator(
+        registry=registry,
+        vector_store=vector_store,
+        inference_engine=llm_engine,
+        embed_provider=embed,
+        state_dir=STATE_DIR,
+        interest_tags=(
+            os.getenv("CEREBRO_INTEREST_TAGS", "").split(",")
+            if os.getenv("CEREBRO_INTEREST_TAGS")
+            else None
+        ),
+    )
+
+    app.include_router(ks_router)
+
+    for src_cfg in app_state._config.get("knowledge_sync", {}).get("sources", []):
+        app_state.knowledge_sync_orchestrator.add_source(SyncSourceConfig(**src_cfg))
+    # ───────────────────────────────────────────────────────────────────
 
     # ── Desktop Automation (Recorder + Workflow Store) ────────────────
     from core.automation.recorder import Recorder
@@ -415,6 +530,7 @@ def _build_app_state() -> None:
             current_year="<dynamic>",
             session_summary="<dynamic>",
             memory_context="<dynamic>",
+            document_context="",
             ambient_context="",
             available_tools_detail="<tools>",
         )
@@ -460,6 +576,9 @@ def _build_app_state() -> None:
         config_getter=lambda: app_state._config,
         time_travel_recorder=time_travel,
         reflector=reflector,
+        engine_suspender=engine_suspender,
+        authorized_read_paths_getter=lambda: app_state.authorized_read_paths,
+        adaptive_ctx=app_state.adaptive_ctx,
     )
 
     # A7: Task planner for multi-step decomposition

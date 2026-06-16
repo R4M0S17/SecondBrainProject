@@ -209,6 +209,13 @@ export interface AppConfig {
   inference_backend: "llamacpp" | "claude" | "mlx";
   /** When false, MLX secondary provider is disabled (persisted for lite / 8 GB setups). */
   mlx_enabled?: boolean;
+  /** Knowledge sync configuration. */
+  knowledge_sync?: {
+    enabled: boolean;
+    sources?: SyncSource[];
+    interest_tags?: string[];
+    max_items_per_sync?: number;
+  };
 }
 
 export interface LocalModel {
@@ -311,6 +318,78 @@ export interface ClaudeModel {
   label: string;
   context_k: number;
   note: string;
+}
+
+// ── Knowledge Sync types ──────────────────────────────────────────────
+
+export type SyncSourceType = "rss" | "github" | "web" | "arxiv" | "youtube" | "pubmed";
+export type SyncStatusType = "idle" | "syncing" | "error";
+
+export interface SyncSource {
+  id: string;
+  source_type: SyncSourceType;
+  uri: string;
+  label: string;
+  enabled: boolean;
+  interval_minutes: number;
+  max_items_per_sync: number;
+  filter_min_relevance: number;
+  tags: string[];
+  schedule_cron: string;
+  status: SyncStatusType;
+  last_sync_at: number | null;
+  last_error: string;
+  items_indexed: number;
+}
+
+export interface SyncResult {
+  source_id: string;
+  fetched: number;
+  filtered_out: number;
+  indexed: number;
+  errors: string[];
+  duration_ms: number;
+}
+
+export interface SyncTriggerPayload {
+  force?: boolean;
+  source_id?: string;
+}
+
+export interface SyncSourceFormData {
+  id: string;
+  source_type: SyncSourceType;
+  uri: string;
+  label: string;
+  interval_minutes: number;
+  tags: string[];
+  schedule_cron: string;
+}
+
+export interface SyncProgressEvent {
+  stage: string;
+  source: string;
+  [key: string]: unknown;
+}
+
+export interface SyncExportPayload {
+  version: number;
+  exported_at: string;
+  sources: {
+    id: string;
+    source_type: string;
+    uri: string;
+    label: string;
+    interval_minutes: number;
+    tags: string[];
+    schedule_cron: string;
+  }[];
+}
+
+export interface SyncImportResponse {
+  status: string;
+  added: number;
+  errors: string[];
 }
 
 export const CLAUDE_MODELS: ClaudeModel[] = [

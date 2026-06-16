@@ -584,14 +584,13 @@ async def upload_files_endpoint(files: list[UploadFile] = File(...)) -> list[dic
 
 
 class SentenceBuffer:
-    """Buffers tokens and flushes at sentence boundaries.
+    """Buffers tokens and flushes at short intervals for progressive display.
 
-    Reduces DOM repaint events by emitting multi-token chunks instead of
-    single tokens. Flushes on: sentence-ending punctuation, newlines, max
-    chars exceeded, or max age exceeded.
+    Emits tokens progressively to simulate typing effect. Flushes on:
+    sentence-ending punctuation, newlines, max chars exceeded, or max age exceeded.
     """
 
-    def __init__(self, max_chars: int = 120, max_age_ms: int = 200) -> None:
+    def __init__(self, max_chars: int = 30, max_age_ms: int = 50) -> None:
         self._buf: list[str] = []
         self._max_chars = max_chars
         self._max_age_ms = max_age_ms
@@ -603,7 +602,7 @@ class SentenceBuffer:
         age_ms = (time.monotonic() - self._last_flush) * 1000 if self._last_flush > 0 else 0.0
         if (
             len(text) >= self._max_chars
-            or text.rstrip().endswith((".", "!", "?", "\n"))
+            or text.rstrip().endswith((".", "!", "?", "\n", ",", ";", ":"))
             or (self._last_flush > 0 and age_ms >= self._max_age_ms)
         ):
             return self.flush()
@@ -1277,6 +1276,17 @@ async def health_endpoint() -> HealthResponse:
     )
 
 
+@api.get("/engine/activity")
+async def engine_activity_endpoint() -> dict:
+    return {
+        "engine_state": (
+            getattr(app_state, "engine_suspender", None).state
+            if hasattr(app_state, "engine_suspender") and app_state.engine_suspender
+            else "unknown"
+        )
+    }
+
+
 @api.get("/status", response_model=StatusResponse)
 async def status_endpoint() -> StatusResponse:
     cpu_percent = psutil.cpu_percent(interval=0)
@@ -1578,6 +1588,16 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
         if backend in registry.available_providers():
             registry.set_primary(backend)
             logger.info("Inference backend switched to '{}'", backend)
+            # Persist to desktop.json so choice survives restart
+            try:
+                _desktop_cfg_path = Path.home() / ".cerebro" / "desktop.json"
+                if _desktop_cfg_path.is_file():
+                    _dcfg = json.loads(_desktop_cfg_path.read_text())
+                    _dcfg["inference_backend"] = backend
+                    _desktop_cfg_path.write_text(json.dumps(_dcfg, indent=2))
+                    logger.info("Persisted inference_backend='{}' to desktop.json", backend)
+            except Exception:
+                logger.warning("Failed to persist inference_backend to desktop.json")
         else:
             logger.warning(
                 "Backend '{}' not available (registered: {})",

@@ -14,12 +14,13 @@ returned by `settings_getter`.
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from loguru import logger
@@ -78,6 +79,8 @@ class ProactiveScheduler:
         # calendar event source (optional — injected after Module 11 is active)
         self._calendar_reader: object | None = None
 
+        self._ks_orchestrator: Any = None
+
         self._scheduler = BackgroundScheduler()
         self._scheduler.add_job(
             self._tick,
@@ -131,6 +134,10 @@ class ProactiveScheduler:
     def attach_calendar_reader(self, reader: object) -> None:
         """Inject a Module 11 CalendarReader after it becomes available."""
         self._calendar_reader = reader
+
+    def attach_knowledge_sync_orchestrator(self, orch: Any) -> None:
+        """Inject the KnowledgeSyncOrchestrator for background sync."""
+        self._ks_orchestrator = orch
 
     # ------------------------------------------------------------------
     # Trigger logic (pure — easy to unit-test)
@@ -211,6 +218,18 @@ class ProactiveScheduler:
         events.extend(self.check_inactivity(self._last_activity))
         events.extend(self.check_calendar())
         self._emit_all(events)
+        self._knowledge_sync_tick()
+
+    def _knowledge_sync_tick(self) -> None:
+        if self._ks_orchestrator is None:
+            return
+        try:
+            cfg = self._settings_getter().get("knowledge_sync", {})
+            if not cfg.get("enabled", False):
+                return
+            asyncio.run(self._ks_orchestrator.sync_all())
+        except Exception as exc:
+            logger.warning("Knowledge sync tick failed: {}", exc)
 
     def _emit_all(self, events: list[TriggerEvent]) -> None:
         if self._is_dnd():

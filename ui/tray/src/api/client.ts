@@ -24,6 +24,9 @@ import type {
   DebugStep,
   DebugStepDetail,
   Workflow,
+  SyncSource,
+  SyncResult,
+  SyncTriggerPayload,
 } from "./types";
 
 export const AGENT_ID_MAP: Record<AgentId, string> = {
@@ -169,6 +172,10 @@ export async function setFleetMode(
 
 export async function getStatus(): Promise<StatusResponse> {
   return request<StatusResponse>("/api/status");
+}
+
+export async function getEngineActivity(): Promise<{ engine_state: "active" | "suspended" | "unknown" }> {
+  return request<{ engine_state: "active" | "suspended" | "unknown" }>("/api/engine/activity");
 }
 
 export async function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
@@ -356,4 +363,161 @@ export async function getDebugStepDetail(
   stepId: string
 ): Promise<DebugStepDetail> {
   return request<DebugStepDetail>(`/api/debug/steps/${stepId}`);
+}
+
+// ── Knowledge Sync ────────────────────────────────────────────────────
+
+export async function listSyncSources(): Promise<SyncSource[]> {
+  return request<SyncSource[]>("/api/knowledge-sync/sources");
+}
+
+export async function addSyncSource(
+  source: SyncSource
+): Promise<{ status: string; id: string }> {
+  return request<{ status: string; id: string }>("/api/knowledge-sync/sources", {
+    method: "POST",
+    body: JSON.stringify(source),
+  });
+}
+
+export async function removeSyncSource(
+  sourceId: string
+): Promise<{ status: string }> {
+  return request<{ status: string }>(
+    `/api/knowledge-sync/sources/${encodeURIComponent(sourceId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function triggerSync(
+  payload: SyncTriggerPayload
+): Promise<{ status: string }> {
+  return request<{ status: string }>("/api/knowledge-sync/sync", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function syncOneSource(
+  sourceId: string
+): Promise<SyncResult> {
+  return request<SyncResult>(
+    `/api/knowledge-sync/sync/${encodeURIComponent(sourceId)}`,
+    { method: "POST" }
+  );
+}
+
+export async function getSyncSourceState(
+  sourceId: string
+): Promise<{
+  source_id: string;
+  status: string;
+  last_sync_at: number;
+  last_error: string;
+  items_indexed: number;
+}> {
+  return request<{
+    source_id: string;
+    status: string;
+    last_sync_at: number;
+    last_error: string;
+    items_indexed: number;
+  }>(`/api/knowledge-sync/sources/${encodeURIComponent(sourceId)}/state`);
+}
+
+export async function triggerSyncStream(
+  payload: SyncTriggerPayload,
+  onProgress: (event: { stage: string; [key: string]: unknown }) => void,
+  onComplete: (result: { source_id: string; indexed: number; errors: string[] }) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/knowledge-sync/sync/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeaders() },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new ApiError(res.status, res.statusText);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const block of parts) {
+      const lines = block.split("\n");
+      let eventType = "message";
+      let dataStr = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+        else if (line.startsWith("data: ")) dataStr = line.slice(6).trim();
+      }
+      if (!dataStr) continue;
+      if (eventType === "done") return;
+      try {
+        const data = JSON.parse(dataStr) as Record<string, unknown>;
+        if (eventType === "progress") {
+          onProgress(data as { stage: string; [key: string]: unknown });
+        } else if (eventType === "complete") {
+          onComplete(data as { source_id: string; indexed: number; errors: string[] });
+        }
+      } catch {
+        // ignore malformed data
+      }
+    }
+  }
+}
+
+export async function exportSyncSources(): Promise<{
+  version: number;
+  exported_at: string;
+  sources: {
+    id: string;
+    source_type: string;
+    uri: string;
+    label: string;
+    interval_minutes: number;
+    tags: string[];
+    schedule_cron: string;
+  }[];
+}> {
+  return request<{
+    version: number;
+    exported_at: string;
+    sources: {
+      id: string;
+      source_type: string;
+      uri: string;
+      label: string;
+      interval_minutes: number;
+      tags: string[];
+      schedule_cron: string;
+    }[];
+  }>("/api/knowledge-sync/export");
+}
+
+export async function importSyncSources(
+  payload: {
+    version: number;
+    sources: {
+      id: string;
+      source_type: string;
+      uri: string;
+      label: string;
+      interval_minutes: number;
+      tags: string[];
+      schedule_cron: string;
+    }[];
+  }
+): Promise<{ status: string; added: number; errors: string[] }> {
+  return request<{ status: string; added: number; errors: string[] }>(
+    "/api/knowledge-sync/import",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
 }

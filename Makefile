@@ -17,7 +17,7 @@ test-stable:
 	$(PYTHON) -m pytest tests/test_stable_fast_paths.py tests/test_file_write_fast_path.py tests/test_file_write_calendar_fusion.py tests/test_calendar_fast_path.py tests/test_file_search_fast_path.py tests/test_math_fast_path.py -v -m "not live" --tb=short
 
 smoke:
-	bash scripts/smoke.sh
+	$(PYTHON) -m pytest tests/test_smoke_live.py -v --tb=short
 
 run:
 	$(PYTHON) main.py

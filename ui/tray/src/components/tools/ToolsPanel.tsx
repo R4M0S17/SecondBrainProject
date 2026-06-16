@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useToolsStore } from "../../stores/tools";
 import { useChatStore } from "../../stores/chat";
 import { useSystemStore } from "../../stores/system";
@@ -58,10 +58,18 @@ export default function ToolsPanel() {
   const { tools, loading, error, load, toggleTool } = useToolsStore();
   const messages = useChatStore((s) => s.messages);
   const status = useSystemStore((s) => s.status);
+  const retryRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     load();
+    return () => { if (retryRef.current) clearTimeout(retryRef.current); };
   }, [load]);
+
+  useEffect(() => {
+    if (!loading && tools.length === 0 && !error) {
+      retryRef.current = setTimeout(load, 2000);
+    }
+  }, [loading, tools.length, error, load]);
 
   const toolUsage = useMemo(() => {
     const counts: Record<string, { count: number; totalLatency: number }> = {};
@@ -113,61 +121,67 @@ export default function ToolsPanel() {
               <span className="material-symbols-outlined text-[14px]">construction</span>
               Tool Browser
             </h3>
-            {Object.entries(groupedTools).map(([category, cats]) => (
-              <div key={category} className="mb-3">
-                <h4 className="text-[10px] font-bold tracking-[0.1em] text-on-surface-variant uppercase mb-1.5 px-1">
-                  {category}
-                </h4>
-                <div className="space-y-[1px]">
-                  {cats.map((t) => (
-                    <div
-                      key={t.name}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded hover:bg-surface-container-low transition-colors"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-[12px] text-on-surface truncate">
-                          {t.name}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <span
-                            className={`text-[9px] px-1 rounded leading-[14px] ${
-                              SCOPE_COLORS[t.scope] || "bg-surface-container"
-                            } text-on-surface-variant font-medium`}
-                            title={`Scope: ${SCOPE_LABELS[t.scope] || t.scope}`}
-                          >
-                            {SCOPE_LABELS[t.scope] || t.scope}
+            {tools.length === 0 && !loading ? (
+              <div className="p-3 rounded-lg border border-outline-variant/20 bg-surface-container/30 opacity-70 flex items-center justify-center">
+                <span className="text-xs text-outline">No tools registered (runtime not ready)</span>
+              </div>
+            ) : (
+              Object.entries(groupedTools).map(([category, cats]) => (
+                <div key={category} className="mb-3">
+                  <h4 className="text-[10px] font-bold tracking-[0.1em] text-on-surface-variant uppercase mb-1.5 px-1">
+                    {category}
+                  </h4>
+                  <div className="space-y-[1px]">
+                    {cats.map((t) => (
+                      <div
+                        key={t.name}
+                        className="flex items-center justify-between px-2.5 py-1.5 rounded hover:bg-surface-container-low transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-[12px] text-on-surface truncate">
+                            {t.name}
                           </span>
-                          {t.requires_confirmation && (
+                          <div className="flex items-center gap-1">
                             <span
-                              className="text-[9px] px-1 rounded bg-[#2a2a1e] text-yellow-500 font-medium"
-                              title="Requires user confirmation"
+                              className={`text-[9px] px-1 rounded leading-[14px] ${
+                                SCOPE_COLORS[t.scope] || "bg-surface-container"
+                              } text-on-surface-variant font-medium`}
+                              title={`Scope: ${SCOPE_LABELS[t.scope] || t.scope}`}
                             >
-                              Confirm
+                              {SCOPE_LABELS[t.scope] || t.scope}
                             </span>
-                          )}
+                            {t.requires_confirmation && (
+                              <span
+                                className="text-[9px] px-1 rounded bg-[#2a2a1e] text-yellow-500 font-medium"
+                                title="Requires user confirmation"
+                              >
+                                Confirm
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => toggleTool(t.name, !t.enabled)}
+                            role="switch"
+                            aria-checked={t.enabled}
+                            className={`w-7 h-3.5 rounded-full relative cursor-pointer transition-colors shrink-0 ${
+                              t.enabled ? "bg-primary-container" : "bg-surface-container-highest"
+                            }`}
+                          >
+                            <div
+                              className={`absolute top-[1px] w-[10px] h-[10px] bg-white rounded-full transition-transform ${
+                                t.enabled ? "translate-x-[14px]" : "translate-x-[1px]"
+                              }`}
+                            />
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={() => toggleTool(t.name, !t.enabled)}
-                          role="switch"
-                          aria-checked={t.enabled}
-                          className={`w-7 h-3.5 rounded-full relative cursor-pointer transition-colors shrink-0 ${
-                            t.enabled ? "bg-primary-container" : "bg-surface-container-highest"
-                          }`}
-                        >
-                          <div
-                            className={`absolute top-[1px] w-[10px] h-[10px] bg-white rounded-full transition-transform ${
-                              t.enabled ? "translate-x-[14px]" : "translate-x-[1px]"
-                            }`}
-                          />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </section>
 
           {/* ── Recent Usage ── */}

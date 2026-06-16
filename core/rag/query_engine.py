@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections.abc
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,15 +41,21 @@ class RAGQueryEngine:
         store: VectorStore,
         engine: InferenceEngine,
         compressor: SemanticCompressor | None = None,
+        embed_fn: (
+            collections.abc.Callable[[str], collections.abc.Awaitable[list[float]]] | None
+        ) = None,
     ) -> None:
         self.store = store
         self.engine = engine
         self.compressor = compressor
+        self._embed_fn = embed_fn
 
     async def query(self, question: str, top_k: int = 5) -> RAGResponse:
         start = time.monotonic()
 
-        chunks = await self.store.search(question, self.engine, top_k=top_k)
+        chunks = await self.store.search(
+            question, engine=self.engine, top_k=top_k, embed_fn=self._embed_fn
+        )
         before = len(chunks)
         if self.compressor is not None:
             chunks = self.compressor.compress(question, chunks)

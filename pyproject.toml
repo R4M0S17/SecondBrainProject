@@ -9,6 +9,7 @@ description = "Cerebro Digital Local — Agentic Personal OS"
 requires-python = ">=3.11"
 dependencies = [
     # Inference / LLM
+    "feedparser>=6.0",
     "httpx>=0.27",
     "anthropic>=0.40.0",
     # Env file loading
@@ -54,6 +55,8 @@ embeddings = [
 mlx = [
     "mlx>=0.16",
     "mlx-lm>=0.19",
+    "mlx-vlm>=0.6",
+    "torchvision>=0.20",
 ]
 dev = [
     "black>=24.0",
@@ -103,3 +106,7 @@ warn_unused_ignores = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "live: requires a running Cerebro backend (make engine + make run)",
+    "slow: takes longer than a few seconds (e.g. full LLM inference)",
+]

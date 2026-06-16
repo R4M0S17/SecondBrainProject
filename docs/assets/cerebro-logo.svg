@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100" width="400" height="100">
+  <!-- Brain icon -->
+  <g transform="translate(10, 15)">
+    <path d="M30 70 Q10 65 8 50 Q6 35 20 28 Q18 15 30 10 Q42 5 50 15 Q55 10 62 12 Q70 15 68 25 Q78 28 78 40 Q78 52 68 58 Q65 65 58 68 Q50 72 42 68 Q35 72 30 70Z"
+          fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M25 40 Q30 35 38 40" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M42 40 Q50 32 58 38" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M35 50 Q42 45 50 50" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M30 55 Q38 50 45 55" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+    <path d="M55 48 Q60 45 65 50" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+  </g>
+  <!-- Cerebro text -->
+  <text x="95" y="68" font-family="system-ui, -apple-system, sans-serif" font-size="42" font-weight="700" fill="currentColor" letter-spacing="1">Cerebro</text>
+  <text x="95" y="88" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="400" fill="currentColor" letter-spacing="3" opacity="0.6">SECOND BRAIN — LOCAL AI OS</text>
+</svg>

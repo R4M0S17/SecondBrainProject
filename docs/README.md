@@ -1,39 +1,21 @@
 # Documentation index
 
-Canonical technical docs live under **`docs/`** at the repository root (not under `cerebro/`).
+Canonical technical docs live under **`docs/`** at the repository root.
 
 | Area | Path | Contents |
 |------|------|----------|
-| **Project entry** | [`../README.md`](../README.md) | One-screen overview + links |
-| **Architecture & ops** | [`../CLAUDE.md`](../CLAUDE.md) | Stack overview, make targets, env vars, REST API sketch |
-| **Codebase map** | [`architecture/program-overview.md`](architecture/program-overview.md) | Full directory and module reference |
-| **Fast paths (stable)** | [`architecture/fast-paths.md`](architecture/fast-paths.md) · [`stable-prompts.md`](architecture/stable-prompts.md) · [`adding-a-fast-path.md`](architecture/adding-a-fast-path.md) | Pipeline order, regression prompts, checklist for new features |
-| **Fast path evolution plan** | [`architecture/fast-path-evolution-plan.md`](architecture/fast-path-evolution-plan.md) | Phased plan: docs, test-stable, router refactor |
-| **Plans & roadmaps** | [`plans/README.md`](plans/README.md) | Stabilization, vision, feature specs, optimization |
-| **Connection checklist** | [`connection/progress.md`](connection/progress.md) | Backend ↔ frontend wiring modules and smoke-test notes |
-| **HTTP / API usage** | [`connection/api-guide.md`](connection/api-guide.md) | REST examples |
-| **Runbooks** | [`guides/8gb-mac-quickstart.md`](guides/8gb-mac-quickstart.md) · [`guides/FIX_CHAT_RUNTIME_WARNINGS.md`](guides/FIX_CHAT_RUNTIME_WARNINGS.md) · [`guides/howToRun.md`](guides/howToRun.md) · [`guides/running-es.md`](guides/running-es.md) · [`guides/llamacpp-run-guide.md`](guides/llamacpp-run-guide.md) | 8 GB Mac one-pager; embed/RAM/context-enricher warnings; English / Spanish startup; llama.cpp notes |
-| **Inference** | [`inference/`](inference/) | llama.cpp, MLX, RAM notes |
-| **Frontend** | [`frontend/`](frontend/) | Design, roadmap, pending changes |
-| **Product / spec** | [`project/`](project/) | Specs, current state, Obsidian inspiration |
-| **Model efficiency experiment** | [`testing/`](testing/) | PLAN, EXECUTION_GUIDE, QUICK_START, EXPERIMENTAL_SUMMARY |
-| **Pytest remediation (known failures)** | [`testing/PYTEST_REMEDIATION_PATH.md`](testing/PYTEST_REMEDIATION_PATH.md) | Ordered fixes for fleet monitor / phase7 args / planner parsing |
-| **Issues & playbook** | [`PROJECT_ISSUES_AND_SOLUTIONS.md`](PROJECT_ISSUES_AND_SOLUTIONS.md) | Long-form troubleshooting ledger |
-| **Incidents** | [`incidents/README.md`](incidents/README.md) | Calendar / llama.cpp bug write-ups |
-| **Manual QA** | [`../manual_tests/README.md`](../manual_tests/README.md) | Tray sessions, E2E fix notes, smoke reports |
-
-### Plans (quick links)
-
-| Document | Path |
-|----------|------|
-| Cerebro stabilization | [`plans/stabilization/fix-cerebro.md`](plans/stabilization/fix-cerebro.md) |
-| Session-1 follow-up | [`plans/stabilization/fix-plan-v2.md`](plans/stabilization/fix-plan-v2.md) |
-| ImplemeFIX | [`plans/stabilization/impleme-fix.md`](plans/stabilization/impleme-fix.md) · [implementation](plans/stabilization/impleme-fix-implementation.md) |
-| Future vision | [`plans/vision/future-cognitive-os.md`](plans/vision/future-cognitive-os.md) · [`ideas-future.md`](plans/vision/ideas-future.md) |
-| Feature specs | [`plans/features/`](plans/features/) |
-| Optimization roadmaps | [`plans/roadmaps/`](plans/roadmaps/) |
-
-Duplicate copies under **`cerebro/`** were removed on purpose; use this tree or [`cerebro/docs/README.md`](../cerebro/docs/README.md) for the short pointer.
+| **Architecture & pipeline** | [`architecture/`](architecture/) | Fast paths, program overview, memory plan, unificación Cerebro |
+| **Frontend UI** | [`frontend/`](frontend/) | Design specs, roadmap, redesign plan, changelog |
+| **Guides & runbooks** | [`guides/`](guides/) | How to run, quickstart, macOS port, merge steps, knowledge-sync |
+| **Inference backends** | [`inference/`](inference/) | llama.cpp, MLX, RAM optimization |
+| **Plans & roadmaps** | [`plans/`](plans/) | Features (Claude, fleet orchestrator, file search), stabilization, optimization, future vision |
+| **Reference** | [`reference/`](reference/) | Specs, benchmarks, comparisons, issues ledger, changelogs |
+| **Records (ADRs)** | [`records/`](records/) | Semantic compressor decisions and plans |
+| **Incidents** | [`incidents/`](incidents/) | Calendar bugs, llamacpp fixes |
+| **Testing & QA** | [`testing/`](testing/) | Test reports, manual QA sessions, E2E tests, smoke tests |
+| **Implementation notes** | [`implementation/`](implementation/) | Path RAG hybrid, local RAG injector, knowledge sync agent |
+| **Project / product** | [`project/`](project/) | Specs v1.0/v1.1, current state, Obsidian inspiration |
+| **Connection / API** | [`connection/`](connection/) | REST API guide, backend-frontend wiring progress |
 
 ---
 
@@ -41,7 +23,7 @@ Duplicate copies under **`cerebro/`** were removed on purpose; use this tree or 
 
 **Cerebro** is a **local-first, agentic personal assistant** packaged as a desktop application. A **Python (FastAPI)** backend and a **React + TypeScript** UI (with **Tauri** for the desktop shell) talk over **HTTP** on a fixed port (by default **7842**). The product is meant to sit on your machine like a second brain: you ask questions, the system reasons with **retrieval-augmented memory** over your own files, and it can use **tools** (filesystem, search, calendar, controlled execution) when the agent decides they are needed—sometimes pausing for **your explicit approval** before risky actions.
 
-Under the hood, **LangGraph-style agent runtimes** route work between specialized behaviors (for example general chat, code-oriented help, or calendar-aware flows). **Short-term** context keeps the current session coherent; **long-term** storage (vector search, for example over **LanceDB**) brings back relevant chunks from documents you have indexed. **Indexing** ingests PDFs and office-style documents, chunks them, embeds them, and keeps them searchable as your library changes (with optional filesystem watching to re-index). The stack is designed so that **inference** is pluggable: **llama.cpp** on GGUF models, **MLX** on Apple Silicon when enabled, and optionally **Anthropic Claude** for cloud chat—while **embeddings** for RAG typically remain **local** so your knowledge base does not depend on a single vendor’s embedding API.
+Under the hood, **LangGraph-style agent runtimes** route work between specialized behaviors (for example general chat, code-oriented help, or calendar-aware flows). **Short-term** context keeps the current session coherent; **long-term** storage (vector search, for example over **LanceDB**) brings back relevant chunks from documents you have indexed. **Indexing** ingests PDFs and office-style documents, chunks them, embeds them, and keeps them searchable as your library changes (with optional filesystem watching to re-index). The stack is designed so that **inference** is pluggable: **llama.cpp** on GGUF models, **MLX** on Apple Silicon when enabled, and optionally **Anthropic Claude** for cloud chat—while **embeddings** for RAG typically remain **local** so your knowledge base does not depend on a single vendor's embedding API.
 
 ---
 
@@ -51,7 +33,7 @@ Most assistants are either **cloud-only** (data leaves your machine) or **single
 
 - **Privacy and ownership by default.** Your primary path can keep weights and document embeddings on hardware you control, with optional cloud chat only when you opt in and configure keys.
 - **Agentic loop with governance.** The system is built around **tools and policies**: dangerous operations can surface as **pending confirmations** in the UI instead of silently executing.
-- **Personal knowledge, not just prompts.** RAG, watched folders, and indexing tie answers to **your** corpus rather than only the model’s training cutoff.
+- **Personal knowledge, not just prompts.** RAG, watched folders, and indexing tie answers to **your** corpus rather than only the model's training cutoff.
 - **Operational realism for laptops.** Support for **multiple inference backends**, model swapping, and documentation around **RAM and latency** reflects real constraints on personal machines—not only datacenter assumptions.
 - **Transparent plumbing for builders.** A documented **REST API**, typed contracts between backend and frontend, and modular stages (intent, context, prompt, policy, audit) make the system **inspectable and extensible** for people who want to fork or integrate.
 
@@ -63,7 +45,7 @@ Innovation here is **architectural and product-shaped**: it is less about a sing
 
 - **Hardware and setup.** Local GGUF models need **RAM, disk, and sometimes GPU layers**; wrong sizing means slow replies or failures. MLX is **Apple-centric**; other platforms depend on llama.cpp behavior and drivers.
 - **Model quality vs frontier cloud.** On-device models will **not always match** the best hosted models on reasoning, coding, or long-context tasks unless you route chat to Claude (which introduces **cost** and **external dependency**).
-- **Embeddings and engines.** Even in API chat mode, **embedding / index** paths often expect a **local embed server**—so “fully cloud” operation is not the default story.
+- **Embeddings and engines.** Even in API chat mode, **embedding / index** paths often expect a **local embed server**—so "fully cloud" operation is not the default story.
 - **Safety is best-effort, not certification.** Tool policies and confirmation flows **reduce risk** but do not replace enterprise security review, DLP, or formal compliance programs.
 - **Single-user desktop assumptions.** The app is oriented around **one user on one machine**; multi-tenant admin, SSO, and org-wide deployment are not the core design center.
 - **Complexity for non-technical users.** Power features (env vars, engine scripts, model files, wizard skips) assume a reader who is comfortable following **runbooks** or asking a technical friend.
@@ -98,7 +80,7 @@ Cerebro is split into three cooperating planes: **desktop UI**, **HTTP API**, an
 
 **Request path (conceptual).** A user message enters through `POST /api/query` or `POST /api/query/stream`. The server resolves **conversation** identity, runs or skips **pipeline stages** (intent, context assembly, prompt construction, policy, audit—depending on build and configuration), and hands a prepared prompt to the **agent runtime**. The runtime drives a **LangGraph**-style graph: model turns alternate with **tool** turns when the model emits tool calls. Tool results feed back into the graph until a final answer is produced. **Response metadata** (latency, model, provider, tools used, RAG hits, optional pending tool approval) is attached to every reply. Streaming uses **Server-Sent Events** over the same API port so tokens can arrive incrementally without opening a second protocol.
 
-**Memory and knowledge.** **Short-term** memory is in-process / session-oriented conversation state. **Long-term** recall uses **vector search** (LanceDB in this codebase) over chunks produced by **ingestion** (PDF, DOCX, etc.). Embeddings are produced by a dedicated **embedding provider** (typically the same llama.cpp ecosystem with an embed-capable GGUF). **Watchers** can trigger re-indexing when watched folders change. This separation keeps “chat weights” and “document index” as two different operational concerns you can size independently.
+**Memory and knowledge.** **Short-term** memory is in-process / session-oriented conversation state. **Long-term** recall uses **vector search** (LanceDB in this codebase) over chunks produced by **ingestion** (PDF, DOCX, etc.). Embeddings are produced by a dedicated **embedding provider** (typically the same llama.cpp ecosystem with an embed-capable GGUF). **Watchers** can trigger re-indexing when watched folders change. This separation keeps "chat weights" and "document index" as two different operational concerns you can size independently.
 
 **Inference abstraction.** A **provider registry** holds one **primary** chat provider and optional **fallbacks** (for example MLX on Apple Silicon, or failure-driven fallback). Chat providers implement a common contract: availability checks, model identity, completion and streaming. **Model manager** mode can spawn **multiple** llama.cpp subprocesses (router model vs specialist models) and swap specialists by agent or task, which is how the stack balances RAM versus capability on a laptop.
 
@@ -144,4 +126,4 @@ Set in [`config/profiles/lite-8gb.env`](../config/profiles/lite-8gb.env) or expo
 | `CEREBRO_PROMPT_CACHE_PATH` | `bin/cache/chat.cache` | Prompt-cache sidecar path (Module 1) |
 | `CEREBRO_PROACTIVE_CONTEXT` | `false` in lite profile | macOS ambient context (osascript) |
 
-**Verification:** `make test` · `make smoke` (requires `make engine` + `make run`) · report in [`manual_tests/implemefix/post-smoke.md`](../manual_tests/implemefix/post-smoke.md).
+**Verification:** `make test` · `make smoke` (requires `make engine` + `make run`) · report in [`testing/post-smoke.md`](testing/post-smoke.md).

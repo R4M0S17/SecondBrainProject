@@ -35,6 +35,9 @@ export default function CodePanel() {
   const [shellAvailable, setShellAvailable] = useState<boolean | null>(null);
   const [fallbackOutput, setFallbackOutput] = useState("");
   const [cmdInput, setCmdInput] = useState("");
+  const [showCommands, setShowCommands] = useState(false);
+  const commandsBtnRef = useRef<HTMLButtonElement>(null);
+  const [commandsPos, setCommandsPos] = useState({ top: 0, right: 0 });
   const scratch = useTabStore((s) => s.scratch);
   const setScratch = useTabStore((s) => s.setScratch);
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -118,6 +121,11 @@ export default function CodePanel() {
       let lineBuf = "";
       let showPrompt = true;
       let cwd = "";
+      try {
+        const { Command } = await import("@tauri-apps/plugin-shell");
+        const r = await Command.create("zsh", ["-c", "echo $HOME"]).execute();
+        if (r.stdout) cwd = r.stdout.trim();
+      } catch {} // fallback: cwd vacío → CWD del proceso
 
       const executeCmd = async (cmd: string) => {
         try {
@@ -194,6 +202,20 @@ export default function CodePanel() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!showCommands) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (commandsBtnRef.current?.contains(target)) return;
+      const dropdown = document.getElementById("commands-dropdown");
+      if (dropdown && !dropdown.contains(target)) {
+        setShowCommands(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showCommands]);
+
   const handleFallbackCmd = useCallback(() => {
     const cmd = cmdInput.trim();
     if (!cmd) return;
@@ -247,9 +269,45 @@ export default function CodePanel() {
 
           {tab.id === "terminal" && (
             <>
-              <div className="rounded-xl border border-outline-variant/15 overflow-hidden bg-surface-container-lowest shadow-lg flex flex-col flex-1 min-h-0 relative">
-                <div className="flex items-center px-3 py-2 bg-surface-container-low border-b border-outline-variant/10 shrink-0">
+              <div className="rounded-xl border border-outline-variant/15 overflow-hidden bg-surface-container-lowest shadow-lg flex flex-col flex-1 min-h-0">
+                <div className="flex items-center px-3 py-2 bg-surface-container-low border-b border-outline-variant/10 shrink-0 gap-2">
                   <span className="text-[10px] text-on-surface-variant/40 font-label-mono">zsh — Cerebro Terminal</span>
+                  <button
+                    ref={commandsBtnRef}
+                    onClick={() => {
+                      if (!showCommands && commandsBtnRef.current) {
+                        const rect = commandsBtnRef.current.getBoundingClientRect();
+                        setCommandsPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                      }
+                      setShowCommands(!showCommands);
+                    }}
+                    className="ml-auto text-[10px] text-outline/50 hover:text-on-surface-variant/70 cursor-pointer flex items-center gap-1 transition-colors bg-transparent border-none"
+                  >
+                    <span className={`material-symbols-outlined text-[12px] transition-transform ${showCommands ? "rotate-90" : ""}`}>chevron_right</span>
+                    Comandos
+                  </button>
+                  {showCommands && (
+                    <div
+                      id="commands-dropdown"
+                      className="fixed z-50 bg-surface-container-low border border-outline-variant/15 rounded-lg shadow-lg p-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]"
+                      style={{ top: commandsPos.top, right: commandsPos.right }}
+                    >
+                      <span><code className="font-mono text-primary-container">ls</code> <span className="text-outline/60">listar</span></span>
+                      <span><code className="font-mono text-primary-container">cd &lt;d&gt;</code> <span className="text-outline/60">navegar</span></span>
+                      <span><code className="font-mono text-primary-container">pwd</code> <span className="text-outline/60">ruta actual</span></span>
+                      <span><code className="font-mono text-primary-container">mkdir</code> <span className="text-outline/60">crear carpeta</span></span>
+                      <span><code className="font-mono text-primary-container">touch</code> <span className="text-outline/60">crear archivo</span></span>
+                      <span><code className="font-mono text-primary-container">cat</code> <span className="text-outline/60">ver archivo</span></span>
+                      <span><code className="font-mono text-primary-container">cp</code> <span className="text-outline/60">copiar</span></span>
+                      <span><code className="font-mono text-primary-container">mv</code> <span className="text-outline/60">mover/renombrar</span></span>
+                      <span><code className="font-mono text-primary-container">rm</code> <span className="text-outline/60">eliminar</span></span>
+                      <span><code className="font-mono text-primary-container">rm -r</code> <span className="text-outline/60">eliminar carpeta</span></span>
+                      <span><code className="font-mono text-primary-container">chmod</code> <span className="text-outline/60">permisos</span></span>
+                      <span><code className="font-mono text-primary-container">clear</code> <span className="text-outline/60">limpiar</span></span>
+                      <span><code className="font-mono text-primary-container">man</code> <span className="text-outline/60">manual</span></span>
+                      <span><code className="font-mono text-primary-container">grep</code> <span className="text-outline/60">buscar texto</span></span>
+                    </div>
+                  )}
                 </div>
                 <div ref={terminalRef} className="flex-1 min-h-0" />
                 {!terminalReady && !terminalError && (

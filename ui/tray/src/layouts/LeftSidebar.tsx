@@ -6,6 +6,7 @@ interface LeftSidebarProps {
 
 const tabs: { id: LeftTab; icon: string; label: string }[] = [
   { id: "chat", icon: "chat", label: "Chat" },
+  { id: "sources", icon: "rss_feed", label: "Sources" },
   { id: "tools", icon: "build", label: "Tools" },
   { id: "code", icon: "code", label: "Code" },
 ];

@@ -7,6 +7,8 @@ import SystemSidebar from "../components/status/SystemSidebar";
 import StatusBar from "../components/status/StatusBar";
 import ToolsPanel from "../components/tools/ToolsPanel";
 import CodePanel from "../components/code/CodePanel";
+import TimeTravelView from "../components/debug/TimeTravelView";
+import SourcesView from "../components/settings/SourcesView";
 import { useSettingsStore } from "../stores/settings";
 import { useTabStore } from "../stores/tab";
 
@@ -16,7 +18,9 @@ const DocumentsPanel = lazy(() => import("../components/documents/DocumentsPanel
 export default function MainLayout() {
   const { isOpen: settingsOpen, open: openSettings, close: closeSettings } = useSettingsStore();
   const [docsOpen, setDocsOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const closeDocs = useCallback(() => setDocsOpen(false), []);
+  const closeDebug = useCallback(() => setDebugOpen(false), []);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const activeTab = useTabStore((s) => s.activeTab);
 
@@ -50,17 +54,20 @@ export default function MainLayout() {
       <Header
         onDocumentsOpen={handleOpenDocuments}
         onSettingsOpen={handleOpenSettings}
+        onDebugOpen={() => setDebugOpen(true)}
       />
 
       <div className="flex flex-1 overflow-hidden">
         <LeftSidebar onOpenSettings={handleOpenSettings} />
-        <div className="flex-1 flex flex-col relative w-full min-w-0">
+        <div className="flex-1 flex flex-col relative w-full min-w-0 min-h-0">
           {activeTab === "tools" ? (
             <ToolsPanel />
           ) : activeTab === "code" ? (
             <CodePanel />
+          ) : activeTab === "sources" ? (
+            <SourcesView />
           ) : (
-            <div className="flex-1 flex flex-col px-4 md:px-6 lg:px-8 pt-2 pb-6 w-full min-w-0">
+            <div className="flex-1 flex flex-col px-4 md:px-6 lg:px-8 pt-2 pb-6 w-full min-w-0 min-h-0">
               <AgentBar />
               <ChatWindow className="flex-1 min-h-0" />
             </div>
@@ -81,6 +88,7 @@ export default function MainLayout() {
           <DocumentsPanel isOpen={docsOpen} onClose={closeDocs} />
         </Suspense>
       )}
+      {debugOpen && <TimeTravelView onClose={closeDebug} />}
     </div>
   );
 }

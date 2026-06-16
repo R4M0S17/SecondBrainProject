@@ -52,6 +52,10 @@ class LlamaCppChatProvider:
             "temperature": kwargs.get("temperature"),
             "grammar": kwargs.get("grammar"),
         }
+        if "n_ctx" in kwargs:
+            payload["n_ctx"] = kwargs["n_ctx"]
+        if "cache_prompt" in kwargs:
+            payload["cache_prompt"] = kwargs["cache_prompt"]
         # remove None values — llama-server uses its own defaults when omitted
         payload = {k: v for k, v in payload.items() if v is not None}
         try:
@@ -81,6 +85,10 @@ class LlamaCppChatProvider:
             "stream": True,
             "grammar": kwargs.get("grammar"),
         }
+        if "n_ctx" in kwargs:
+            payload["n_ctx"] = kwargs["n_ctx"]
+        if "cache_prompt" in kwargs:
+            payload["cache_prompt"] = kwargs["cache_prompt"]
         payload = {k: v for k, v in payload.items() if v is not None}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:

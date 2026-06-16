@@ -196,7 +196,23 @@ ensure_backend() {
 main() {
   load_desktop_config
   log "Using cerebro_root=${CEREBRO_ROOT}"
-  ensure_engine
+
+  if [[ "${INFERENCE_BACKEND}" == "mlx" ]]; then
+    log "MLX backend — skipping llama.cpp engine (MLX uses ~1 GB instead of ~2.5 GB)"
+    # Kill any stale llama.cpp on :8080 to free RAM
+    if url_healthy "${ENGINE_URL}"; then
+      log "Stopping stale llama.cpp engine on :8080…"
+      local pid
+      pid="$(lsof -ti :8080 -sTCP:LISTEN 2>/dev/null || true)"
+      if [[ -n "${pid}" ]]; then
+        kill "${pid}" 2>/dev/null || true
+        sleep 2
+      fi
+    fi
+  else
+    ensure_engine
+  fi
+
   ensure_embed_server
   ensure_backend
   log "Cerebro is ready (API ${BACKEND_URL})"

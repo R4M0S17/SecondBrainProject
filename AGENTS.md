@@ -20,7 +20,27 @@ cd ui/tray && npm run build # production desktop build
 
 **Entry point**: `main.py:_build_app_state()` wires everything → `app_state` singleton → `uvicorn.run(app, host="0.0.0.0", port=PORT)`. `load_dotenv()` runs before all other imports — env vars are visible to all modules on first import.
 
-**Backend lives in `core/`** — this is the single source of truth. The old `cerebro/` copy was deleted. See `docs/UNIFICACION_CEREBRO.md`.
+**Backend lives in `core/`** — this is the single source of truth. The old `cerebro/` copy was deleted. See `docs/architecture/UNIFICACION_CEREBRO.md`.
+
+## Documentation structure (`docs/`)
+
+```
+docs/
+├── README.md               ← índice general
+├── architecture/           ← diseño del sistema, fast paths, memoria, unificación
+├── connection/             ← guía de API REST y progreso de integración
+├── frontend/               ← diseño UI, roadmap, redesign (cybernetic), changelog
+├── guides/                 ← cómo ejecutar, quickstart 8GB, ports, merge, sync
+├── implementation/         ← notas de implementación (RAG híbrido, injector local)
+├── incidents/              ← post-mortems de bugs (calendario, llamacpp)
+├── inference/              ← backends de inferencia (llama.cpp, MLX, RAM)
+├── plans/                  ← plano (sin subdirectorios): features, roadmaps,
+│                            estabilización, optimización, visión futura
+├── project/                ← specs v1.0/v1.1, estado actual, inspiración Obsidian
+├── records/                ← ADRs y decisiones técnicas (semantic compressor)
+├── reference/              ← benchmarks, comparativas, issues ledger, changelogs
+└── testing/                ← reportes de test, sesiones manuales QA, E2E, smoke
+```
 
 **Fast-path pipeline** (runs before LLM, in order): math → file write (+ calendar-to-file fusion) → reminder → calendar → file search → LangGraph graph. Reordering these in `core/agents/runtime.py` breaks stable features. Run `make test-stable` after any change to fast-path order or file/calendar modules.
 
@@ -65,8 +85,11 @@ All routes under `/api`. Key endpoints:
 | `CEREBRO_LLAMACPP_URL` | http://127.0.0.1:8080 | |
 | `CEREBRO_LLAMACPP_SIMPLE` | true | false = ModelManager multi-server |
 | `CEREBRO_LLAMACPP_MODEL` | Qwen3.5-2B-UD-Q4_K_XL.gguf | in `bin/models/` |
+| `CEREBRO_MLX_MODEL` | mlx-community/Qwen3.5-2B-MLX-4bit | MLX HF repo (used when MLX is enabled) |
+| `CEREBRO_MLX_ENABLED` | auto | auto=true on Apple Silicon with mlx installed |
 | `CEREBRO_DB` | ~/.cerebro/db | |
 | `CEREBRO_STATE` | ~/.cerebro/state | |
 | `CEREBRO_FILES_PATH` | ~/Desktop/CerebroFiles | default write root |
 | `CEREBRO_PROACTIVE_CONTEXT` | true | ContextEnricher on every query |
+| `CEREBRO_SKIP_LITE_PROMPT` | — | set to any value to skip the lite-8gb prompt at startup |
 | `ANTHROPIC_API_KEY` | — | required for claude backend |

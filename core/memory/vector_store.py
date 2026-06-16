@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import json
 from dataclasses import dataclass
 from typing import Any, cast
@@ -134,9 +135,23 @@ class VectorStore:
         return len(rows)
 
     async def search(
-        self, query: str, engine: InferenceEngine, top_k: int = 5
+        self,
+        query: str,
+        engine: InferenceEngine | None = None,
+        top_k: int = 5,
+        embed_fn: (
+            collections.abc.Callable[[str], collections.abc.Awaitable[list[float]]] | None
+        ) = None,
     ) -> list[SearchResult]:
-        vector = await engine.embed(query)
+        if embed_fn:
+            vector = await embed_fn(query)
+        elif engine:
+            vector = await engine.embed(query)
+        else:
+            raise ValueError("Need engine or embed_fn")
+        return await self.search_by_vector(vector, top_k)
+
+    async def search_by_vector(self, vector: list[float], top_k: int = 5) -> list[SearchResult]:
         _check_vector_dim(vector, self.embedding_dim)
         rows = await asyncio.to_thread(lambda: self._table.search(vector).limit(top_k).to_list())
         return [

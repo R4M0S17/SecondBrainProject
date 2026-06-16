@@ -17,6 +17,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from core.agents.calendar_fast_path import try_calendar_fast_path
+from core.agents.dictionary_fast_path import try_dictionary_fast_path
 from core.agents.file_content_generator import generate_file_content
 from core.agents.file_search_fast_path import try_file_search_fast_path
 from core.agents.file_write_calendar_fusion import (
@@ -32,6 +33,9 @@ from core.agents.reminder_intent_resolver import (
     resolve_reminder_intent,
 )
 from core.agents.state_store import AgentState
+from core.agents.system_info_fast_path import try_system_info_fast_path
+from core.agents.unit_conversion_fast_path import try_unit_conversion_fast_path
+from core.agents.weather_fast_path import try_weather_fast_path
 from core.i18n.messages import _L
 from core.inference.registry import ProviderRegistry, TaskHint
 
@@ -70,6 +74,10 @@ FastPathKind = Literal[
     "calendar_write",
     "url_open",
     "web_search",
+    "weather",
+    "dictionary",
+    "unit_conversion",
+    "system_info",
 ]
 
 
@@ -91,10 +99,12 @@ class FastPathRouter:
         registry: ProviderRegistry,
         tool_registry: dict[str, Callable[..., Any]] | None = None,
         config_getter: Callable[[], dict[str, Any]] | None = None,
+        authorized_read_paths_getter: Callable[[], list[str]] | None = None,
     ) -> None:
         self._registry = registry
         self._tool_registry = tool_registry or {}
         self._config_getter = config_getter
+        self._authorized_read_paths_getter = authorized_read_paths_getter
 
     async def try_all(
         self, query: str, agent_state: AgentState, intent: str | None = None
@@ -135,7 +145,19 @@ class FastPathRouter:
         if result is not None:
             return result
 
+        result = self._try_weather(query, agent_state)
+        if result is not None:
+            return result
+
+        result = self._try_dictionary(query, agent_state)
+        if result is not None:
+            return result
+
         result = self._try_config_read(query, agent_state)
+        if result is not None:
+            return result
+
+        result = self._try_system_info(query, agent_state)
         if result is not None:
             return result
 
@@ -148,6 +170,10 @@ class FastPathRouter:
             return result
 
         result = self._try_math(query, agent_state)
+        if result is not None:
+            return result
+
+        result = self._try_unit_conversion(query, agent_state)
         if result is not None:
             return result
 
@@ -566,8 +592,39 @@ class FastPathRouter:
             answer=result,
         )
 
+    def _try_weather(self, query: str, agent_state: AgentState) -> FastPathResult | None:
+        _ = agent_state
+        answer = try_weather_fast_path(query)
+        if answer is None:
+            return None
+        return FastPathResult(kind="weather", answer=answer)
+
+    def _try_dictionary(self, query: str, agent_state: AgentState) -> FastPathResult | None:
+        _ = agent_state
+        answer = try_dictionary_fast_path(query)
+        if answer is None:
+            return None
+        return FastPathResult(kind="dictionary", answer=answer)
+
+    def _try_system_info(self, query: str, agent_state: AgentState) -> FastPathResult | None:
+        _ = agent_state
+        answer = try_system_info_fast_path(query)
+        if answer is None:
+            return None
+        return FastPathResult(kind="system_info", answer=answer)
+
+    def _try_unit_conversion(self, query: str, agent_state: AgentState) -> FastPathResult | None:
+        _ = agent_state
+        answer = try_unit_conversion_fast_path(query)
+        if answer is None:
+            return None
+        return FastPathResult(kind="unit_conversion", answer=answer)
+
     def _try_file_search(self, query: str, agent_state: AgentState) -> FastPathResult | None:
-        answer = try_file_search_fast_path(query, self._authorized_tools(agent_state))
+        paths = self._authorized_read_paths_getter() if self._authorized_read_paths_getter else None
+        answer = try_file_search_fast_path(
+            query, self._authorized_tools(agent_state), authorized_paths=paths
+        )
         if answer is None:
             return None
         return FastPathResult(kind="file_search", answer=answer)

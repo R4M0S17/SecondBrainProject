@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from core.inference.engine import InferenceEngine
 from core.memory.long_term import LongTermStore, MemoryChunk, RetrievalContext
 from core.memory.vector_store import VectorStore
+from core.utils.compressor import SemanticCompressor
 
 if TYPE_CHECKING:
     from core.agents.state_store import AgentState
@@ -51,12 +52,18 @@ class ContextBuilder:
         token_budget: int = DEFAULT_TOKEN_BUDGET,
         vector_store: VectorStore | None = None,
         inference_engine: InferenceEngine | None = None,
+        embed_provider: Any | None = None,
+        top_k: int = 5,
+        compressor: SemanticCompressor | None = None,
     ) -> None:
         self._short_term = short_term
         self._long_term = long_term
         self._token_budget = token_budget
         self._vector_store = vector_store
         self._inference_engine = inference_engine
+        self._embed_provider = embed_provider
+        self._top_k = top_k
+        self._compressor = compressor
 
     def _tokens(self, text: str) -> int:
         return max(1, len(text) // _CHARS_PER_TOKEN)
@@ -142,7 +149,9 @@ class ContextBuilder:
         )
         return True
 
-    async def build(self, query: str, agent_state: AgentState) -> AssembledContext:
+    async def build(
+        self, query: str, agent_state: AgentState, top_k: int | None = None
+    ) -> AssembledContext:
         from core.observability.ram_monitor import current_ram_pressure
 
         remaining = self._token_budget
@@ -182,13 +191,21 @@ class ContextBuilder:
 
         # Priority 4: vector store documents (local RAG) — skip under RAM pressure
         kept_documents: list[SearchResult] = []
-        if (
-            not under_pressure
-            and self._vector_store is not None
-            and self._inference_engine is not None
-        ):
+        embed_fn = (
+            self._embed_provider.embed
+            if hasattr(self._embed_provider, "embed")
+            else self._embed_provider
+        ) or getattr(self._inference_engine, "embed", None)
+        if self._vector_store is not None and embed_fn is not None:
             try:
-                doc_chunks = await self._vector_store.search(query, self._inference_engine, top_k=5)
+                effective_top_k = top_k if top_k is not None else self._top_k
+                doc_chunks = await self._vector_store.search(
+                    query, top_k=effective_top_k, embed_fn=embed_fn
+                )
+                if self._compressor is not None and doc_chunks:
+                    compressed = self._compressor.compress(query, doc_chunks, max_tokens=600)
+                    if compressed:
+                        doc_chunks = compressed
                 for chunk in doc_chunks:
                     cost = self._tokens(chunk.content)
                     if remaining - cost >= 0:

@@ -3,6 +3,7 @@ interface EngineIndicatorProps {
   provider?: string;
   llamaServer?: "up" | "restarting" | "down" | null;
   servicesOff?: boolean;
+  engineState?: "active" | "suspended" | "unknown";
 }
 
 export default function EngineIndicator({
@@ -10,6 +11,7 @@ export default function EngineIndicator({
   provider,
   llamaServer,
   servicesOff,
+  engineState,
 }: EngineIndicatorProps) {
   if (servicesOff) {
     return (
@@ -29,6 +31,15 @@ export default function EngineIndicator({
   }
 
   const label = provider === "mlx" ? "MLX" : "llama.cpp";
+
+  if (engineState === "suspended") {
+    return (
+      <div className="flex items-center gap-1">
+        <div className="w-[6px] h-[6px] rounded-full bg-[#60a5fa] opacity-60" />
+        <span className="text-[#60a5fa] opacity-60">{label} suspended</span>
+      </div>
+    );
+  }
 
   if (llamaServer === "restarting") {
     return (

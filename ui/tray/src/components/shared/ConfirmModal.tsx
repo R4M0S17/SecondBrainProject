@@ -18,11 +18,11 @@ export default function ConfirmModal({
   onDeny,
 }: ConfirmModalProps) {
   return (
-    <div
+    <dialog
       className="fixed inset-0 bg-black/60 backdrop-blur-[4px] z-[70] flex items-center justify-center p-6"
-      role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-modal-title"
+      open
     >
       <div className="w-[400px] bg-surface-container rounded-xl border border-outline-variant shadow-2xl overflow-hidden">
         <div className="p-5 space-y-4">
@@ -77,6 +77,6 @@ export default function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

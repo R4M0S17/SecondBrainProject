@@ -18,6 +18,11 @@ _SEARCH_VERB_RE = re.compile(
     r"lista|listar|search|find|look\s+for|where\s+is|d[oó]nde\s+est[aá])\b",
     re.IGNORECASE,
 )
+_META_QUESTION_RE = re.compile(
+    r"^(expl[ií]came|explain|qu[eé]\s+es|what\s+is|what\s+are|c[oó]mo\s+funciona|"
+    r"how\s+(?:do|does|can|to))\b",
+    re.IGNORECASE,
+)
 _FILE_NOUN_RE = re.compile(r"\b(archivos?|ficheros?|files?)\b", re.IGNORECASE)
 _EXT_HINT_RE = re.compile(
     r"(?:extensi[oó]n|extension|tipo|formato)\s+[\"']?\.?([\w]{1,12})[\"']?",
@@ -28,7 +33,7 @@ _GLOB_RE = re.compile(
     re.IGNORECASE,
 )
 _NAMED_RE = re.compile(
-    r"(?:archivo|file|fichero)s?\s+(?:llamado|named|called|de\s+nombre)?\s*"
+    r"(?:archivo|file|fichero)s?\s+(?:llamado|named|called|de\s+nombre)\s+"
     r"[\"']?([\w][\w.\-]*)[\"']?",
     re.IGNORECASE,
 )
@@ -38,7 +43,7 @@ _FIND_NAMED_RE = re.compile(
     re.IGNORECASE,
 )
 _CONTENT_RE = re.compile(
-    r"(?:conteniendo|contenga|que\s+contenga|with|that\s+contain(?:s)?)\s+"
+    r"(?:conteniendo|contenga|que\s+contengan?|with|that\s+contain(?:s)?)\s+"
     r"[\"']?(.+?)[\"']?\s*$",
     re.IGNORECASE,
 )
@@ -48,8 +53,8 @@ _PY_FILES_RE = re.compile(
 )
 
 _LOCATION_RE = re.compile(
-    r"\b(en|dentro de|solo en)\s+(el\s+)?(escritorio|desktop|documentos|documents|"
-    r"descargas|downloads)\b",
+    r"\b(en|dentro de|solo en|on|in|inside)\s+(el\s+)?"
+    r"(escritorio|desktop|documentos|documents|descargas|downloads)\b",
     re.IGNORECASE,
 )
 
@@ -83,10 +88,26 @@ def is_file_search_query(query: str) -> bool:
     text = query.strip()
     if not text or len(text) < 4:
         return False
+    # Reject meta-questions about searching (not actual search requests)
+    if _META_QUESTION_RE.search(text):
+        return False
+    # If there's a write intent without search intent, skip
     if _WRITE_VERB_RE.search(text) and _FILE_NOUN_RE.search(text):
         if not _SEARCH_VERB_RE.search(text):
             return False
+    # Bare glob patterns like "*.py" are search queries even without a verb
+    if _GLOB_RE.search(text) and len(text) < 30:
+        return True
     if not _SEARCH_VERB_RE.search(text):
+        # No search verb — but content or file-name patterns still count
+        if _FILE_NOUN_RE.search(text) and (
+            _CONTENT_RE.search(text)
+            or _NAMED_RE.search(text)
+            or _FIND_NAMED_RE.search(text)
+            or _EXT_HINT_RE.search(text)
+            or _PY_FILES_RE.search(text)
+        ):
+            return True
         return False
     if _FILE_NOUN_RE.search(text):
         return True
@@ -159,7 +180,7 @@ def parse_file_search_intent(query: str) -> FileSearchIntent | None:
     if m := _CONTENT_RE.search(query):
         query_text = m.group(1).strip()
 
-    if re.search(r"\b(solo|only)\s+(uno|one|1)\b", query, re.I):
+    if re.search(r"\b(solo|only)\s+(uno|un|one|1)\b", query, re.I):
         max_results = 1
     elif m_limit := re.search(r"\b(primeros?|first)\s+(\d{1,2})\b", query, re.I):
         max_results = min(int(m_limit.group(2)), 50)
@@ -181,6 +202,8 @@ def try_file_search_fast_path(
 ) -> str | None:
     """Run search_files locally when the user asks to find/list files."""
     tools = authorized_tools or []
+    # Empty tools list means "no restriction" — allow search.
+    # Only reject when a non-empty tool list lacks search_files.
     if tools and "search_files" not in tools:
         return None
 

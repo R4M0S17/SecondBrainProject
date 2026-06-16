@@ -21,9 +21,10 @@ export default function FastPathToggles() {
   const setActiveAgent = useChatStore((s) => s.setActiveAgent);
   const { patch } = useSettingsStore();
 
+  const config = useSettingsStore((s) => s.config);
   const isActive = (id: FastPathId): boolean => {
     if (id === "calendar") return activeAgent === "calendar";
-    if (id === "websearch") return false;
+    if (id === "websearch") return config?.tool_permissions?.search_web ?? false;
     return false;
   };
 

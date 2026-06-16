@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type LeftTab = "chat" | "fleet" | "tools" | "code";
+export type LeftTab = "chat" | "fleet" | "tools" | "code" | "sources";
 
 interface TabState {
   activeTab: LeftTab;

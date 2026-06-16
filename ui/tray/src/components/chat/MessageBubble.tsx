@@ -7,7 +7,7 @@ import SourcesPanel from "./SourcesPanel";
 import ToolHistoryPanel from "./ToolHistoryPanel";
 import MemoryPanel from "./MemoryPanel";
 
-function useTypewriter(fullText: string, isStreaming: boolean, speed: number = 30) {
+function useTypewriter(fullText: string, isStreaming: boolean, speed: number = 5) {
   const [displayed, setDisplayed] = useState(0);
   const fullTextRef = useRef(fullText);
   fullTextRef.current = fullText;
@@ -18,20 +18,11 @@ function useTypewriter(fullText: string, isStreaming: boolean, speed: number = 3
       return;
     }
 
-    setDisplayed((prev) => Math.min(prev, fullText.length));
+    // For streaming, display immediately without artificial delay
+    setDisplayed(fullText.length);
 
-    const interval = setInterval(() => {
-      setDisplayed((prev) => {
-        const max = fullTextRef.current.length;
-        if (prev >= max) {
-          return max;
-        }
-        return prev + 1;
-      });
-    }, speed);
-
-    return () => clearInterval(interval);
-  }, [isStreaming, speed, fullText]);
+    return () => {};
+  }, [isStreaming, fullText]);
 
   return displayed;
 }

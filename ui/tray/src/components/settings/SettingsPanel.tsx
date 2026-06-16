@@ -8,6 +8,7 @@ import ModelSelector from "./ModelSelector";
 import ToolPermissions from "./ToolPermissions";
 import DndToggle from "./DndToggle";
 import FleetSettings from "./FleetSettings";
+import KnowledgeSyncPanel from "./KnowledgeSyncPanel";
 
 type BackendId = "llamacpp" | "mlx" | "claude";
 
@@ -132,6 +133,14 @@ export default function SettingsPanel() {
               Tool Permissions
             </label>
             <ToolPermissions />
+          </section>
+
+          {/* Knowledge Sync */}
+          <section>
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+              Knowledge Sync
+            </label>
+            <KnowledgeSyncPanel />
           </section>
 
           {/* Notifications */}

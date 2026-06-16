@@ -76,3 +76,11 @@ max_tokens = 2048
 [claude]
 model = "claude-sonnet-4-6"
 max_tokens = 4096
+
+[rag]
+top_k = 5
+
+[knowledge_sync]
+enabled = false
+interest_tags = []
+max_items_per_sync = 20

@@ -18,12 +18,23 @@ export default function ChatWindow({ className = "" }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const userScrolledRef = useRef(false);
+  const prevMsgCountRef = useRef(messages.length);
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(
     new Set()
   );
 
   useEffect(() => {
-    if (isNearBottomRef.current) {
+    const newMsgCount = messages.length;
+    const newUserMsg = newMsgCount > prevMsgCountRef.current && messages[newMsgCount - 1]?.role === "user";
+    prevMsgCountRef.current = newMsgCount;
+
+    const shouldScroll =
+      newUserMsg ||
+      (!isLoading && !userScrolledRef.current) ||
+      (isNearBottomRef.current && !userScrolledRef.current);
+
+    if (shouldScroll) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, isLoading]);
@@ -32,8 +43,10 @@ export default function ChatWindow({ className = "" }: ChatWindowProps) {
     const el = scrollRef.current;
     if (!el) return;
     const threshold = 150;
-    isNearBottomRef.current =
+    const nearBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isNearBottomRef.current = nearBottom;
+    userScrolledRef.current = !nearBottom;
   }, []);
 
   const activeModel = useChatStore((s) => {

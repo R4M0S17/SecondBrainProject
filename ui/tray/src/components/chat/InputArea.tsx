@@ -4,9 +4,10 @@ import { useSettingsStore } from "../../stores/settings";
 import { useServicesStore } from "../../stores/services";
 import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
 import { ApiError } from "../../api/errors";
-import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles } from "../../api/client";
-import CommandAutocomplete from "./CommandAutocomplete";
+import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles, startIndex, getConfig } from "../../api/client";
+import CommandAutocomplete, { COMMANDS } from "./CommandAutocomplete";
 import type { FileAttachment } from "../../api/types";
+import { AGENTS } from "../../api/types";
 
 interface UploadedFile {
   file: File;
@@ -133,6 +134,7 @@ async function buildLocalAttachment(file: File): Promise<FileAttachment | null> 
 export default function InputArea() {
   const [text, setText] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [selectedCmdIndex, setSelectedCmdIndex] = useState(-1);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -151,6 +153,7 @@ export default function InputArea() {
     setConversationId,
     setSearchingWeb,
     setSearchingSources,
+    clearMessages,
   } = useChatStore();
   const { refresh, setSwapEvent, status } = useSystemStore();
   const servicesOff = useServicesStore((s) => s.servicesOff);
@@ -161,7 +164,14 @@ export default function InputArea() {
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setText(val);
-    setShowAutocomplete(val.startsWith("/"));
+    const show = val.startsWith("/");
+    setShowAutocomplete(show);
+    if (show) {
+      const matches = COMMANDS.filter((c) => c.name.startsWith(val.toLowerCase()));
+      setSelectedCmdIndex(matches.length > 0 ? 0 : -1);
+    } else {
+      setSelectedCmdIndex(-1);
+    }
     const ta = textareaRef.current;
     if (ta) {
       const lineHeight = 20;
@@ -177,12 +187,39 @@ export default function InputArea() {
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    const matches = showAutocomplete
+      ? COMMANDS.filter((c) => c.name.startsWith(text.toLowerCase()))
+      : [];
+
+    if (showAutocomplete && matches.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedCmdIndex((prev) => (prev < matches.length - 1 ? prev + 1 : 0));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedCmdIndex((prev) => (prev > 0 ? prev - 1 : matches.length - 1));
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const idx = selectedCmdIndex >= 0 ? selectedCmdIndex : 0;
+        handleCommandSelect(matches[idx].name);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
+      return;
     }
     if (e.key === "Escape") {
-      if (isLoading) {
+      if (showAutocomplete) {
+        setShowAutocomplete(false);
+        setSelectedCmdIndex(-1);
+      } else if (isLoading) {
         cancelRequest();
       } else {
         textareaRef.current?.blur();
@@ -206,13 +243,9 @@ export default function InputArea() {
       return;
     }
 
-    if (query === "/model") {
-      const model = useSettingsStore.getState().activeModel || "local";
-      addMessage({ role: "user", content: "/model" });
-      addMessage({ role: "assistant", content: `Currently running model: **${model}**` });
-      setText("");
-      setShowAutocomplete(false);
-      if (textareaRef.current) textareaRef.current.style.height = "44px";
+    const matchedCmd = COMMANDS.find((c) => c.name === query);
+    if (matchedCmd) {
+      handleCommand(matchedCmd);
       return;
     }
 
@@ -410,9 +443,154 @@ export default function InputArea() {
     }
   };
 
+  const handleCommand = async (cmd: { name: string; description: string }) => {
+    addMessage({ role: "user", content: cmd.name });
+    setText("");
+    setShowAutocomplete(false);
+    setSelectedCmdIndex(-1);
+    if (textareaRef.current) textareaRef.current.style.height = "44px";
+
+    switch (cmd.name) {
+      case "/help": {
+        const cmdList = COMMANDS.map(
+          (c) => `\`${c.name}\` — ${c.description}`,
+        ).join("\n");
+        addMessage({
+          role: "assistant",
+          content: `Available commands:\n\n${cmdList}`,
+        });
+        break;
+      }
+      case "/clear": {
+        clearMessages();
+        addMessage({ role: "assistant", content: "Conversation cleared." });
+        break;
+      }
+      case "/model": {
+        const model = useSettingsStore.getState().activeModel || "local";
+        addMessage({
+          role: "assistant",
+          content: `Currently running model: **${model}**`,
+        });
+        break;
+      }
+      case "/status": {
+        const s = useSystemStore.getState().status;
+        if (!s) {
+          addMessage({ role: "assistant", content: "System status not available." });
+        } else {
+          addMessage({
+            role: "assistant",
+            content: [
+              `**Engine**: ${s.engine_ok ? "✅ Active" : "❌ Offline"}`,
+              `**Model**: ${s.model}`,
+              `**Provider**: ${s.provider}`,
+              `**Latency**: ${s.p95_latency_ms}ms (p95)`,
+              `**RAM**: ${s.ram_used_gb.toFixed(1)}/${s.ram_total_gb.toFixed(1)} GB (${s.ram_pressure})`,
+              `**CPU**: ${s.cpu_percent}%`,
+              `**Indexed files**: ${s.indexed_files}`,
+              `**Queries**: ${s.queries_total}`,
+              `**Memory hits**: ${s.memory_hits}`,
+              `**Tool calls**: ${s.tool_call_count}`,
+            ].join("\n"),
+          });
+        }
+        break;
+      }
+      case "/agents": {
+        const agentList = AGENTS.map((a) => `\`${a.id}\` — ${a.label}`).join("\n");
+        addMessage({
+          role: "assistant",
+          content: `Available agents:\n\n${agentList}`,
+        });
+        break;
+      }
+      case "/index": {
+        const indexMsg = addMessage({
+          role: "assistant",
+          content: "Starting re-index of watched folders...",
+        });
+        try {
+          const result = await startIndex([]);
+          updateMessage(indexMsg, {
+            content: `Indexing started with job ID: \`${result.job_id}\``,
+          });
+        } catch (e: unknown) {
+          updateMessage(indexMsg, {
+            content: `Index failed: ${(e as Error).message}`,
+          });
+        }
+        break;
+      }
+      case "/memory": {
+        const s = useSystemStore.getState().status;
+        addMessage({
+          role: "assistant",
+          content: s
+            ? `Memory recall hits: **${s.memory_hits}**\nIndexed files: **${s.indexed_files}**`
+            : "System status not available.",
+        });
+        break;
+      }
+      case "/export": {
+        const { messages } = useChatStore.getState();
+        const blob = new Blob(
+          [
+            JSON.stringify(
+              {
+                exported_at: new Date().toISOString(),
+                model: useSettingsStore.getState().activeModel,
+                messages: messages.map((m) => ({
+                  role: m.role,
+                  content: m.content,
+                  timestamp: m.timestamp,
+                })),
+              },
+              null,
+              2,
+            ),
+          ],
+          { type: "application/json" },
+        );
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `cerebro-export-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        addMessage({ role: "assistant", content: "Conversation exported." });
+        break;
+      }
+      case "/refresh": {
+        void refresh();
+        addMessage({ role: "assistant", content: "System status refreshed." });
+        break;
+      }
+      case "/settings": {
+        try {
+          const config = await getConfig();
+          const lines = Object.entries(config).map(
+            ([k, v]) => `\`${k}\`: ${typeof v === "string" ? v : JSON.stringify(v)}`,
+          );
+          addMessage({
+            role: "assistant",
+            content: `Current configuration:\n\n${lines.join("\n")}`,
+          });
+        } catch {
+          addMessage({
+            role: "assistant",
+            content: "Could not fetch configuration.",
+          });
+        }
+        break;
+      }
+    }
+  };
+
   const handleCommandSelect = (cmd: string) => {
     setText(cmd + " ");
     setShowAutocomplete(false);
+    setSelectedCmdIndex(-1);
     textareaRef.current?.focus();
   };
 
@@ -459,7 +637,7 @@ export default function InputArea() {
       <div className="input-glow flex items-center bg-surface-container-low border border-outline-variant/50 rounded-xl p-2 transition-all duration-300">
         {/* Command autocomplete */}
         {showAutocomplete && (
-          <CommandAutocomplete query={text} onSelect={handleCommandSelect} />
+          <CommandAutocomplete query={text} selectedIndex={selectedCmdIndex} onSelect={handleCommandSelect} />
         )}
 
         {/* Add / file upload button */}
@@ -486,6 +664,7 @@ export default function InputArea() {
         <textarea
           ref={textareaRef}
           rows={1}
+          aria-label="Chat input"
           className="flex-1 bg-transparent border-none outline-none resize-none text-on-surface text-sm focus:ring-0 focus:outline-none placeholder:text-outline/50 px-2 custom-scrollbar"
           placeholder={
             servicesOff
@@ -507,7 +686,7 @@ export default function InputArea() {
           {isLoading ? (
             <button
               onClick={cancelRequest}
-              className="p-2 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors"
+              className="p-1.5 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors"
               aria-label="Cancel request"
               title="Cancel (Esc)"
             >
@@ -517,7 +696,7 @@ export default function InputArea() {
             <button
               onClick={() => void send()}
               disabled={!text.trim() || isLoading || servicesOff}
-              className="p-2 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors disabled:opacity-30"
+              className="p-1.5 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors disabled:opacity-30"
               aria-label="Send message"
             >
               <span className="material-symbols-outlined text-[18px]">send</span>
