@@ -25,6 +25,7 @@ from core.agents.runtime import AgentRuntime
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
 from core.agents.state_store import AgentStateStore
 from core.cache.embedding_cache import CachedEmbeddingProvider, EmbeddingCache
+from core.feature_flags import is_sandbox
 from core.inference.embedding_factory import build_embedding_provider, default_embeddings_backend
 from core.inference.engine import InferenceEngine
 from core.inference.model_manager import ModelManager
@@ -502,18 +503,19 @@ def _build_app_state() -> None:
     # ────────────────────────────────────────────────────────────────────
 
     cal_registry = ToolRegistry()
-    register_calendar_tools(cal_registry)
+    if not is_sandbox():
+        register_calendar_tools(cal_registry)
+        register_macos_tools(cal_registry)
+        register_automation_tools(
+            cal_registry,
+            recorder=recorder,
+            workflow_store=workflow_store,
+            chat_provider_getter=lambda: registry.get_chat() if registry else None,
+        )
     register_filesystem_tools(
         cal_registry,
         authorized_read_paths=AUTHORIZED_READ_PATHS,
         authorized_write_paths=AUTHORIZED_WRITE_PATHS,
-    )
-    register_macos_tools(cal_registry)
-    register_automation_tools(
-        cal_registry,
-        recorder=recorder,
-        workflow_store=workflow_store,
-        chat_provider_getter=lambda: registry.get_chat() if registry else None,
     )
     register_math_tools(cal_registry)
     register_web_tools(cal_registry)
@@ -546,7 +548,7 @@ def _build_app_state() -> None:
     enricher = ContextEnricher(
         authorized_read_paths=AUTHORIZED_READ_PATHS,
         cerebro_files_path=CEREBRO_FILES_PATH,
-        enabled=PROACTIVE_CONTEXT,
+        enabled=PROACTIVE_CONTEXT and not is_sandbox(),
         macos_permissions=app_state.macos_permissions,
     )
 

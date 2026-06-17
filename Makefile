@@ -1,4 +1,4 @@
-.PHONY: install test smoke run lint lite engine engine-embed engine-lite engine-code engine-deep desktop-config desktop-launch desktop-icon desktop-app desktop-install package-backend package-macos package-windows
+.PHONY: install setup test smoke run lint lite engine engine-embed engine-lite engine-code engine-deep desktop-config desktop-launch desktop-icon desktop-app desktop-install package-backend package-macos package-windows
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -9,6 +9,9 @@ install:
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 	$(VENV)/bin/pre-commit install
+
+setup:
+	bash scripts/setup.sh
 
 test:
 	$(PYTHON) -m pytest tests/ -v --cov=core --cov-fail-under=80

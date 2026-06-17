@@ -35,7 +35,7 @@ Ask questions, search your files, manage your calendar, and automate tasks. Cere
 
 ---
 
-## 🧠 What Makes Cerebro Different
+## What Makes Cerebro Different
 
 Most AI assistants are either **cloud-only** — your data leaves your machine — or **stateless chatbots** with no durable memory. Cerebro is neither.
 
@@ -50,12 +50,12 @@ Most AI assistants are either **cloud-only** — your data leaves your machine �
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🤖 Local Agentic Runtimes
+### Local Agentic Runtimes
 Four specialized agents — **General**, **Academic**, **Code**, and **Calendar** — each with tailored system prompts, tool sets, and memory retrieval strategies. Powered by a **LangGraph**-style execution graph that alternates between LLM reasoning and deterministic tool calls.
 
-### 📚 Persistent Vector Memory
+### Persistent Vector Memory
 All your indexed documents, conversations, and notes are embedded into a local **LanceDB** vector store. Every query retrieves relevant chunks across sessions — the system remembers what you've asked and what you've written.
 
 ### 🛠️ Deterministic Fast Paths
@@ -73,27 +73,27 @@ Common queries skip the LLM entirely for speed and reliability:
 
 These fast paths resolve queries in milliseconds, reserving the LLM only for complex reasoning.
 
-### 📅 Calendar Integration
+### Calendar Integration
 Read and write Apple Calendar events, search by keyword, expand recurring events (daily, weekly, monthly, yearly), and manage reminders — all via JXA/AppleScript bridges.
 
-### 🔍 RAG Over Your Documents
+### RAG Over Your Documents
 Index PDFs, DOCX, Markdown, Python, and plain text files. The **SemanticCompressor** reduces context by ~70% while preserving relevance, using sentence-level TF-IDF scoring (or neural embeddings when available).
 
-### 🔐 Privacy-First Design
+### Privacy-First Design
 - No data leaves your machine by default
 - All inference runs locally via **llama.cpp** or **MLX**
 - Tool execution requires user confirmation for risky operations
 - Optional **Claude API** for cloud models when you need them
 
-### 🖥️ Desktop UI (Tauri + React)
+### Desktop UI (Tauri + React)
 Polished chat interface with real-time token streaming, conversation history, settings panel, system status, model selector, and first-launch wizard.
 
-### 🔌 REST API
+### REST API
 Every feature is accessible via HTTP on port 7842 — build your own clients, automations, or integrations on top of Cerebro's agent runtime.
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -172,60 +172,46 @@ Embeddings default to **local sentence-transformers** (384d) on ≤10GB RAM, fal
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Prerequisites
+Choose your mode:
 
-- macOS (Apple Silicon or Intel)
-- Python 3.11+
-- Node.js 18+
-- Rust toolchain (for Tauri)
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) (`brew install llama.cpp`)
-- 8 GB+ RAM (16 GB recommended)
-
-### Installation
+### 🐳 Docker (any platform — CPU-only)
 
 ```bash
-# Clone and enter
 git clone https://github.com/your-org/cerebro.git
 cd cerebro
-
-# Install Python deps + dev tools
-make install
-
-# Download a model (or place your own GGUF in bin/models/)
-# See Models section below
-
-# Start the inference engine
-make engine          # llama-server on :8080
-
-# In another terminal, start the backend
-make run             # FastAPI on :7842
-
-# In a third terminal, start the UI
-cd ui/tray && npm run dev   # Vite dev server
+docker compose up
+# Open http://localhost:7842
 ```
+
+> Quick demo, no GPU, no macOS integrations.
+> For the full experience on Mac, use native mode.
+
+### 🍎 Native macOS (recommended — Metal GPU + Calendar + Tauri)
+
+```bash
+git clone https://github.com/your-org/cerebro.git
+cd cerebro
+make setup                      # One-time: install all deps
+make engine                     # llama.cpp with Metal GPU
+make run                        # FastAPI on :7842
+# Open http://localhost:7842
+```
+
+> GPU-accelerated inference, Apple Calendar, AppleScript,
+> desktop automation, and native Tauri desktop app.
 
 ### 8 GB Mac Profile
 
-For machines with limited RAM, use the lite profile:
-
 ```bash
-make lite        # Sets CEREBRO_PROACTIVE_CONTEXT=false,
-                 # CEREBRO_MLX_ENABLED=false,
-                 # CEREBRO_EMBEDDINGS_BACKEND=local
+make lite        # Disables MLX, ContextEnricher, uses local embeddings
 make run
-```
-
-### Production Desktop Build
-
-```bash
-cd ui/tray && npm run build   # Creates .dmg in src-tauri/target/release
 ```
 
 ---
 
-## 📦 Models & Hardware
+## Models & Hardware
 
 ### Recommended Models
 
@@ -275,7 +261,7 @@ See [config/profiles/lite-8gb.env](config/profiles/lite-8gb.env) for the full 8 
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 cerebro/
@@ -328,7 +314,7 @@ cerebro/
 
 ---
 
-## 📖 Documentation
+## Documentation
 
 | Area | What You'll Find |
 |------|-----------------|
@@ -350,7 +336,7 @@ cerebro/
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 make test            # Full pytest suite (mocked inference)
@@ -365,7 +351,7 @@ CI runs on every PR.
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 ### Implemented
 
@@ -386,22 +372,22 @@ CI runs on every PR.
 
 ### In Progress
 
-- 📝 Calendar recurring event expansion for all frequencies
-- 📝 Semantic compressor wired into production context assembly
+- Calendar recurring event expansion for all frequencies
+- Semantic compressor wired into production context assembly
 
 ### Planned
 
-- 🔮 **Cognitive Graph** — Persistent property graph (Kuzu) for entities and relationships
-- 🔮 **Event-Driven Architecture** — EventBus for proactive system behavior
-- 🔮 **LoRA Fine-Tuning** — Tool-calling accuracy improvement via Qwen3.5-2B LoRA
-- 🔮 **0.8B Secondary Worker** — Small model for fast routing and simple queries
-- 🔮 **Ambient Intelligence** — macOS context observers (active app, window title)
-- 🔮 **Skill Marketplace** — Pluggable capabilities with SKILL.toml manifests
-- 🔮 **Cross-Platform** — Linux and Windows desktop builds
+- **Cognitive Graph** — Persistent property graph (Kuzu) for entities and relationships
+- **Event-Driven Architecture** — EventBus for proactive system behavior
+- **LoRA Fine-Tuning** — Tool-calling accuracy improvement via Qwen3.5-2B LoRA
+- **0.8B Secondary Worker** — Small model for fast routing and simple queries
+- **Ambient Intelligence** — macOS context observers (active app, window title)
+- **Skill Marketplace** — Pluggable capabilities with SKILL.toml manifests
+- **Cross-Platform** — Linux and Windows desktop builds
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -413,13 +399,13 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ---
 
-## 📄 License
+## License
 
 MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built on the shoulders of [llama.cpp](https://github.com/ggerganov/llama.cpp), [FastAPI](https://fastapi.tiangolo.com/), [LanceDB](https://lancedb.github.io/), [LangGraph](https://github.com/langchain-ai/langgraph), and [Tauri](https://tauri.app/)
 - Inspired by Obsidian's knowledge graph philosophy

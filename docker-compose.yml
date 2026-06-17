@@ -1,0 +1,64 @@
+services:
+  llamacpp:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: cerebro-llamacpp
+    platform: linux/arm64
+    volumes:
+      - ./bin/models:/models:ro
+    ports:
+      - "8080:8080"
+    command: >
+      --model /models/Qwen3.5-2B-UD-Q4_K_XL.gguf
+      --port 8080
+      --ctx-size 4096
+      --n-gpu-layers 0
+      --host 0.0.0.0
+      --threads 4
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: "2g"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: cerebro-backend
+    platform: linux/arm64
+    ports:
+      - "7842:7842"
+    volumes:
+      - cerebro_data:/root/.cerebro
+      - ./bin/models:/models:ro
+      - ./config:/app/config:ro
+    depends_on:
+      llamacpp:
+        condition: service_healthy
+    environment:
+      - CEREBRO_LLAMACPP_URL=http://llamacpp:8080
+      - CEREBRO_LLAMACPP_MODEL=Qwen3.5-2B-UD-Q4_K_XL.gguf
+      - CEREBRO_EMBEDDINGS_BACKEND=local
+      - CEREBRO_PORT=7842
+      - CEREBRO_DB=/root/.cerebro/db
+      - CEREBRO_STATE=/root/.cerebro/state
+      - CEREBRO_SCHEDULER_ENABLED=false
+      - CEREBRO_MLX_ENABLED=false
+      - CEREBRO_LLAMACPP_SIMPLE=true
+      - CEREBRO_PROACTIVE_CONTEXT=false
+      - CEREBRO_MODE=sandbox
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "1g"
+    restart: unless-stopped
+
+volumes:
+  cerebro_data:

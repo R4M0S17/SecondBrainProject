@@ -1,0 +1,14 @@
+.git/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+ui/tray/node_modules/
+ui/tray/src-tauri/
+.DS_Store
+*.md
+docs/
+tests/
+manual_tests/

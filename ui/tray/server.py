@@ -51,6 +51,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -2059,3 +2060,11 @@ async def wizard_complete() -> dict[str, bool]:
 
 
 app.include_router(wizard)
+
+_frontend_dir = os.getenv("CEREBRO_FRONTEND_DIR", "")
+if not _frontend_dir:
+    _frontend_dir = str(Path(__file__).resolve().parent / "dist")
+if Path(_frontend_dir).exists():
+    app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
+else:
+    logger.warning("Frontend dist not found at {}. API-only mode.", _frontend_dir)
