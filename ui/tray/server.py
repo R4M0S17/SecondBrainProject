@@ -57,7 +57,11 @@ from pydantic import BaseModel, Field
 
 from core.agents.conversation_store import ConversationStore
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
-from core.inference.inference_warnings import clear_inference_warnings, consume_inference_warnings
+from core.inference.inference_warnings import (
+    clear_inference_warnings,
+    consume_inference_warnings,
+    mark_skip_context_enricher,
+)
 from core.inference.ram_preflight import RAM_WARNING_CRITICAL, collect_ram_warnings
 from core.ingestion.pipeline import IngestionPipeline
 from core.observability.ram_monitor import RamMonitor
@@ -172,6 +176,11 @@ class IndexStatusResponse(BaseModel):
     status: Literal["running", "done", "error"]
     files_indexed: int
     message: str = ""
+
+
+class QuickNoteRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    title: str | None = None
 
 
 @dataclass
@@ -346,6 +355,29 @@ class AppState:
 
 
 app_state = AppState()
+
+_SECRETS_PATH = Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser() / "secrets.json"
+
+
+def _load_secrets() -> dict[str, str]:
+    try:
+        if _SECRETS_PATH.exists():
+            return dict(json.loads(_SECRETS_PATH.read_text()))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_secret(key: str, value: str) -> None:
+    try:
+        _SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        secrets = _load_secrets()
+        secrets[key] = value
+        _SECRETS_PATH.write_text(json.dumps(secrets, indent=2))
+        os.chmod(str(_SECRETS_PATH), 0o600)
+    except Exception:
+        logger.warning("Failed to save secret {}", key)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Optional API key auth — skipped entirely when CEREBRO_API_KEY is unset
@@ -616,6 +648,24 @@ class SentenceBuffer:
         return result
 
 
+@api.post("/quick-note")
+async def quick_note_endpoint(req: QuickNoteRequest) -> dict[str, str]:
+    cerebro_files = app_state._config.get(
+        "cerebro_files_path", str(Path.home() / "Desktop" / "CerebroFiles")
+    )
+    base = Path(cerebro_files)
+    base.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    title = req.title or f"quick-note-{ts}"
+    if not title.endswith(".md"):
+        title += ".md"
+    path = base / title
+    content = f"# {title.replace('.md', '')}\n\n{req.content}\n"
+    path.write_text(content)
+    logger.info("Quick note saved to {}", path)
+    return {"status": "ok", "path": str(path)}
+
+
 def _build_metadata(
     total_latency_ms: float,
     model_name: str,
@@ -768,6 +818,9 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     ]
     augmented_question = _build_augmented_question(query_text, text_attachments)
 
+    if app_state._config.get("focus_mode"):
+        mark_skip_context_enricher()
+
     try:
         answer, final_state = await app_state.runtime.run(
             augmented_question,
@@ -894,6 +947,9 @@ async def query_stream_endpoint(req: QueryRequest) -> StreamingResponse:
                 provider_name = "llamacpp"
             except Exception:
                 warnings.append("provider_fallback")
+        if app_state._config.get("focus_mode"):
+            mark_skip_context_enricher()
+
         try:
             from core.agents.runtime import ContextSourcesEvent, StreamRunComplete
 
@@ -1554,12 +1610,25 @@ async def fleet_config(req: FleetModeRequest) -> dict[str, Any]:
 
 @api.get("/config")
 async def get_config() -> dict[str, Any]:
-    return app_state._config
+    cfg = dict(app_state._config)
+    cfg["claude_has_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return cfg
 
 
 @api.patch("/config")
 async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
     app_state._config.update(settings)
+
+    # Determine profile and args_file before model switch
+    profile_args_file: str | None = None
+    if "profile" in settings:
+        profile_name = settings["profile"]
+        profile_args_map = {
+            "normal": "config/chat.args",
+            "low-power": "config/chat-lowpower.args",
+        }
+        profile_args_file = profile_args_map.get(profile_name, "config/chat.args")
+        app_state._config["profile"] = profile_name
 
     if "model" in settings and app_state.provider_registry is not None:
         model_name: str = settings["model"]
@@ -1579,9 +1648,17 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
         prev_model = app_state._config.get("model")
         if target == "llamacpp" and app_state.model_manager is None and model_name != prev_model:
             try:
-                await _switch_llamacpp_model(model_name)
+                await _switch_llamacpp_model(model_name, profile_args_file or "config/chat.args")
             except Exception:
                 logger.exception("Failed to hot-switch model")
+
+    # If only profile changed (no model switch), restart with the new args
+    if "profile" in settings and "model" not in settings and profile_args_file:
+        try:
+            current_model = app_state._config.get("model", "")
+            await _switch_llamacpp_model(current_model, profile_args_file)
+        except Exception:
+            logger.exception("Failed to restart engine with new profile")
 
     if "inference_backend" in settings and app_state.provider_registry is not None:
         backend: str = settings["inference_backend"]
@@ -1605,6 +1682,21 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 backend,
                 registry.available_providers(),
             )
+
+    if "anthropic_api_key" in settings:
+        key: str = settings.pop("anthropic_api_key")
+        os.environ["ANTHROPIC_API_KEY"] = key
+        if (
+            app_state.provider_registry is not None
+            and "claude" in app_state.provider_registry.available_providers()
+        ):
+            try:
+                app_state.provider_registry.get_chat("claude").set_api_key(key)
+            except Exception:
+                logger.exception("Failed to update Claude provider API key")
+        _save_secret("ANTHROPIC_API_KEY", key)
+        app_state._config["claude_has_key"] = True
+        settings.pop("claude_has_key", None)
 
     if "watched_folders" in settings and app_state.runtime is not None:
         from functools import partial
@@ -1893,7 +1985,7 @@ def _update_args_mmproj(args_file: Path) -> None:
     args_file.write_text(content)
 
 
-async def _switch_llamacpp_model(model_name: str) -> None:
+async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.args") -> None:
     root = _LLAMA_CPP_MODELS_DIR.parent.parent
 
     model_path: Path | None = None
@@ -1908,17 +2000,18 @@ async def _switch_llamacpp_model(model_name: str) -> None:
 
     rel_path = model_path.relative_to(root)
 
-    args_file = root / "config" / "chat.args"
-    if args_file.is_file():
-        content = args_file.read_text()
+    template_path = root / args_file
+    output_path = root / "config" / "chat.args"
+    if template_path.is_file():
+        content = template_path.read_text()
         content = re.sub(
             r"^--model\s+.*$",
             f"--model {rel_path}",
             content,
             flags=re.MULTILINE,
         )
-        args_file.write_text(content)
-        _update_args_mmproj(args_file)
+        output_path.write_text(content)
+        _update_args_mmproj(output_path)
 
     killed = _kill_process_on_port(8080)
     if killed:

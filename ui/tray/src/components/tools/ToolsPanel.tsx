@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useToolsStore } from "../../stores/tools";
 import { useChatStore } from "../../stores/chat";
 import { useSystemStore } from "../../stores/system";
+import ToggleSwitch from "../shared/ToggleSwitch";
 
 const SCOPE_COLORS: Record<string, string> = {
   local: "bg-surface-container",
@@ -18,39 +19,39 @@ const SCOPE_LABELS: Record<string, string> = {
 const QUICK_ACTIONS = [
   {
     id: "search-files",
-    label: "Buscar archivo",
+    label: "Search Files",
     icon: "search",
-    description: "Buscar archivos por nombre o contenido",
+    description: "Find files by name or content",
   },
   {
     id: "create-note",
-    label: "Crear nota",
+    label: "Create Note",
     icon: "note_add",
-    description: "Crear nota en Apple Notes",
+    description: "Create a note in Apple Notes",
   },
   {
     id: "run-workflow",
-    label: "Ejecutar workflow",
+    label: "Run Workflow",
     icon: "play_arrow",
-    description: "Ejecutar workflow de automatización",
+    description: "Execute an automation workflow",
   },
   {
     id: "search-web",
-    label: "Buscar en web",
+    label: "Search Web",
     icon: "language",
-    description: "Buscar información actual en internet",
+    description: "Search current information on the internet",
   },
   {
     id: "calendar-events",
-    label: "Eventos del día",
+    label: "Day Events",
     icon: "calendar_month",
-    description: "Listar eventos del calendario",
+    description: "List today's calendar events",
   },
   {
     id: "spotlight",
     label: "Spotlight",
     icon: "lightbulb",
-    description: "Buscar con Spotlight en macOS",
+    description: "Search with macOS Spotlight",
   },
 ];
 
@@ -161,20 +162,13 @@ export default function ToolsPanel() {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            onClick={() => toggleTool(t.name, !t.enabled)}
-                            role="switch"
-                            aria-checked={t.enabled}
-                            className={`w-7 h-3.5 rounded-full relative cursor-pointer transition-colors shrink-0 ${
-                              t.enabled ? "bg-primary-container" : "bg-surface-container-highest"
-                            }`}
-                          >
-                            <div
-                              className={`absolute top-[1px] w-[10px] h-[10px] bg-white rounded-full transition-transform ${
-                                t.enabled ? "translate-x-[14px]" : "translate-x-[1px]"
-                              }`}
-                            />
-                          </button>
+                          <ToggleSwitch
+                            enabled={t.enabled}
+                            onChange={(v) => toggleTool(t.name, v)}
+                            size="sm"
+                            ariaLabel={`Toggle ${t.name}`}
+                            className="bg-surface-container-highest"
+                          />
                         </div>
                       </div>
                     ))}

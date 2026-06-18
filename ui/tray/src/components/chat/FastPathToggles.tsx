@@ -1,7 +1,8 @@
-import { useChatStore } from "../../stores/chat";
+import { useState } from "react";
 import { useSettingsStore } from "../../stores/settings";
+import QuickNoteDialog from "./QuickNoteDialog";
 
-type FastPathId = "math" | "calendar" | "reminders" | "websearch";
+type FastPathId = "quicknote" | "indexnow" | "focusmode" | "websearch";
 
 interface FastPathItem {
   id: FastPathId;
@@ -10,28 +11,37 @@ interface FastPathItem {
 }
 
 const fastPaths: FastPathItem[] = [
-  { id: "math", label: "Math", icon: "calculate" },
-  { id: "calendar", label: "Calendar", icon: "calendar_today" },
-  { id: "reminders", label: "Reminders", icon: "notifications" },
+  { id: "quicknote", label: "Quick Note", icon: "note_add" },
+  { id: "indexnow", label: "Index Now", icon: "database" },
+  { id: "focusmode", label: "Focus Mode", icon: "visibility_off" },
   { id: "websearch", label: "Web Search", icon: "travel_explore" },
 ];
 
 export default function FastPathToggles() {
-  const activeAgent = useChatStore((s) => s.activeAgent);
-  const setActiveAgent = useChatStore((s) => s.setActiveAgent);
   const { patch } = useSettingsStore();
+  const [quickNoteOpen, setQuickNoteOpen] = useState(false);
 
   const config = useSettingsStore((s) => s.config);
   const isActive = (id: FastPathId): boolean => {
-    if (id === "calendar") return activeAgent === "calendar";
     if (id === "websearch") return config?.tool_permissions?.search_web ?? false;
+    if (id === "focusmode") return config?.focus_mode ?? false;
     return false;
   };
 
   const handleClick = (id: FastPathId) => {
     switch (id) {
-      case "calendar":
-        setActiveAgent(isActive(id) ? "auto" : "calendar");
+      case "quicknote":
+        setQuickNoteOpen(true);
+        break;
+      case "indexnow": {
+        const folders = config?.watched_folders ?? [];
+        if (folders.length > 0) {
+          useSettingsStore.getState().startIndexing(folders);
+        }
+        break;
+      }
+      case "focusmode":
+        void patch({ focus_mode: !isActive(id) });
         break;
       case "websearch": {
         const currentPerms = useSettingsStore.getState().config?.tool_permissions;
@@ -46,33 +56,37 @@ export default function FastPathToggles() {
         });
         break;
       }
-      case "math":
-      case "reminders":
-        break;
     }
   };
 
   return (
-    <div className="flex justify-center gap-3 mb-4">
-      {fastPaths.map(({ id, label, icon }) => {
-        const active = isActive(id);
-        return (
-          <button
-            key={id}
-            onClick={() => handleClick(id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all group ${
-              active
-                ? "border border-primary-container/30 bg-primary-container/10 text-primary-container shadow-[0_0_10px_rgba(37,99,235,0.1)]"
-                : "border border-outline-variant/50 bg-surface-container/30 text-on-surface-variant hover:border-primary-container/50 hover:text-primary-container"
-            }`}
-          >
-            <span className={`material-symbols-outlined text-[18px] ${active ? "" : "group-hover:text-primary-container"}`}>
-              {icon}
-            </span>
-            {label}
-          </button>
-        );
-      })}
-    </div>
+    <>
+      <div className="flex justify-center gap-3 mb-4">
+        {fastPaths.map(({ id, label, icon }) => {
+          const active = isActive(id);
+          return (
+            <button
+              key={id}
+              onClick={() => handleClick(id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all group ${
+                active
+                  ? "border border-primary-container/30 bg-primary-container/10 text-primary-container shadow-[0_0_10px_rgba(37,99,235,0.1)]"
+                  : "border border-outline-variant/50 bg-surface-container/30 text-on-surface-variant hover:border-primary-container/50 hover:text-primary-container"
+              }`}
+            >
+              <span className={`material-symbols-outlined text-[18px] ${active ? "" : "group-hover:text-primary-container"}`}>
+                {icon}
+              </span>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      <QuickNoteDialog
+        open={quickNoteOpen}
+        onClose={() => setQuickNoteOpen(false)}
+      />
+    </>
   );
 }

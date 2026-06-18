@@ -10,8 +10,10 @@ from core.inference.registry import Message
 
 _DEFAULT_MODEL = "claude-sonnet-4-6"
 _CONTEXT_WINDOWS: dict[str, int] = {
-    "claude-opus-4-7": 200_000,
-    "claude-sonnet-4-6": 200_000,
+    "claude-fable-5": 1_000_000,
+    "claude-opus-4-8": 1_000_000,
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-haiku-4-5": 200_000,
     "claude-haiku-4-5-20251001": 200_000,
 }
 
@@ -21,7 +23,7 @@ class ClaudeApiUnavailableError(Exception):
 
 
 class ClaudeApiChatProvider:
-    supports_vision = False
+    supports_vision = True
 
     def __init__(
         self,
@@ -35,6 +37,7 @@ class ClaudeApiChatProvider:
 
         self._model = model
         self._max_tokens = max_tokens
+        self._timeout = timeout
         self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout)
 
     async def complete(self, messages: list[Message], **kwargs) -> str:
@@ -62,7 +65,7 @@ class ClaudeApiChatProvider:
         except anthropic.APIConnectionError as e:
             raise ClaudeApiUnavailableError("Cannot reach Anthropic API") from e
 
-    async def stream(self, messages: list[Message]) -> AsyncIterator[str]:
+    async def stream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]:
         system, user_messages = _split_system(messages)
         request: dict[str, object] = {
             "model": self._model,
@@ -82,6 +85,8 @@ class ClaudeApiChatProvider:
             async with self._client.messages.stream(**request) as stream:
                 async for text in stream.text_stream:
                     yield text
+        except anthropic.AuthenticationError as e:
+            raise ClaudeApiUnavailableError("Invalid ANTHROPIC_API_KEY") from e
         except anthropic.APIConnectionError as e:
             raise ClaudeApiUnavailableError("Cannot reach Anthropic API") from e
 
@@ -90,6 +95,10 @@ class ClaudeApiChatProvider:
 
     def context_window(self) -> int:
         return _CONTEXT_WINDOWS.get(self._model, 200_000)
+
+    def set_api_key(self, key: str) -> None:
+        self._client = anthropic.AsyncAnthropic(api_key=key, timeout=self._timeout)
+        os.environ["ANTHROPIC_API_KEY"] = key
 
     def is_available(self) -> bool:
         return bool(os.environ.get("ANTHROPIC_API_KEY"))

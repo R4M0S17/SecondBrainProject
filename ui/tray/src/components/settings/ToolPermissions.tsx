@@ -1,5 +1,6 @@
 import { useSettingsStore } from "../../stores/settings";
 import type { AppConfig } from "../../api/types";
+import ToggleSwitch from "../shared/ToggleSwitch";
 
 type PermKey = keyof AppConfig["tool_permissions"];
 
@@ -37,20 +38,13 @@ export default function ToolPermissions() {
               className="h-[44px] flex items-center justify-between px-2 rounded hover:bg-surface-container-low transition-colors"
             >
               <span className="text-[14px] text-on-surface">{label}</span>
-              <button
-                onClick={() => toggle(key)}
-                role="switch"
-                aria-checked={enabled}
-                className={`w-8 h-4 rounded-full relative cursor-pointer transition-colors ${
-                  enabled ? "bg-primary-container" : "bg-background"
-                }`}
-              >
-                <div
-                  className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${
-                    enabled ? "right-0.5" : "left-0.5"
-                  }`}
-                />
-              </button>
+              <ToggleSwitch
+                enabled={enabled}
+                onChange={() => toggle(key)}
+                size="md"
+                ariaLabel={`Toggle ${label}`}
+                className="bg-background"
+              />
             </div>
           );
         })}

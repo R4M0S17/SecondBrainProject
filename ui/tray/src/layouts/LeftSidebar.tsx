@@ -1,9 +1,5 @@
 import { useTabStore, type LeftTab } from "../stores/tab";
 
-interface LeftSidebarProps {
-  onOpenSettings?: () => void;
-}
-
 const tabs: { id: LeftTab; icon: string; label: string }[] = [
   { id: "chat", icon: "chat", label: "Chat" },
   { id: "sources", icon: "rss_feed", label: "Sources" },
@@ -11,7 +7,7 @@ const tabs: { id: LeftTab; icon: string; label: string }[] = [
   { id: "code", icon: "code", label: "Code" },
 ];
 
-export default function LeftSidebar({ onOpenSettings: _onOpenSettings }: LeftSidebarProps) {
+export default function LeftSidebar() {
   const activeTab = useTabStore((s) => s.activeTab);
   const setTab = useTabStore((s) => s.setTab);
 

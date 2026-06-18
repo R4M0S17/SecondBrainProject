@@ -2,11 +2,8 @@ import { useState, useCallback } from "react";
 import ServiceControls from "../components/status/ServiceControls";
 import WorkflowPanel from "../components/automation/WorkflowPanel";
 import { triggerSync } from "../api/client";
-
-interface Toast {
-  message: string;
-  type: "success" | "error";
-}
+import Toast from "../components/shared/Toast";
+import { QuickModelToggle } from "../components/chat/QuickModelToggle";
 
 interface HeaderProps {
   onDocumentsOpen?: () => void;
@@ -17,12 +14,13 @@ interface HeaderProps {
 export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }: HeaderProps) {
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [toast, setToast] = useState<Toast | null>(null);
+  const [toastState, setToastState] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   const showToast = useCallback((message: string, type: "success" | "error") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+    setToastState({ message, type });
   }, []);
+
+  const dismissToast = useCallback(() => setToastState(null), []);
 
   const handleSync = useCallback(async () => {
     setSyncing(true);
@@ -83,6 +81,7 @@ export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }:
               <span className="material-symbols-outlined text-[18px]">sync</span>
             )}
           </button>
+          <QuickModelToggle />
           <button
             onClick={onSettingsOpen}
             className="p-1.5 hover:text-primary transition-colors rounded hover:bg-surface-container"
@@ -112,34 +111,28 @@ export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }:
 
       {workflowsOpen && <WorkflowPanel onClose={() => setWorkflowsOpen(false)} />}
 
-      {toast && (
-        <div
-          className={`fixed bottom-4 right-4 z-[100] px-4 py-2.5 rounded-[8px] text-[13px] font-semibold shadow-lg transition-all duration-300 ${
-            toast.type === "success"
-              ? "bg-success-green/90 text-white"
-              : "bg-error/90 text-white"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {toast.type === "success" ? (
-              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                <path d="M20 6L9 17l-5-5" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 8v4M12 16h.01" />
-              </svg>
-            )}
-            {toast.message}
-            <button onClick={() => setToast(null)} className="ml-2 opacity-70 hover:opacity-100">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M18 6L6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
+      <Toast
+        visible={toastState !== null}
+        onDismiss={dismissToast}
+        duration={4000}
+        className={`fixed bottom-4 right-4 z-[100] ${
+          toastState?.type === "success"
+            ? "bg-success-green/90 text-white"
+            : "bg-error/90 text-white"
+        }`}
+      >
+        {toastState?.type === "success" ? (
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+        ) : (
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 8v4M12 16h.01" />
+          </svg>
+        )}
+        {toastState?.message}
+      </Toast>
     </header>
   );
 }

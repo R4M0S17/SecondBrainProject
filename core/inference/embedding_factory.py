@@ -14,10 +14,12 @@ _EMBED_RAM_LOCAL_DEFAULT_GB = 10.0
 
 
 def default_embeddings_backend() -> str:
-    """Use local embeddings on ≤10 GB machines unless overridden."""
+    """Use local embeddings on ≤10 GB machines or when using Claude API."""
     explicit = os.getenv("CEREBRO_EMBEDDINGS_BACKEND", "").strip().lower()
     if explicit:
         return explicit
+    if os.getenv("CEREBRO_INFERENCE_BACKEND", "llamacpp") == "claude":
+        return "local"
     total_gb = psutil.virtual_memory().total / (1024**3)
     if total_gb <= _EMBED_RAM_LOCAL_DEFAULT_GB:
         return "local"

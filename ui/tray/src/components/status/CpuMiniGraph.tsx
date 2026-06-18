@@ -4,7 +4,8 @@ import { useSystemStore } from "../../stores/system";
 const HISTORY_LEN = 12;
 
 export default function CpuMiniGraph() {
-  const cpuPercent = useSystemStore((s) => s.status?.cpu_percent ?? 0);
+  const status = useSystemStore((s) => s.status);
+  const cpuPercent = status?.cpu_percent ?? 0;
   const historyRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -12,6 +13,21 @@ export default function CpuMiniGraph() {
     h.push(cpuPercent);
     if (h.length > HISTORY_LEN) h.shift();
   }, [cpuPercent]);
+
+  if (!status) {
+    return (
+      <div className="bg-surface-container/40 rounded-xl p-5 border border-outline-variant/20 mb-6">
+        <div className="flex justify-between items-start mb-3">
+          <span className="text-xs font-medium text-on-surface-variant">Compute Load</span>
+          <span className="material-symbols-outlined text-[16px] text-outline/40">speed</span>
+        </div>
+        <div className="flex items-end gap-3 mb-2">
+          <span className="font-label-mono text-2xl text-outline/40">—</span>
+        </div>
+        <div className="text-[10px] text-outline/40">Waiting for data…</div>
+      </div>
+    );
+  }
 
   const displayVal = cpuPercent > 0 ? cpuPercent : null;
   const history = historyRef.current;

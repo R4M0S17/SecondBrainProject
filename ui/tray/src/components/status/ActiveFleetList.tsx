@@ -6,6 +6,7 @@ import type { LlamaCppModel } from "../../api/types";
 export default function ActiveFleetList() {
   const status = useSystemStore((s) => s.status);
   const llamaCppModels = useSettingsStore((s) => s.llamaCppModels);
+  const llamaCppLoading = useSettingsStore((s) => s.llamaCppLoading);
   const switchingModel = useSettingsStore((s) => s.switchingModel);
   const patch = useSettingsStore((s) => s.patch);
 
@@ -21,6 +22,20 @@ export default function ActiveFleetList() {
 
   const activeModel = llamaCppModels.find((m) => m.name === activeModelId);
   const availableModels = llamaCppModels.filter((m) => m.name !== activeModelId);
+
+  if (llamaCppLoading) {
+    return (
+      <div>
+        <h2 className="text-sm font-semibold tracking-wider text-on-surface-variant uppercase mb-4">
+          Active Fleet
+        </h2>
+        <div className="p-3 rounded-lg border border-outline-variant/20 bg-surface-container/30 flex items-center justify-center gap-2">
+          <span className="inline-block w-3 h-3 border-2 border-outline border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs text-outline">Loading models…</span>
+        </div>
+      </div>
+    );
+  }
 
   if (llamaCppModels.length === 0) {
     return (

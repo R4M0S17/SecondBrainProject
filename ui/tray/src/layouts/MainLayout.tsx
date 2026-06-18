@@ -58,7 +58,7 @@ export default function MainLayout() {
       />
 
       <div className="flex flex-1 overflow-hidden">
-        <LeftSidebar onOpenSettings={handleOpenSettings} />
+        <LeftSidebar />
         <div className="flex-1 flex flex-col relative w-full min-w-0 min-h-0">
           {activeTab === "tools" ? (
             <ToolsPanel />

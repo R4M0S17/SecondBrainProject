@@ -1,16 +1,26 @@
 import { useState } from "react";
 import { useSystemStore } from "../../stores/system";
 
-interface RamGaugeRingProps {
-  used?: number;
-  total?: number;
-}
-
-export default function RamGaugeRing({ used, total }: RamGaugeRingProps) {
+export default function RamGaugeRing() {
   const [collapsed, setCollapsed] = useState(false);
   const status = useSystemStore((s) => s.status);
-  const usedGb = used ?? status?.ram_used_gb ?? 0;
-  const totalGb = total ?? status?.ram_total_gb ?? (usedGb + (status?.ram_available_gb ?? 0));
+
+  if (!status) {
+    return (
+      <div className="bg-surface-container/40 rounded-xl p-5 border border-outline-variant/20 mb-4">
+        <div className="flex justify-between items-start mb-4">
+          <span className="text-xs font-medium text-on-surface-variant">Memory Allocation</span>
+          <span className="material-symbols-outlined text-[16px] text-outline/40">memory</span>
+        </div>
+        <div className="flex justify-center py-6">
+          <div className="text-[11px] text-outline/40 animate-pulse">Connecting…</div>
+        </div>
+      </div>
+    );
+  }
+
+  const usedGb = status.ram_used_gb ?? 0;
+  const totalGb = status.ram_total_gb ?? (usedGb + (status.ram_available_gb ?? 0));
   const percent = totalGb > 0 ? (usedGb / totalGb) * 100 : 0;
   const circumference = 2 * Math.PI * 40;
   const dashOffset = circumference - (percent / 100) * circumference;

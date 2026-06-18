@@ -12,6 +12,7 @@ make test-stable      # fast-path regression suite (no live deps)
 make lint             # black --check . + ruff check . + mypy core/
 make engine           # bash bin/start_engine.sh chat → llama.cpp :8080
 make engine-embed     # embed server on :8082
+make low-power        # low-power mode con Qwen2.5-0.5B
 cd ui/tray && npm run dev   # Vite+Tauri frontend
 cd ui/tray && npm run build # production desktop build
 ```
@@ -84,7 +85,7 @@ All routes under `/api`. Key endpoints:
 | `CEREBRO_INFERENCE_BACKEND` | llamacpp | llamacpp/mlx/claude |
 | `CEREBRO_LLAMACPP_URL` | http://127.0.0.1:8080 | |
 | `CEREBRO_LLAMACPP_SIMPLE` | true | false = ModelManager multi-server |
-| `CEREBRO_LLAMACPP_MODEL` | Qwen3.5-2B-UD-Q4_K_XL.gguf | in `bin/models/` |
+| `CEREBRO_LLAMACPP_MODEL` | Qwen3.5-2B-UD-Q4_K_XL.gguf | Cambiar a `Qwen2.5-0.5B-Instruct-Q4_K_M.gguf` para low-power mode |
 | `CEREBRO_MLX_MODEL` | mlx-community/Qwen3.5-2B-MLX-4bit | MLX HF repo (used when MLX is enabled) |
 | `CEREBRO_MLX_ENABLED` | auto | auto=true on Apple Silicon with mlx installed |
 | `CEREBRO_DB` | ~/.cerebro/db | |

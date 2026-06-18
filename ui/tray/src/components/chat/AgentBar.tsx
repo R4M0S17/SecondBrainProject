@@ -50,6 +50,8 @@ export default function AgentBar() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const clearMessages = useChatStore((s) => s.clearMessages);
+
   const select = (id: AgentId) => {
     setActiveAgent(id);
     setOpen(false);
@@ -108,8 +110,18 @@ export default function AgentBar() {
         )}
       </div>
 
-      <div className="text-xs text-on-surface-variant/60 font-label-mono truncate max-w-[200px]">
-        {model}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => clearMessages()}
+          title="Clear conversation"
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-on-surface-variant/50 hover:text-error hover:bg-error/10 transition-colors"
+        >
+          <span className="material-symbols-outlined text-[16px]">delete</span>
+          Clear
+        </button>
+        <div className="text-xs text-on-surface-variant/60 font-label-mono truncate max-w-[140px]">
+          {model}
+        </div>
       </div>
     </div>
   );

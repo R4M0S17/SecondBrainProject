@@ -1,0 +1,8 @@
+# config/chat-lowpower.args
+--model bin/models/Qwen2.5-0.5B-Instruct-Q5_K_M.gguf
+--port 8080
+--ctx-size 8192            # duplicado vs 4096 normal (el 0.5B lo tolera)
+--n-gpu-layers 99
+--chat-template chatml
+--grammar-file bin/grammars/tool_call.gbnf   # ← activado por defecto
+--log-disable

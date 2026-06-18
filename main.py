@@ -6,6 +6,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Load persisted secrets (API keys) from ~/.cerebro/state/secrets.json
+try:
+    import json as _json
+    from pathlib import Path as _Path
+
+    _secrets_file = (
+        _Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser() / "secrets.json"
+    )
+    if _secrets_file.exists():
+        for _k, _v in _json.loads(_secrets_file.read_text()).items():
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
+
 import os
 import re
 import signal
@@ -106,6 +120,7 @@ LLAMACPP_MODEL = os.getenv(
     "Qwen3.5-2B-UD-Q4_K_XL.gguf",
 )
 LLAMACPP_PROFILE = os.getenv("CEREBRO_LLAMACPP_PROFILE", "chat")
+LLAMACPP_ARGS_FILE = os.getenv("CEREBRO_LLAMACPP_ARGS_FILE", "config/chat.args")
 LLAMACPP_SIMPLE = os.getenv("CEREBRO_LLAMACPP_SIMPLE", "true").lower() == "true"
 REFLECTION_MODEL_URL = os.getenv("CEREBRO_REFLECTION_MODEL_URL", "")
 
@@ -169,7 +184,7 @@ def _ensure_chat_args() -> None:
     If the file was stale (e.g. from a previous hot-swap), rewrite it and
     restart the engine so the new args take effect.
     """
-    args_path = Path(__file__).parent / "config" / "chat.args"
+    args_path = Path(__file__).parent / LLAMACPP_ARGS_FILE
     if not args_path.is_file():
         return
     content = args_path.read_text()
@@ -227,7 +242,8 @@ def _build_app_state() -> None:
 
     from core.inference.fleet.orchestrator import FleetOrchestrator
 
-    _ensure_chat_args()
+    if INFERENCE_BACKEND == "llamacpp":
+        _ensure_chat_args()
 
     # ── EngineSuspender: SIGSTOP engine after inactivity ─────────────
     from core.inference.engine_suspender import EngineSuspender

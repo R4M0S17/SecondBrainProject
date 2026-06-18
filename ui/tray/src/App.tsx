@@ -4,7 +4,6 @@ import { useSystemStore } from "./stores/system";
 import { useServicesStore } from "./stores/services";
 import { useSettingsStore } from "./stores/settings";
 import { getWizardStatus } from "./api/client";
-import StartupGate from "./components/shared/StartupGate";
 import WizardShell from "./components/wizard/WizardShell";
 import MainLayout from "./layouts/MainLayout";
 
@@ -69,9 +68,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <StartupGate>
-        {isComplete ? <MainLayout /> : <WizardShell />}
-      </StartupGate>
+      {isComplete ? <MainLayout /> : <WizardShell />}
     </ErrorBoundary>
   );
 }

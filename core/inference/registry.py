@@ -57,6 +57,9 @@ class _ProviderEntry:
 
 
 _AGENT_TO_ROLE: dict[str, str] = {
+    "general-v1": "general",
+    "academic-v1": "general",
+    "calendar-v1": "general",
     "code-v1": "code",
 }
 

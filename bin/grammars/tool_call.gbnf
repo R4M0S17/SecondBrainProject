@@ -1,0 +1,7 @@
+# bin/grammars/tool_call.gbnf
+root ::= tool-call | answer
+tool-call ::= "{" ws "\"action\"" ws ":" ws "\"tool\"" ws "," ws "\"tool\"" ws ":" ws string ws "," ws "\"args\"" ws ":" ws "{" ws (pair (ws "," ws pair)*)? ws "}" ws "}"
+answer ::= "{" ws "\"action\"" ws ":" ws "\"answer\"" ws "," ws "\"answer\"" ws ":" ws string ws "}"
+string ::= "\"" ([^"]*) "\""
+pair ::= string ws ":" ws string
+ws ::= " "?

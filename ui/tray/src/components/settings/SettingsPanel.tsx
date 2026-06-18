@@ -9,6 +9,8 @@ import ToolPermissions from "./ToolPermissions";
 import DndToggle from "./DndToggle";
 import FleetSettings from "./FleetSettings";
 import KnowledgeSyncPanel from "./KnowledgeSyncPanel";
+import ClaudeModelSection from "./ClaudeModelSection";
+import ClaudeApiKeySection from "./ClaudeApiKeySection";
 
 type BackendId = "llamacpp" | "mlx" | "claude";
 
@@ -18,17 +20,40 @@ const BACKENDS: { id: BackendId; label: string }[] = [
   { id: "claude", label: "Claude API" },
 ];
 
+const BACKEND_LS_KEY = "cerebro_selected_backend";
+
 export default function SettingsPanel() {
   const { close, isOpen } = useSettingsStore();
   const status = useSystemStore((s) => s.status);
-  const activeBackend: BackendId = (status?.provider as BackendId) || "llamacpp";
+
+  // Local-selected backend (works offline, persisted)
+  const [selectedBackend, setSelectedBackend] = useState<BackendId>(() => {
+    const stored = localStorage.getItem(BACKEND_LS_KEY);
+    if (stored === "llamacpp" || stored === "mlx" || stored === "claude") return stored;
+    return "llamacpp";
+  });
+
+  // Sync from server when available
+  const serverBackend = (status?.provider as BackendId) || null;
+  useEffect(() => {
+    if (serverBackend && serverBackend !== selectedBackend) {
+      setSelectedBackend(serverBackend);
+      localStorage.setItem(BACKEND_LS_KEY, serverBackend);
+    }
+  }, [serverBackend]);
+
   const [switching, setSwitching] = useState(false);
+  const isClaude = selectedBackend === "claude";
 
   const handleBackendSwitch = async (backend: BackendId) => {
-    if (backend === activeBackend) return;
+    if (backend === selectedBackend) return;
+    setSelectedBackend(backend);
+    localStorage.setItem(BACKEND_LS_KEY, backend);
     setSwitching(true);
     try {
       await switchInferenceBackend(backend);
+    } catch {
+      // Backend may be offline — selection is stored locally
     } finally {
       setSwitching(false);
     }
@@ -90,7 +115,7 @@ export default function SettingsPanel() {
             </label>
             <div className="flex gap-2">
               {BACKENDS.map(({ id, label }) => {
-                const isActive = activeBackend === id;
+                const isActive = selectedBackend === id;
                 return (
                   <button
                     key={id}
@@ -109,22 +134,50 @@ export default function SettingsPanel() {
             </div>
           </section>
 
-          {/* Model */}
-          <section>
-            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-              Model
-            </label>
-            <ModelSelector />
-          </section>
+          {isClaude ? (
+            <>
+              {/* ── Claude sections at top ── */}
+              <ClaudeApiKeySection />
+              <ClaudeModelSection />
 
-          {/* Fleet Orchestrator */}
-          {activeBackend !== "claude" && (
-            <section>
-              <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-                Fleet Orchestrator
-              </label>
-              <FleetSettings />
-            </section>
+              {/* ── Local model sections pushed to bottom ── */}
+              <div className="pt-4 border-t border-outline-variant">
+                <p className="text-[10px] font-bold tracking-[0.05em] text-outline uppercase mb-3">
+                  Local Model Settings
+                </p>
+                <section>
+                  <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+                    Model
+                  </label>
+                  <ModelSelector />
+                </section>
+                <section className="mt-6">
+                  <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+                    Fleet Orchestrator
+                  </label>
+                  <FleetSettings />
+                </section>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* ── Local model sections at top ── */}
+              <section>
+                <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+                  Model
+                </label>
+                <ModelSelector />
+              </section>
+              <section>
+                <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+                  Fleet Orchestrator
+                </label>
+                <FleetSettings />
+              </section>
+
+              {/* ── Claude section pushed to bottom ── */}
+              <ClaudeApiKeySection />
+            </>
           )}
 
           {/* Tool Permissions */}
@@ -157,15 +210,15 @@ export default function SettingsPanel() {
           <div className="flex items-center gap-1">
             <div
               className={`w-1.5 h-1.5 rounded-full ${
-                activeBackend === "claude" ? "bg-[#a78bfa]" : status?.engine_ok ? "bg-success-green" : "bg-error"
+                isClaude ? "bg-[#a78bfa]" : status?.engine_ok ? "bg-success-green" : "bg-error"
               }`}
             />
             <span
               className={`text-[10px] font-bold tracking-[0.05em] uppercase ${
-                activeBackend === "claude" ? "text-[#a78bfa]" : status?.engine_ok ? "text-success-green" : "text-error"
+                isClaude ? "text-[#a78bfa]" : status?.engine_ok ? "text-success-green" : "text-error"
               }`}
             >
-              {activeBackend === "claude" ? "Claude API" : status?.engine_ok ? "Engine OK" : "Engine down"}
+              {isClaude ? "Claude API" : status?.engine_ok ? "Engine OK" : "Engine down"}
             </span>
           </div>
         </footer>
@@ -173,3 +226,5 @@ export default function SettingsPanel() {
     </div>
   );
 }
+
+

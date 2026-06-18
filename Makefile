@@ -1,4 +1,4 @@
-.PHONY: install setup test smoke run lint lite engine engine-embed engine-lite engine-code engine-deep desktop-config desktop-launch desktop-icon desktop-app desktop-install package-backend package-macos package-windows
+.PHONY: install setup test smoke run lint lite low-power engine engine-embed engine-lite engine-code engine-deep desktop-config desktop-launch desktop-icon desktop-app desktop-install package-backend package-macos package-windows
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -28,6 +28,9 @@ run:
 lite:
 	set -a; . config/profiles/lite-8gb.env; set +a; \
 	$(PYTHON) main.py
+
+low-power:
+	bash -c 'source config/profiles/low-power.env && exec $(PYTHON) main.py'
 
 engine:
 	./bin/start_engine.sh chat

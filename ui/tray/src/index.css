@@ -23,22 +23,8 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
   }
-  .glass-panel-hover:hover {
-    background: rgba(27, 27, 31, 0.75);
-    backdrop-filter: blur(20px);
-    border-color: rgba(255, 255, 255, 0.12);
-  }
   .glow-ring {
     box-shadow: 0 0 15px rgba(37, 99, 235, 0.3);
-  }
-  .glow-ring-cyan {
-    box-shadow: 0 0 15px rgba(37, 99, 235, 0.3);
-  }
-  .glow-ring-indigo {
-    box-shadow: 0 0 15px rgba(192, 193, 255, 0.3);
-  }
-  .glow-ring-gold {
-    box-shadow: 0 0 8px rgba(232, 196, 35, 0.4);
   }
   .input-glow:focus-within {
     border-color: #2563eb;

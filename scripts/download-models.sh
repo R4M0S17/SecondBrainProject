@@ -30,3 +30,16 @@ download_if_missing "$CHAT_MODEL"
 if [ "${CEREBRO_EMBEDDINGS_BACKEND:-local}" = "llamacpp" ]; then
   download_if_missing "$EMBED_MODEL"
 fi
+
+# ── Qwen2.5-0.5B (low-power mode) ──────────────────────────
+Qwen2.5_0.5B_FILE="qwen2.5-0.5b-instruct-q5_k_m.gguf"
+Qwen2.5_0.5B_SHA256="041474553fcabfc2a2d67903f9d2c2e50bd92528e670da4f33b5d0ce6e59fd55"
+Qwen2.5_0.5B_URL="${HF_BASE}/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q5_k_m.gguf"
+
+if [ ! -f "$MODELS_DIR/$Qwen2.5_0.5B_FILE" ]; then
+    echo "Downloading $Qwen2.5_0.5B_FILE ..."
+    curl -L --retry 3 --retry-delay 5 -o "$MODELS_DIR/$Qwen2.5_0.5B_FILE" "$Qwen2.5_0.5B_URL"
+    echo "Verifying checksum..."
+    echo "$Qwen2.5_0.5B_SHA256  $MODELS_DIR/$Qwen2.5_0.5B_FILE" | shasum -a 256 -c -
+    echo "✓ $Qwen2.5_0.5B_FILE downloaded and verified"
+fi

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from collections.abc import AsyncIterator
@@ -44,6 +45,11 @@ class TaskPlanner:
 
     def __init__(self, runtime: AgentRuntime) -> None:
         self._runtime = runtime
+        raw = os.getenv("CEREBRO_PLANNER_MAX_STEPS")
+        if raw is not None:
+            self.max_steps = min(int(raw), 2)
+        else:
+            self.max_steps = 4
 
     @staticmethod
     def is_complex_task(query: str) -> bool:
@@ -194,15 +200,15 @@ JSON array:"""
         This is a generator that yields the result of each step as it completes.
         Enforces maximum step count and per-step timeout to prevent runaway execution.
         """
-        if len(steps) > MAX_STEPS_PER_TASK:
+        effective_max = min(self.max_steps, MAX_STEPS_PER_TASK)
+        if len(steps) > effective_max:
             logger.warning(
-                "Task contains {} steps, exceeds MAX_STEPS_PER_TASK ({}). "
-                "Truncating to {} steps.",
+                "Task contains {} steps, exceeds limit ({}). " "Truncating to {} steps.",
                 len(steps),
-                MAX_STEPS_PER_TASK,
-                MAX_STEPS_PER_TASK,
+                effective_max,
+                effective_max,
             )
-            steps = steps[:MAX_STEPS_PER_TASK]
+            steps = steps[:effective_max]
 
         start_time = time.time()
         consecutive_failures = 0

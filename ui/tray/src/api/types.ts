@@ -205,10 +205,13 @@ export interface AppConfig {
     search_web: boolean;
   };
   dnd_enabled: boolean;
+  focus_mode: boolean;
   embedding_model: string;
   inference_backend: "llamacpp" | "claude" | "mlx";
   /** When false, MLX secondary provider is disabled (persisted for lite / 8 GB setups). */
   mlx_enabled?: boolean;
+  /** Whether an ANTHROPIC_API_KEY has been configured. */
+  claude_has_key?: boolean;
   /** Knowledge sync configuration. */
   knowledge_sync?: {
     enabled: boolean;
@@ -257,11 +260,11 @@ export interface Agent {
 export const AGENTS: Agent[] = [
   {
     id: "auto",
-    label: "Auto (router)",
+    label: "Auto",
     description: "Picks the best agent for each question",
   },
   { id: "general", label: "General", description: "All-purpose assistant" },
-  { id: "thesis", label: "Thesis", description: "Academic writing & research" },
+  { id: "thesis", label: "Academic", description: "Academic writing & research" },
   { id: "code", label: "Code", description: "Programming & debugging" },
   { id: "calendar", label: "Calendar", description: "Schedule & tasks" },
 ];

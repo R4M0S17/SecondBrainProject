@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getStatus, wizardReprobeCalendarPermission } from "../../api/client";
+import FolderList from "../shared/FolderList";
 
 const MACOS_AUTOMATION_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation";
@@ -115,50 +116,12 @@ export default function StepFolders({ onReady }: StepFoldersProps) {
         </div>
       )}
 
-      {/* Folder list */}
-      {folders.length > 0 && (
-        <div className="space-y-1">
-          {folders.map((f) => (
-            <div
-              key={f}
-              className="flex items-center justify-between bg-surface-container px-3 py-2 rounded-[6px] group"
-            >
-              <div className="flex items-center gap-2 overflow-hidden">
-                <svg className="w-4 h-4 text-outline shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                  <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-                </svg>
-                <span className="font-mono text-[13px] text-on-surface truncate">{f}</span>
-              </div>
-              <button
-                onClick={() => removeFolder(f)}
-                className="text-outline hover:text-error ml-2 shrink-0 transition-colors"
-                aria-label={`Remove ${f}`}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Add folder button */}
-      <button
-        onClick={addFolders}
-        className="w-full py-2 border border-dashed border-outline-variant rounded-[6px] text-[12px] text-outline hover:bg-surface-container transition-colors flex items-center justify-center gap-1"
-      >
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-        Add Folder
-      </button>
-
-      {folders.length === 0 && (
-        <p className="text-[11px] text-outline text-center">
-          At least one folder is required to continue.
-        </p>
-      )}
+      <FolderList
+        folders={folders}
+        onAdd={addFolders}
+        onRemove={removeFolder}
+        minFoldersMessage="At least one folder is required to continue."
+      />
     </div>
   );
 }

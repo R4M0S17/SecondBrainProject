@@ -48,6 +48,7 @@ const DEFAULT_CONFIG: AppConfig = {
     search_web: false,
   },
   dnd_enabled: false,
+  focus_mode: false,
   embedding_model: "nomic-embed-text",
   inference_backend: "llamacpp",
 };

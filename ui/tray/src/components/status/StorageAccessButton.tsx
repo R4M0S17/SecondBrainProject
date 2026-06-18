@@ -5,7 +5,8 @@ interface StorageAccessButtonProps {
 }
 
 export default function StorageAccessButton({ onOpen }: StorageAccessButtonProps) {
-  const files = useSystemStore((s) => s.status?.indexed_files ?? 0);
+  const status = useSystemStore((s) => s.status);
+  const files = status?.indexed_files ?? 0;
 
   return (
     <button
@@ -21,7 +22,11 @@ export default function StorageAccessButton({ onOpen }: StorageAccessButtonProps
             Storage Access
           </span>
           <span className="text-sm font-medium text-on-surface">
-            {files > 0 ? `${files} file${files !== 1 ? "s" : ""}` : "Open Files"}
+            {!status
+              ? "Connecting…"
+              : files > 0
+                ? `${files} file${files !== 1 ? "s" : ""}`
+                : "0 files"}
           </span>
         </div>
       </div>

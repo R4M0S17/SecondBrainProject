@@ -72,16 +72,6 @@ export function selectIsClaudeMode(status: StatusResponse | null): boolean {
   return status?.provider === "claude";
 }
 
-export function selectRamPressure(
-  status: StatusResponse | null,
-): "ok" | "warn" | "critical" {
-  return status?.ram_pressure ?? "ok";
-}
-
-export function selectSwapInProgress(state: SystemState): boolean {
-  return state.fleetStatus?.swap_in_progress ?? false;
-}
-
 export function selectLlamaServerState(
   state: SystemState,
 ): "up" | "restarting" | "down" | null {

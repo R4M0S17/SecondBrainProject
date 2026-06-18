@@ -39,6 +39,13 @@ export const AGENT_ID_MAP: Record<AgentId, string> = {
 
 const BASE = "http://localhost:7842";
 
+export async function writeQuickNote(content: string, title?: string): Promise<{ status: string; path: string }> {
+  return request<{ status: string; path: string }>("/api/quick-note", {
+    method: "POST",
+    body: JSON.stringify({ content, title }),
+  });
+}
+
 export async function uploadFiles(files: File[]): Promise<FileAttachment[]> {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
@@ -210,6 +217,10 @@ export async function switchInferenceBackend(
   backend: "llamacpp" | "claude" | "mlx"
 ): Promise<AppConfig> {
   return updateConfig({ inference_backend: backend });
+}
+
+export async function updateClaudeApiKey(key: string): Promise<AppConfig> {
+  return updateConfig({ anthropic_api_key: key } as Partial<AppConfig>);
 }
 
 export async function getModels(): Promise<ModelsResponse> {

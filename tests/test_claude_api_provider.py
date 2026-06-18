@@ -62,9 +62,9 @@ def test_model_id_returns_configured_model(api_key: None) -> None:
     assert provider.model_id() == "claude-opus-4-7"
 
 
-def test_context_window_200k(api_key: None) -> None:
+def test_context_window_1m(api_key: None) -> None:
     provider = ClaudeApiChatProvider(model="claude-sonnet-4-6")
-    assert provider.context_window() == 200_000
+    assert provider.context_window() == 1_000_000
 
 
 def test_context_window_default_for_unknown_model(api_key: None) -> None:
