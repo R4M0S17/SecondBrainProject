@@ -19,7 +19,7 @@ def _make_web_registry() -> ToolRegistry:
 # ── web_search (DuckDuckGo backend) ─────────────────────────────────────────
 
 
-@patch("duckduckgo_search.DDGS")
+@patch("core.tools.handlers.web.DDGS")
 def test_web_search_duckduckgo_returns_results(mock_ddgs: MagicMock) -> None:
     from core.tools.handlers.web import web_search
 
@@ -46,7 +46,7 @@ def test_web_search_duckduckgo_returns_results(mock_ddgs: MagicMock) -> None:
     assert "---" in result
 
 
-@patch("duckduckgo_search.DDGS")
+@patch("core.tools.handlers.web.DDGS")
 def test_web_search_duckduckgo_no_results(mock_ddgs: MagicMock) -> None:
     from core.tools.handlers.web import web_search
 
@@ -59,7 +59,7 @@ def test_web_search_duckduckgo_no_results(mock_ddgs: MagicMock) -> None:
     assert "No se encontraron resultados" in result
 
 
-@patch("duckduckgo_search.DDGS")
+@patch("core.tools.handlers.web.DDGS")
 def test_web_search_duckduckgo_error(mock_ddgs: MagicMock) -> None:
     from core.tools.handlers.web import web_search
 
@@ -143,13 +143,17 @@ def test_web_fetch_success(mock_get: MagicMock, mock_extract: MagicMock) -> None
     mock_extract.assert_called_once()
 
 
-@patch("httpx.get")
-def test_web_fetch_timeout(mock_get: MagicMock) -> None:
+@patch("httpx.Client")
+def test_web_fetch_timeout(mock_client_cls: MagicMock) -> None:
     import httpx
 
     from core.tools.handlers.web import web_fetch
 
-    mock_get.side_effect = httpx.TimeoutException("timed out")
+    mock_client = MagicMock()
+    mock_client.__enter__.return_value = mock_client
+    mock_client.__exit__.return_value = None
+    mock_client.get.side_effect = httpx.TimeoutException("timed out")
+    mock_client_cls.return_value = mock_client
 
     result = web_fetch("https://ejemplo.com")
 
@@ -157,8 +161,8 @@ def test_web_fetch_timeout(mock_get: MagicMock) -> None:
     assert "Timeout" in result
 
 
-@patch("httpx.get")
-def test_web_fetch_404(mock_get: MagicMock) -> None:
+@patch("httpx.Client")
+def test_web_fetch_404(mock_client_cls: MagicMock) -> None:
     import httpx
 
     from core.tools.handlers.web import web_fetch
@@ -168,7 +172,11 @@ def test_web_fetch_404(mock_get: MagicMock) -> None:
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
         "404", request=MagicMock(), response=mock_response
     )
-    mock_get.return_value = mock_response
+    mock_client = MagicMock()
+    mock_client.__enter__.return_value = mock_client
+    mock_client.__exit__.return_value = None
+    mock_client.get.return_value = mock_response
+    mock_client_cls.return_value = mock_client
 
     result = web_fetch("https://ejemplo.com/notfound")
 

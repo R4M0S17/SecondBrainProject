@@ -217,6 +217,7 @@ class Recorder:
     def __init__(self) -> None:
         self._events: list[ActionEvent] = []
         self._running = False
+        self._started_at: float | None = None
         self._thread: threading.Thread | None = None
         self._tap: Any = None
         self._lock = threading.Lock()
@@ -229,6 +230,30 @@ class Recorder:
     def event_count(self) -> int:
         return len(self._events)
 
+    @property
+    def started_at(self) -> float | None:
+        return self._started_at
+
+    @property
+    def duration_sec(self) -> float:
+        if self._started_at is None:
+            return 0.0
+        return max(0.0, time.time() - self._started_at)
+
+    def get_events(self) -> list[ActionEvent]:
+        with self._lock:
+            return list(self._events)
+
+    def get_unique_apps(self) -> list[str]:
+        apps: list[str] = []
+        seen: set[str] = set()
+        for ev in self.get_events():
+            name = ev.app_name
+            if name and name not in seen:
+                seen.add(name)
+                apps.append(name)
+        return apps
+
     def start(self) -> None:
         """Begin capturing input events."""
         if self._running:
@@ -236,6 +261,7 @@ class Recorder:
         if not HAS_QUARTZ:
             logger.warning("Desktop Recorder requires pyobjc (pip install pyobjc-framework-Quartz)")
         self._events = []
+        self._started_at = time.time()
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -259,7 +285,26 @@ class Recorder:
                 pass
             self._thread.join(timeout=2.0)
         logger.info("Desktop Recorder stopped — {} events", len(self._events))
+        self._started_at = None
         return list(self._events)
+
+    def cancel(self) -> None:
+        """Stop recording and discard captured events."""
+        self._running = False
+        if self._tap is not None and HAS_QUARTZ:
+            try:
+                Quartz.CGEventTapEnable(self._tap, False)
+            except Exception:
+                pass
+        if self._thread is not None and self._thread.is_alive():
+            try:
+                Quartz.CFRunLoopStop(Quartz.CFRunLoopGetMain())
+            except Exception:
+                pass
+            self._thread.join(timeout=2.0)
+        self._events = []
+        self._started_at = None
+        logger.info("Desktop Recorder cancelled")
 
     def _handle_event(self, event_type: int, event: Any) -> None:
         """Process a single CGEvent and append to the event list."""

@@ -38,6 +38,8 @@ dependencies = [
     # Calendar
     "icalendar>=5.0",
     "dateparser>=1.1",
+    # Encryption for secrets
+    "cryptography>=41.0",
     # REST API
     "fastapi>=0.111",
     "python-multipart>=0.0.9",

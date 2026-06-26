@@ -10,6 +10,12 @@ export interface Message {
   expandedPanel?: "sources" | "tools" | "memory" | null;
 }
 
+export interface PendingChatAction {
+  query: string;
+  autoSend: boolean;
+  agentId?: AgentId;
+}
+
 export interface PendingConfirmation {
   toolName: string;
   toolPath?: string;
@@ -35,6 +41,7 @@ interface ChatState {
   pendingConfirmation: PendingConfirmation | null;
   searchingSources: SearchingSources | null;
   searchingWeb: boolean;
+  pendingChatAction: PendingChatAction | null;
 
   addMessage: (msg: Omit<Message, "id" | "timestamp">) => string;
   updateMessage: (id: string, patch: Partial<Message>) => void;
@@ -49,6 +56,8 @@ interface ChatState {
   clearMessages: () => void;
   setSearchingSources: (s: SearchingSources | null) => void;
   setSearchingWeb: (s: boolean) => void;
+  setPendingChatAction: (action: PendingChatAction | null) => void;
+  consumePendingChatAction: () => PendingChatAction | null;
 }
 
 function genId(): string {
@@ -64,6 +73,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingConfirmation: null,
   searchingSources: null,
   searchingWeb: false,
+  pendingChatAction: null,
 
   addMessage: (msg) => {
     const id = genId();
@@ -120,5 +130,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSearchingSources: (s) => set({ searchingSources: s }),
   setSearchingWeb: (s) => set({ searchingWeb: s }),
 
-  clearMessages: () => set({ messages: [], conversationId: null, searchingSources: null, searchingWeb: false }),
+  setPendingChatAction: (action) => set({ pendingChatAction: action }),
+
+  consumePendingChatAction: () => {
+    const action = get().pendingChatAction;
+    if (action) set({ pendingChatAction: null });
+    return action;
+  },
+
+  clearMessages: () => set({ messages: [], conversationId: null, searchingSources: null, searchingWeb: false, pendingChatAction: null }),
 }));

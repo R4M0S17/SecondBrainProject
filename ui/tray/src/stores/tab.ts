@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type LeftTab = "chat" | "tools" | "code" | "sources";
+export type LeftTab = "home" | "chat" | "memory" | "tools" | "code" | "sources" | "workflows";
 
 interface TabState {
   activeTab: LeftTab;
@@ -10,7 +10,7 @@ interface TabState {
 }
 
 export const useTabStore = create<TabState>((set) => ({
-  activeTab: "chat",
+  activeTab: "home",
   setTab: (tab) => set({ activeTab: tab }),
   scratch: "",
   setScratch: (v) => set({ scratch: v }),

@@ -1,22 +1,14 @@
+import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "../../stores/settings";
 import type { AppConfig } from "../../api/types";
 import ToggleSwitch from "../shared/ToggleSwitch";
 
 type PermKey = keyof AppConfig["tool_permissions"];
 
-interface PermRow {
-  key: PermKey;
-  label: string;
-}
-
-const PERMISSIONS: PermRow[] = [
-  { key: "execute_python", label: "Execute Python" },
-  { key: "write_file", label: "Write File" },
-  { key: "read_file", label: "Read File" },
-  { key: "search_web", label: "Search Web" },
-];
+const PERM_KEYS: PermKey[] = ["execute_python", "write_file", "read_file", "search_web"];
 
 export default function ToolPermissions() {
+  const { t } = useTranslation();
   const { config, patch } = useSettingsStore();
   const perms = config?.tool_permissions;
 
@@ -30,8 +22,9 @@ export default function ToolPermissions() {
   return (
     <section>
       <div className="space-y-1">
-        {PERMISSIONS.map(({ key, label }) => {
+        {PERM_KEYS.map((key) => {
           const enabled = perms?.[key] ?? false;
+          const label = t("permissions." + key);
           return (
             <div
               key={key}
@@ -42,7 +35,7 @@ export default function ToolPermissions() {
                 enabled={enabled}
                 onChange={() => toggle(key)}
                 size="md"
-                ariaLabel={`Toggle ${label}`}
+                ariaLabel={label}
                 className="bg-background"
               />
             </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getStatus, wizardReprobeCalendarPermission } from "../../api/client";
 import FolderList from "../shared/FolderList";
@@ -11,6 +12,7 @@ interface StepFoldersProps {
 }
 
 export default function StepFolders({ onReady }: StepFoldersProps) {
+  const { t } = useTranslation();
   const [folders, setFolders] = useState<string[]>([]);
   const [calendarPerm, setCalendarPerm] = useState<string | null>(null);
   const [reprobeBusy, setReprobeBusy] = useState(false);
@@ -33,10 +35,7 @@ export default function StepFolders({ onReady }: StepFoldersProps) {
       const { open: openUrl } = await import("@tauri-apps/plugin-shell");
       await openUrl(MACOS_AUTOMATION_URL);
     } catch {
-      window.alert(
-        "Open System Settings → Privacy & Security → Automation, then enable Calendar for the app that runs Python.\n\n" +
-          `Or run in Terminal:\nopen '${MACOS_AUTOMATION_URL}'`,
-      );
+      window.alert(`${t("wizard.open_settings")}\n\nOr run in Terminal:\nopen '${MACOS_AUTOMATION_URL}'`);
     }
   };
 
@@ -83,15 +82,13 @@ export default function StepFolders({ onReady }: StepFoldersProps) {
   return (
     <div className="w-full space-y-3 mb-6">
       <p className="text-[14px] text-[#e8eaf0] text-center leading-relaxed">
-        Choose the folders Cerebro will index and keep in memory. You can change
-        these later in Settings.
+        {t("wizard.folders_desc")}
       </p>
 
       {showCalendarCard && (
         <div className="rounded-[6px] border border-[#4a3f2e] bg-[#2a2419] px-3 py-3 space-y-2">
           <p className="text-[13px] text-[#f5e6c8] text-center leading-snug">
-            Cerebro needs <strong className="font-semibold">Calendar Automation</strong>{" "}
-            permission so calendar questions return real events (not empty guesses).
+            {t("wizard.calendar_permission")}: {t("wizard.calendar_desc")}
           </p>
           <div className="flex flex-col gap-2">
             <button
@@ -99,7 +96,7 @@ export default function StepFolders({ onReady }: StepFoldersProps) {
               onClick={() => void openAutomationSettings()}
               className="w-full py-2 rounded-[6px] text-[12px] font-medium bg-[#3d3428] text-[#f5e6c8] hover:bg-[#4d4336] transition-colors"
             >
-              Open Settings
+              {t("wizard.open_settings_btn")}
             </button>
             <button
               type="button"
@@ -107,11 +104,11 @@ export default function StepFolders({ onReady }: StepFoldersProps) {
               onClick={() => void handleGrantedClick()}
               className="w-full py-2 rounded-[6px] text-[12px] font-medium border border-[#5c5244] text-[#c4b8a8] hover:bg-[#332c22] transition-colors disabled:opacity-50"
             >
-              {reprobeBusy ? "Checking…" : "I granted it — check again"}
+              {reprobeBusy ? t("wizard.calendar_checking") : t("wizard.calendar_granted")}
             </button>
           </div>
           <p className="text-[10px] text-[#8b7f6a] text-center">
-            Current status: <span className="font-mono">{calendarPerm}</span>
+            {t("wizard.calendar_status", { perm: calendarPerm ?? "unknown" })}
           </p>
         </div>
       )}
@@ -120,7 +117,7 @@ export default function StepFolders({ onReady }: StepFoldersProps) {
         folders={folders}
         onAdd={addFolders}
         onRemove={removeFolder}
-        minFoldersMessage="At least one folder is required to continue."
+        minFoldersMessage={t("wizard.folder_required")}
       />
     </div>
   );

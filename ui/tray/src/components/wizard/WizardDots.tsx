@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 interface WizardDotsProps {
   step: number;
@@ -7,6 +8,7 @@ interface WizardDotsProps {
 }
 
 export default function WizardDots({ step, total, label }: WizardDotsProps) {
+  const { t } = useTranslation();
   return (
     <div className="w-full flex flex-col items-center mb-6">
       <div className="flex items-center gap-1 mb-2">
@@ -24,7 +26,7 @@ export default function WizardDots({ step, total, label }: WizardDotsProps) {
         ))}
       </div>
       <p className="text-[11px] font-bold tracking-[0.05em] uppercase leading-[16px]">
-        <span className="text-outline">Step {step + 1} of {total} · </span>
+        <span className="text-outline">{t("wizard.step_label", { step: step + 1, total })} · </span>
         <span className="text-[#e8eaf0]">{label}</span>
       </p>
     </div>

@@ -20,7 +20,7 @@ _PROFILE_CTX: dict[str, int] = {
 }
 
 _VISION_MODEL_RE = re.compile(
-    r"\b(UD|VL|vision|multimodal|mmproj|llava|llama-vision)\b", re.IGNORECASE
+    r"\b(VL|vision|multimodal|mmproj|llava|llama-vision)\b", re.IGNORECASE
 )
 
 
@@ -51,6 +51,7 @@ class LlamaCppChatProvider:
             "stream": False,
             "temperature": kwargs.get("temperature"),
             "grammar": kwargs.get("grammar"),
+            "max_tokens": kwargs.get("max_tokens", 2048),
         }
         if "n_ctx" in kwargs:
             payload["n_ctx"] = kwargs["n_ctx"]
@@ -84,6 +85,7 @@ class LlamaCppChatProvider:
             "messages": messages,
             "stream": True,
             "grammar": kwargs.get("grammar"),
+            "max_tokens": kwargs.get("max_tokens", 2048),
         }
         if "n_ctx" in kwargs:
             payload["n_ctx"] = kwargs["n_ctx"]

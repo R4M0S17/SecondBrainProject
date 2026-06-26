@@ -15,7 +15,7 @@ describe("TypingIndicator", () => {
 
   it("has aria-live polite", () => {
     render(<TypingIndicator />);
-    expect(screen.getByLabelText("Assistant is thinking")).toHaveAttribute(
+    expect(screen.getByLabelText("Thinking with local")).toHaveAttribute(
       "aria-live",
       "polite",
     );

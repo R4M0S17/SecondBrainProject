@@ -6,8 +6,15 @@ _CONVERT_RE = re.compile(
     r"\b(?:convert(?:ir)?|"
     r"c[uaá]nto\s+(?:es|son|vale)|"
     r"c[oó]mo\s+(?:es|son)|"
-    r"cu[áa]ntos?\s+\w+|"
-    r"\d+\s+\w+\s+(?:a|to|en|por)\s+\w+)",
+    r"cu[áa]ntos?\s+\w+)",
+    re.IGNORECASE,
+)
+
+# Require an explicit conversion verb/phrase before answering parse failures.
+_EXPLICIT_CONVERT_RE = re.compile(
+    r"\b(?:convert(?:ir)?|"
+    r"c[uaá]nto\s+(?:es|son|vale)|"
+    r"c[oó]mo\s+(?:es|son))\b",
     re.IGNORECASE,
 )
 
@@ -310,6 +317,8 @@ def try_unit_conversion_fast_path(query: str) -> str | None:
 
     parsed = _extract_conversion(query)
     if parsed is None:
+        if not _EXPLICIT_CONVERT_RE.search(query):
+            return None
         return (
             "No pude identificar la conversión. "
             "Ej: 'convertir 10 km a millas' o 'cuántos grados celsius son 100 fahrenheit'."

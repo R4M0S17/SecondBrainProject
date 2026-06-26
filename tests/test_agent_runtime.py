@@ -613,7 +613,7 @@ async def test_reason_node_passes_grammar_to_complete(tmp_path):
         tool_registry={},
     )
 
-    await runtime.run("¿Qué hora es?", agent_id)
+    await runtime.run("Resume brevemente qué es la gravedad", agent_id)
 
     assert "grammar" in captured
     assert "answer-response" in captured["grammar"]

@@ -60,6 +60,27 @@ file_write_spec_generation:
     must_not_contain: ["crea un archivo"]
     description: "File write with spec requiring recipe generation"
 
+  - prompt: "crea un archivo con 4 nombres de mujer"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["Lucía", "Sofía"]
+    must_not_contain: ["crea un archivo", "con"]
+    description: "Female names with auto-generated filename (no LLM fallback)"
+
+  - prompt: "crea un archivo con 3 nombres de hombre inventados"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["Liam", "Noah", "Oliver"]
+    must_not_contain: ["crea un archivo", "con"]
+    description: "Male invented names with auto-generated filename (no LLM fallback)"
+
+  - prompt: "crea un archivo receta.txt con una receta de lasagna"
+    expected_fast_path: "file_write"
+    expected_content_source: "spec"
+    must_contain: ["lasagna", "ingrediente"]
+    must_not_contain: ["crea un archivo"]
+    description: "Lasagna recipe with explicit filename (no LLM fallback)"
+
 file_write_calendar_fusion:
   - prompt: "crea un archivo calendarioprueba.txt con los 3 proximos cumpleaños en mi calendario"
     expected_fast_path: "file_write_calendar_fusion"

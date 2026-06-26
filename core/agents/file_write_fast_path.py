@@ -23,7 +23,12 @@ _ABS_PATH = r"(?:~|/)[^\s\"']+\.\w{1,12}"
 _QUOTE = r"[\"'“”‘’]"
 
 _INVALID_FILENAMES = frozenset(
-    {"de", "un", "el", "la", "los", "las", "texto", "ejemplo", "archivo"}
+    {
+        "de", "un", "el", "la", "los", "las", "lo", "le",
+        "con", "sin", "por", "para", "del", "que", "una",
+        "como", "más", "pero", "sus", "son", "era", "han",
+        "texto", "ejemplo", "archivo", "fichero",
+    }
 )
 
 # Spanish: crea [un] archivo [llamado|de nombre] X [con] (contenido|texto) Y
@@ -138,6 +143,54 @@ _SOURCE_CODE_RE = re.compile(
     re.MULTILINE,
 )
 
+# Fallback: "crea un archivo con [contenido]" (no filename specified).
+_ES_CREATE_NO_FILENAME_RE = re.compile(
+    rf"(?:crea|crear|escribe|escribir|guarda|guardar)\s+"
+    rf"(?:un\s+)?(?:archivo|fichero)\s+"
+    rf"con\s+"
+    rf"(?:(?:contenido|el\s+contenido|el\s+texto|texto)(?:\s+de)?\s+)?"
+    rf"(?P<content>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_FILENAME_KEYWORDS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bnombres?\b", re.IGNORECASE), "nombres"),
+    (re.compile(r"\bhombre(?:s)?\b", re.IGNORECASE), "hombres"),
+    (re.compile(r"\bmujer(?:es)?\b", re.IGNORECASE), "mujeres"),
+    (re.compile(r"\binventad[oa]s?\b", re.IGNORECASE), "inventados"),
+    (re.compile(r"\brecet[ao]s?\b", re.IGNORECASE), "receta"),
+    (re.compile(r"\bvideojuegos?\b", re.IGNORECASE), "videojuegos"),
+    (re.compile(r"\bplaystation\b", re.IGNORECASE), "playstation"),
+    (re.compile(r"\bcumpleaños?\b", re.IGNORECASE), "cumpleanos"),
+    (re.compile(r"\bcalendario\b", re.IGNORECASE), "calendario"),
+    (re.compile(r"\btabla\b", re.IGNORECASE), "tabla"),
+    (re.compile(r"\bverdad\b", re.IGNORECASE), "verdad"),
+    (re.compile(r"\bfibonacci\b", re.IGNORECASE), "fibonacci"),
+    (re.compile(r"\bpython\b", re.IGNORECASE), "python"),
+    (re.compile(r"\bc[oó]digo\b", re.IGNORECASE), "codigo"),
+    (re.compile(r"\blista\b", re.IGNORECASE), "lista"),
+    (re.compile(r"\bideas?\b", re.IGNORECASE), "ideas"),
+    (re.compile(r"\nejemplos?\b", re.IGNORECASE), "ejemplos"),
+]
+
+
+def _suggest_filename_from_content(text: str) -> str:
+    """Auto-generate a filename from content keywords when none was provided."""
+    for pattern, name in _FILENAME_KEYWORDS:
+        if pattern.search(text):
+            count_pat = re.compile(r"(\d+)\s+" + re.escape(name.rstrip("s")), re.IGNORECASE)
+            count_m = count_pat.search(text)
+            if count_m:
+                return f"{name}_{count_m.group(1)}.txt"
+            return f"{name}.txt"
+    # Fallback: truncate first 30 chars of content as filename.
+    slug = re.sub(r"[^\w\s]", "", text).strip().lower()
+    words = slug.split()[:4]
+    if words:
+        return "_".join(words)[:30] + ".txt"
+    return "archivo.txt"
+
+
 _PATTERNS: list[re.Pattern[str]] = [
     _EXPLICIT_WRITE_RE,
     _USA_WRITE_RE,
@@ -147,6 +200,7 @@ _PATTERNS: list[re.Pattern[str]] = [
     _ES_CREATE_RE,
     _ES_CREATE_SHORT_RE,
     _EN_CREATE_RE,
+    _ES_CREATE_NO_FILENAME_RE,
 ]
 
 
@@ -325,25 +379,33 @@ def _resolve_path(path_or_name: str, write_roots: list[str]) -> str | None:
 def _intent_from_match(m: re.Match[str], write_roots: list[str]) -> FileWriteIntent | None:
     path_or_name = m.groupdict().get("path") or m.groupdict().get("filename")
     content_raw = m.groupdict().get("content")
-    if not path_or_name or not content_raw:
+    if not content_raw:
         return None
 
-    raw_name = path_or_name.strip().strip("\"'")
-    provisional = Path(raw_name).name
-    if provisional.lower() in _INVALID_FILENAMES or len(provisional) < 3:
-        return None
+    if path_or_name:
+        raw_name = path_or_name.strip().strip("\"'")
+        provisional = Path(raw_name).name
+        if provisional.lower() in _INVALID_FILENAMES or len(provisional) < 3:
+            provisional = None
+    else:
+        provisional = None
 
-    body, source, spec = classify_file_content(content_raw, provisional)
+    body, source, spec = classify_file_content(content_raw, provisional or "archivo.txt")
     if not body:
         return None
 
-    filename = suggest_filename(provisional, body if source != "spec" else spec or body, source)
-    if "/" in raw_name or raw_name.startswith("~"):
-        expanded = Path(raw_name).expanduser()
-        target = expanded if expanded.suffix else expanded.parent / filename
-        resolved = _resolve_path(str(target), write_roots)
+    if provisional:
+        filename = suggest_filename(provisional, body if source != "spec" else spec or body, source)
+        if "/" in raw_name or raw_name.startswith("~"):
+            expanded = Path(raw_name).expanduser()
+            target = expanded if expanded.suffix else expanded.parent / filename
+            resolved = _resolve_path(str(target), write_roots)
+        else:
+            resolved = _resolve_path(filename, write_roots)
     else:
+        filename = _suggest_filename_from_content(spec or body)
         resolved = _resolve_path(filename, write_roots)
+
     if resolved is None:
         return None
 

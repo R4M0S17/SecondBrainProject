@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Literal
 
 import httpx
 from loguru import logger
 
+from core.inference.engine_desired import get_engine_desired
 from core.observability.ram_monitor import RamMonitor
 
 LlamaServerState = Literal["up", "restarting", "down"]
@@ -27,22 +26,10 @@ class HealthSnapshot:
     message: str | None = None
 
 
-def _project_root() -> Path:
-    return Path(os.getenv("CEREBRO_ROOT", Path(__file__).resolve().parents[2]))
-
-
 def _default_spawn_engine(profile: str) -> None:
-    root = _project_root()
-    script = root / "bin" / "start_engine.sh"
-    if not script.is_file():
-        raise FileNotFoundError(f"start_engine.sh not found at {script}")
-    subprocess.Popen(
-        ["bash", str(script), profile],
-        cwd=root,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    from core.inference.engine_manager import spawn_chat_engine
+
+    spawn_chat_engine(profile)
 
 
 class LlamaServerHealthMonitor:
@@ -126,6 +113,12 @@ class LlamaServerHealthMonitor:
         return len(self._restart_times) < self._max_restarts_per_window
 
     async def _attempt_restart(self) -> None:
+        if get_engine_desired() == "off":
+            self._state = "down"
+            self._message = "engine_desired_off"
+            logger.info("Llama-server restart skipped (engine_desired=off)")
+            return
+
         now = datetime.now(UTC)
         ram = self._ram_monitor.snapshot()
         if ram["pressure"] == "critical" or ram["available_gb"] < float(
@@ -180,13 +173,17 @@ class LlamaServerHealthMonitor:
                     else:
                         self._failures += 1
                         if self._failures >= self._failure_threshold:
-                            if self._state == "up":
-                                logger.warning(
-                                    "Llama-server missed {} pings — recovering",
-                                    self._failures,
-                                )
-                            if self._state != "restarting":
-                                await self._attempt_restart()
+                            if get_engine_desired() == "off":
+                                self._state = "down"
+                                self._message = "engine_desired_off"
+                            else:
+                                if self._state == "up":
+                                    logger.warning(
+                                        "Llama-server missed {} pings — recovering",
+                                        self._failures,
+                                    )
+                                if self._state != "restarting":
+                                    await self._attempt_restart()
             except asyncio.CancelledError:
                 raise
             except Exception:

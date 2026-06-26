@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getWizardStatus, updateConfig, wizardCheckLlamaCpp } from "../../api/client";
 
 interface StepLlamaCppProps {
@@ -6,6 +7,7 @@ interface StepLlamaCppProps {
 }
 
 export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
+  const { t } = useTranslation();
   const [running, setRunning] = useState<boolean | null>(null);
   const [skippedReason, setSkippedReason] = useState<string | null>(null);
   const [recommendLite, setRecommendLite] = useState(false);
@@ -79,15 +81,14 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
     <div className="w-full space-y-4 mb-6">
       <p className="text-[14px] leading-[20px] text-[#e8eaf0] text-center leading-relaxed">
         {skippedReason
-          ? "Inference is configured for Claude API — a local llama.cpp chat server is not required. Embeddings still use the local embed server when you index files."
-          : "Cerebro needs the llama.cpp server running locally to index your private data and execute models on-device."}
+          ? skippedReason
+          : t("wizard.llama_desc")}
       </p>
 
       {recommendLite && !skippedReason && (
         <div className="bg-[#1c2333] border border-[#3d4f7c]/60 rounded-lg p-4 space-y-3">
           <p className="text-[13px] text-[#c4d4f5] text-center leading-relaxed">
-            This Mac reports about 10 GB RAM or less. Use the lite profile for lower memory use
-            (small chat model, MLX off, lighter RAM thresholds).
+            {t("wizard.lite_card")}
           </p>
           <button
             type="button"
@@ -101,17 +102,14 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
                   : "bg-[#6366f1] text-white hover:opacity-90 active:scale-[0.99]"
             }`}
           >
-            {liteApplied ? "8 GB safe profile saved" : liteSaving ? "Saving…" : "Use 8 GB safe profile"}
+            {liteApplied ? t("wizard.lite_saved") : liteSaving ? t("wizard.lite_saving") : t("wizard.lite_button")}
           </button>
           {liteError && (
             <p className="text-[12px] text-error text-center">{liteError}</p>
           )}
           {liteApplied && (
             <p className="text-[11px] text-outline text-center">
-              Start the stack with{" "}
-              <code className="text-primary-container bg-surface-container px-1 rounded">make lite</code> or run{" "}
-              <code className="text-primary-container bg-surface-container px-1 rounded">make engine-lite</code>{" "}
-              before the chat server, then continue.
+              {t("wizard.lite_instructions")}
             </p>
           )}
         </div>
@@ -141,12 +139,12 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
             }`}
           >
             {running === null
-              ? "Checking llama.cpp server…"
+              ? t("wizard.checking_llama")
               : skippedReason
                 ? skippedReason
                 : running
-                  ? "llama.cpp server is running"
-                  : "llama.cpp server not detected"}
+                  ? t("wizard.llama_running")
+                  : t("wizard.llama_not_detected")}
           </span>
         </div>
         {running !== null && (
@@ -159,18 +157,14 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
                   : "bg-error/15 text-error"
             }`}
           >
-            {skippedReason ? "Skipped" : running ? "Detected" : "Not found"}
+            {skippedReason ? t("wizard.skipped") : running ? t("wizard.detected") : t("wizard.not_found")}
           </div>
         )}
       </div>
 
       {!skippedReason && !running && running !== null && (
         <p className="text-[12px] text-outline text-center">
-          Run{" "}
-          <code className="text-primary-container bg-surface-container px-1 rounded">
-            {recommendLite ? "make engine-lite" : "make engine"}
-          </code>{" "}
-          in a terminal, then wait for detection above.
+          {t("wizard.llama_instructions")}
         </p>
       )}
     </div>

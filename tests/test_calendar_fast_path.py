@@ -22,6 +22,12 @@ def ics_only_calendar(monkeypatch):
     monkeypatch.setattr("core.tools.handlers.calendar.platform.system", lambda: "Linux")
 
 
+@pytest.fixture(autouse=True)
+def reset_app_state_after_api_tests():
+    """Prevent API E2E tests in this module from leaking app_state."""
+    yield
+
+
 def _write_fixture_ics(path, *, meeting_hours: float = 3, birthday_days: float = 45) -> None:
     now = datetime.now(UTC)
     ics = _make_ics(
@@ -36,9 +42,10 @@ def _write_fixture_ics(path, *, meeting_hours: float = 3, birthday_days: float =
 def _write_many_birthdays_ics(path) -> None:
     now = datetime.now(UTC)
     base = 10
+    base_day = now.replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=base)
     events = [
-        _vevent("Cumple Gemelo A", now + timedelta(days=base)),
-        _vevent("Cumple Gemelo B", now + timedelta(days=base, hours=3)),
+        _vevent("Cumple Gemelo A", base_day),
+        _vevent("Cumple Gemelo B", base_day + timedelta(hours=3)),
     ]
     events.extend(
         _vevent(f"Cumple Persona {i}", now + timedelta(days=base + i)) for i in range(1, 8)
@@ -128,9 +135,9 @@ def test_calendar_fast_path_birthday_search(tmp_path):
 
 def test_calendar_fast_path_english_next_event(tmp_path):
     ics = tmp_path / "cal.ics"
-    _write_fixture_ics(ics)
+    _write_fixture_ics(ics, meeting_hours=2)
     result = try_calendar_fast_path(
-        "What do I have on my calendar today?",
+        "What do I have on my calendar in the next 24 hours?",
         CALENDAR_TOOLS,
         ics_path=str(ics),
     )
@@ -221,9 +228,9 @@ def test_calendar_fast_path_events_on_day(tmp_path):
 
 def test_calendar_fast_path_events_tomorrow_without_article(tmp_path):
     ics = tmp_path / "cal.ics"
-    now = datetime.now(UTC).replace(second=0, microsecond=0)
-    tomorrow = now + timedelta(days=1)
-    day_after = now + timedelta(days=2)
+    now_local = datetime.now().astimezone().replace(second=0, microsecond=0)
+    tomorrow = now_local + timedelta(days=1)
+    day_after = now_local + timedelta(days=2)
     ics.write_bytes(
         _make_ics(
             [

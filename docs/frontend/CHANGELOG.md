@@ -4,6 +4,18 @@ All UI/UX changes implemented during the redesign session.
 
 ---
 
+## Agent Memory Browser (2026-06)
+
+- **Memory tab** in left sidebar (`psychology`) — primary UX for saved memories + read-only session context.
+- **Edit flow** — pencil on each card → modal; `PATCH /api/memory/episodes` with content/tags (re-embed).
+- **`MemoryViewContent`** shared by tab + optional slide-over panel.
+- Clearer copy: *Saved memories* vs *This chat's context*; empty state with example CTA.
+- Backend: `LongTermStore.update_episode`, extended PATCH model.
+- Tests: `tests/test_memory_api.py` (includes content edit).
+- Docs: [`MEMORY_BROWSER.md`](MEMORY_BROWSER.md)
+
+---
+
 ## Phase 0: Design Token Migration
 
 ### `tailwind.config.js` — Full palette swap
@@ -294,6 +306,81 @@ StatusBar (minimal footer)
 ### Removed files (6)
 - `RamGauge.tsx`, `VramGauge.tsx`, `FilesCounter.tsx`, `FleetPanel.tsx`
 - `ModelBadge.tsx`, `LatencyBadge.tsx`
+
+---
+
+## Phase 7: Dashboard UX Polish (2026-06-25)
+
+### `DashboardHome.tsx` — Stats & action grid cleanup
+- **Memories stat**: changed fallback from `"—"` to `0` — no more placeholder text, reads `0` when no data.
+- **Events stat**: changed from hardcoded `"—"` to `0`. Displays cleanly even without backend data source.
+- **Action grid**: added 4th card **Quick Note** (`edit_note` icon → Chat tab) to fill `grid-cols-2` layout — no more empty cell.
+- **Subtitle**: changed from *"Your Intelligent Operating System"* → *"Your second brain, always on"* (warmer, more personal).
+- All action descriptions moved to i18n keys.
+
+### `ActionCard.tsx` — Disabled tooltip
+- Added `disabledReason?: string` prop. When `disabled` is true, renders the `title` attribute on `<button>` so users see *why* (e.g. *"Index some files in Settings to enable search"*) on hover.
+
+### `QuickChatCard.tsx` — Better CTA copy
+- Description changed from *"Jump straight into a ChatGPT-style conversation"* → *"Ask anything about your notes, files, or projects"* (shifts focus from ChatGPT-emulation to personal knowledge).
+
+### `ActivityList.tsx` — Actionable empty state
+- Added `rocket_launch` icon above empty message.
+- Added secondary hint text: *"Start a conversation or upload your first file to get going"* (gives user a clear next step instead of dead-end "No recent activity yet").
+
+### `locales/en.json` & `locales/es.json` — New i18n keys
+- Added: `dashboard.subtitle`, `dashboard.search_files_desc`, `dashboard.search_files_disabled_reason`, `dashboard.analyze_folder_desc`, `dashboard.create_workflow_desc`, `dashboard.quick_note`, `dashboard.quick_note_desc`, `dashboard.no_activity_hint`.
+- Updated existing: `dashboard.subtitle`, `dashboard.quick_chat_desc`.
+
+---
+
+## Phase 9: Focus Mode Moved to Settings + Notifications Toggle (2026-06-25)
+
+### `FastPathToggles.tsx` — Removed focus mode button from chat
+- Removed `"focusmode"` entry from fast-path pills (was `visibility_off` icon toggling `focus_mode`).
+- This feature is now a persistent setting, not a per-session toggle.
+
+### `FocusModeToggle.tsx` (new) — Settings toggle for focus mode
+- Controls `focus_mode` (skips ContextEnricher — no calendar events or recent files injected into agent prompts).
+- Shows label + description so users know exactly what it does.
+
+### `NotificationsToggle.tsx` (new, replaces `DndToggle.tsx`)
+- Controls `dnd_enabled` for future proactive agent notifications.
+- Shows "(coming soon)" hint in description.
+- Old `DndToggle.tsx` deleted.
+
+### `SettingsPanel.tsx` — Two new sections
+- **Focus Mode** section (above Notifications) — `FocusModeToggle` component.
+- **Notifications** section — `NotificationsToggle` component (replaces old DND section).
+- Both use the same toggle layout pattern (`bg-surface-container` row with `ToggleSwitch`).
+
+### `locales/en.json` & `locales/es.json` — New i18n keys
+- Added: `settings.focus_mode`, `settings.focus_mode_desc`, `settings.notifications`, `settings.notifications_desc`.
+- `settings.dnd` key preserved (still used by existing translations).
+
+### Files removed
+- `src/components/settings/DndToggle.tsx` — replaced by `NotificationsToggle.tsx`.
+
+---
+
+## Phase 8: Files Stat Clickable + Offline Cache (2026-06-25)
+
+### `StatCard.tsx` — Clickable stat cards
+- Added optional `onClick` prop. When provided, the card renders as interactive (hover state, `cursor-pointer`, `active:scale-[0.98]`, keyboard accessible with `role="button"` and `tabIndex`).
+- Enables any stat card to navigate or trigger actions.
+
+### `DashboardHome.tsx` — Files stat opens DocumentsPanel
+- Added `onDocumentsOpen` prop passed down from `MainLayout`.
+- Files stat card (`description` icon) now calls `onDocumentsOpen` when clicked, opening the DocumentsPanel overlay.
+- New 4th action card **Quick Note** navigates to Chat tab.
+
+### `MainLayout.tsx` — Wire DashboardHome docs handler
+- Passes `handleOpenDocuments` as `onDocumentsOpen` to `<DashboardHome>`.
+
+### `stores/dashboard.ts` — localStorage cache for file count
+- Added `CACHE_KEY = "cerebro_dashboard_cache"`. On every successful API fetch, `indexed_files` is persisted to localStorage.
+- On API failure (backend off), `FALLBACK_STATUS` reads the cached value instead of defaulting to `0`.
+- Users now see the last known file count even when the backend is stopped.
 
 ---
 

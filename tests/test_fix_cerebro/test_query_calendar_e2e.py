@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from integrations.calendar_reader import BackendResult, CalendarEvent, CalendarReader
 from tests.test_fix_cerebro.conftest import install_runtime_for_query_e2e, make_stub_chat_complete
+from ui.tray.server import app_state
 
 
 def _fake_event() -> CalendarEvent:
@@ -32,6 +34,10 @@ async def test_query_calendar_tool_and_answer_mention_event(api_client, tmp_path
         ]
     )
     install_runtime_for_query_e2e(tmp_path, mock_chat)
+
+    runtime = app_state.runtime
+    assert runtime is not None
+    runtime._fast_path_router.try_all = AsyncMock(return_value=None)
 
     async with api_client as c:
         resp = await c.post(

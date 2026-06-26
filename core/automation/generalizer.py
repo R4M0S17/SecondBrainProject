@@ -33,6 +33,9 @@ Responde SOLO con JSON sin markdown:
   "parameters": [
     {"name": "param1", "type": "string", "description": "qué es este parámetro"}
   ],
+  "steps": [
+    {"order": 1, "app": "Finder", "action": "Activar aplicación", "detail": "opcional"}
+  ],
   "tags": ["etiqueta1", "etiqueta2"]
 }
 
@@ -114,15 +117,22 @@ async def generalize_events(
     description = result.get("description", "")
     applescript = result.get("applescript", "")
     parameters = result.get("parameters", [])
+    steps = result.get("steps", [])
     tags = result.get("tags", [])
 
     if not applescript:
         raise GeneralizationError("LLM returned empty AppleScript")
+
+    if not steps:
+        from core.automation.service import events_to_steps
+
+        steps = events_to_steps(events)
 
     return {
         "name": name,
         "description": description,
         "applescript": applescript,
         "parameters": parameters,
+        "steps": steps,
         "tags": tags,
     }

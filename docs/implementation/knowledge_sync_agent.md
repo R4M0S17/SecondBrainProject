@@ -1,6 +1,6 @@
 # Knowledge Sync Agent — Implementación
 
-> **Blueprint**: `docs/plans/knowledge_sync_agent.md` (H5)
+> **Blueprint** (archived): `docs/plans/maybe-later/knowledge_sync_agent.md`
 > **Implementado**: 2026-06-14
 > **Estado**: Completado — backend funcional + frontend integrado + 13 tests pass
 

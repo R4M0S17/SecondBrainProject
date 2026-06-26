@@ -119,6 +119,36 @@ pub fn run_desktop_launcher<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> Re
     run_script(manager, "cerebro_desktop_launcher.sh", "Launcher")
 }
 
+pub fn run_desktop_backend<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> Result<(), String> {
+    run_script(manager, "cerebro_desktop_backend.sh", "Backend launcher")
+}
+
+pub fn run_desktop_engine<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> Result<(), String> {
+    run_script(manager, "cerebro_desktop_engine.sh", "Engine launcher")
+}
+
 pub fn run_desktop_stop<R: tauri::Runtime, M: Manager<R>>(manager: &M) -> Result<(), String> {
     run_script(manager, "cerebro_desktop_stop.sh", "Stop script")
+}
+
+pub async fn ensure_backend_on_startup(app: &tauri::AppHandle) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    if client
+        .get("http://127.0.0.1:7842/api/health")
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || run_desktop_backend(&app))
+        .await
+        .map_err(|e| format!("Backend launcher panicked: {e}"))?
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -7,6 +8,7 @@ import type { Components } from "react-markdown";
 import { Check, Copy } from "lucide-react";
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -28,7 +30,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         <button
           onClick={handleCopy}
           className="text-gray-400 hover:text-white transition-colors p-1 rounded opacity-0 group-hover:opacity-100 focus:opacity-100"
-          aria-label="Copy code"
+          aria-label={t("markdown.copy_code")}
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
@@ -148,15 +150,20 @@ const components: Components = {
   ),
 };
 
+function normalizeLists(text: string): string {
+  return text.replace(/([.!?:;])\s+(\d+[.)]\s)/g, "$1\n$2");
+}
+
 interface MarkdownRendererProps {
   content: string;
 }
 
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
+  const normalized = normalizeLists(content);
   return (
     <div className="text-sm text-on-surface-variant">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {content}
+        {normalized}
       </ReactMarkdown>
     </div>
   );

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import StatusBar from "./StatusBar";
 import { useSystemStore } from "../../stores/system";
@@ -34,7 +34,8 @@ beforeEach(() => {
   useServicesStore.setState({
     starting: false,
     stopping: false,
-    servicesOff: false,
+    backendReady: true,
+    engineDesired: false,
     error: null,
   });
 });

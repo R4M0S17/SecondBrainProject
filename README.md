@@ -174,7 +174,21 @@ Embeddings default to **local sentence-transformers** (384d) on ≤10GB RAM, fal
 
 ## Quick Start
 
+**Full run guide:** [`docs/guides/howToRun.md`](docs/guides/howToRun.md) · Spanish: [`docs/guides/running-es.md`](docs/guides/running-es.md)
+
 Choose your mode:
+
+### Development — Tauri UI (recommended for UI work)
+
+Backend starts automatically; **LLM stays off** until you click **Start engine** in the app header.
+
+```bash
+cd /Users/mb/Desktop/Javier/SecondBrain
+make install && make desktop-config   # first time only
+
+cd ui/tray
+npm run tauri:dev
+```
 
 ### 🐳 Docker (any platform — CPU-only)
 
@@ -190,24 +204,61 @@ docker compose up
 
 ### 🍎 Native macOS (recommended — Metal GPU + Calendar + Tauri)
 
+**First time:**
+
 ```bash
 git clone https://github.com/your-org/cerebro.git
 cd cerebro
-make setup                      # One-time: install all deps
-make engine                     # llama.cpp with Metal GPU
-make run                        # FastAPI on :7842
-# Open http://localhost:7842
+make setup          # install deps + venv
+make desktop-config
+```
+
+**Daily development (Tauri, LLM on demand):**
+
+```bash
+cd ui/tray && npm run tauri:dev
+# → Start engine in the UI when you need LLM chat
+```
+
+**Terminal-only (split backend / engine):**
+
+```bash
+make lite           # backend :7842 (~400 MB)
+make engine         # llama-server :8080 when you want LLM
+```
+
+**Legacy (backend + LLM in one shot):**
+
+```bash
+make dev-full
+```
+
+**Packaged app:**
+
+```bash
+make desktop-app && make desktop-install && open /Applications/Cerebro.app
 ```
 
 > GPU-accelerated inference, Apple Calendar, AppleScript,
 > desktop automation, and native Tauri desktop app.
+> See [`docs/guides/howToRun.md`](docs/guides/howToRun.md) for troubleshooting.
 
 ### 8 GB Mac Profile
 
 ```bash
 make lite        # Disables MLX, ContextEnricher, uses local embeddings
-make run
+make run         # Backend only — start engine via `make engine` or UI "Start engine"
 ```
+
+### 🔋 Low-Power Mode (0.5B)
+
+Switches to a **0.5B model** (~0.8 GB RAM, 58-70 tok/s) for quick queries, simple code, and basic tools. Frees ~1.8 GB of RAM vs the default 2B model.
+
+```bash
+make low-power   # Qwen2.5-0.5B-Q5_K_M · grammar-constrained · ctx-size 8192
+```
+
+Or toggle live from the UI: **Settings → Model → Model Mode switch** (persists across restarts).
 
 ---
 
@@ -220,9 +271,10 @@ make run
 | Chat (default) | Qwen3.5-2B-UD-Q4_K_XL | ~1.5 GB | ~2 GB |
 | Chat (8 GB) | Qwen2.5-Coder-3B-Instruct-Q4_K_M | ~2 GB | ~2.5 GB |
 | Chat (16 GB+) | Llama-3.2-3B-Instruct-Q4_K_M | ~2 GB | ~2.5 GB |
+| **Low Power (0.5B)** | **Qwen2.5-0.5B-Q5_K_M** | **~498 MB** | **~0.8 GB** |
 | Embeddings (local) | all-MiniLM-L6-v2 | ~90 MB | ~200 MB |
 | Embeddings (llama.cpp) | v5-nano-retrieval-Q4_K_M | ~30 MB | ~150 MB |
-| Router (optional) | SmolLM2-135M-Instruct-Q4_K_M | ~70 MB | ~100 MB |
+| Router (always-on) | SmolLM2-135M-Instruct-Q4_K_M | ~70 MB | ~100 MB |
 
 ### Download Models
 
@@ -258,6 +310,7 @@ export ANTHROPIC_API_KEY=""                    # Required for Claude backend
 ```
 
 See [config/profiles/lite-8gb.env](config/profiles/lite-8gb.env) for the full 8 GB Mac profile.
+See [config/profiles/low-power.env](config/profiles/low-power.env) for the low-power (0.5B) profile.
 
 ---
 
@@ -269,7 +322,7 @@ cerebro/
 ├── core/                           # Python backend
 │   ├── agents/                     # Agent runtimes, fast paths, state
 │   │   ├── runtime.py              # LangGraph agent execution loop
-│   │   ├── fast_path_router.py     # 10+ deterministic fast paths
+│   │   ├── fast_path_router.py     # 14+ deterministic fast paths (EN/ES)
 │   │   ├── math_fast_path.py       # Pure arithmetic evaluator
 │   │   ├── weather_fast_path.py    # Weather via wttr.in
 │   │   ├── dictionary_fast_path.py # Word definitions
@@ -353,37 +406,27 @@ CI runs on every PR.
 
 ## Roadmap
 
-### Implemented
+**Active plan:** [`docs/plans/CURRENT_FOCUS.md`](docs/plans/CURRENT_FOCUS.md) — v0.2 target: reliable calendar, files, reminders, and RAG on Mac 8 GB.
 
-- ✅ Local LLM inference (llama.cpp, MLX, Claude API)
-- ✅ Document ingestion and vector indexing (LanceDB)
-- ✅ RAG query engine with semantic compression
-- ✅ Agent runtime with LangGraph orchestration
-- ✅ 10+ deterministic fast paths (math, weather, dictionary, etc.)
-- ✅ Calendar integration (read, write, recurring events)
-- ✅ Knowledge sync (RSS, arXiv, YouTube, PubMed, GitHub, Web)
-- ✅ File watcher and automatic re-indexing
-- ✅ Conversational memory (short-term + long-term)
-- ✅ Tool execution with user confirmation
-- ✅ Proactive scheduler with cron support
-- ✅ Desktop UI (Tauri + React)
-- ✅ Fleet orchestrator (model swapping by task)
-- ✅ Inference engine suspender (SIGSTOP on idle)
+### Shipped (core)
 
-### In Progress
+- ✅ Local LLM inference (llama.cpp, MLX, optional Claude API)
+- ✅ RAG + LanceDB indexing + file watcher
+- ✅ LangGraph agent runtime + tool confirmation
+- ✅ 10+ deterministic fast paths (math, calendar, files, weather, etc.)
+- ✅ macOS calendar + reminders integration
+- ✅ Desktop UI (Tauri + React) + REST API
 
-- Calendar recurring event expansion for all frequencies
-- Semantic compressor wired into production context assembly
+### Now (v0.2)
 
-### Planned
+- 🔴 Stabilize test suite (~51 failures in full run)
+- 🔴 Five E2E workflows: calendar, calendar→file export, file search, reminders, RAG summarize
+- 🟡 First-run wizard + clear macOS permission errors
+- 🟡 Security P0 from audit
 
-- **Cognitive Graph** — Persistent property graph (Kuzu) for entities and relationships
-- **Event-Driven Architecture** — EventBus for proactive system behavior
-- **LoRA Fine-Tuning** — Tool-calling accuracy improvement via Qwen3.5-2B LoRA
-- **0.8B Secondary Worker** — Small model for fast routing and simple queries
-- **Ambient Intelligence** — macOS context observers (active app, window title)
-- **Skill Marketplace** — Pluggable capabilities with SKILL.toml manifests
-- **Cross-Platform** — Linux and Windows desktop builds
+### Later (archived — not active)
+
+Cognitive graph, fleet orchestrator, Low Power Nano, knowledge sync expansion, Windows port, dashboard redesign — see [`docs/plans/maybe-later/`](docs/plans/maybe-later/).
 
 ---
 

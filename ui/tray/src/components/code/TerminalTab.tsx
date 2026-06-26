@@ -6,15 +6,17 @@ export default function TerminalTab() {
   const [shellAvailable, setShellAvailable] = useState<boolean | null>(null);
   const [fallbackOutput, setFallbackOutput] = useState("");
   const [cmdInput, setCmdInput] = useState("");
+  const [copied, setCopied] = useState(false);
   const [showCommands, setShowCommands] = useState(false);
-  const commandsBtnRef = useRef<HTMLButtonElement>(null);
-  const [commandsPos, setCommandsPos] = useState({ top: 0, right: 0 });
+  const commandsRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const fitAddon = useRef<import("@xterm/addon-fit").FitAddon | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
+    let xtermEl: Element | null = null;
+    const onSelectStart = (e: Event) => e.preventDefault();
     async function initTerminal() {
       try {
         const [{ Terminal }, { FitAddon }] = await Promise.all([
@@ -30,8 +32,8 @@ export default function TerminalTab() {
           foreground: "#e4e1e7",
           cursor: "#2563eb",
           cursorAccent: "#0e0e12",
-          selectionBackground: "#2563eb40",
-          selectionInactiveBackground: "#ffffff15",
+          selectionBackground: "rgba(59,130,246,0.6)",
+          selectionInactiveBackground: "rgba(59,130,246,0.4)",
           black: "#131317",
           red: "#f87171",
           green: "#4ade80",
@@ -54,7 +56,6 @@ export default function TerminalTab() {
         cursorBlink: true,
         cursorStyle: "bar",
         allowTransparency: true,
-        rows: 24,
         scrollback: 5000,
         smoothScrollDuration: 80,
       });
@@ -63,17 +64,36 @@ export default function TerminalTab() {
       fitAddon.current = fit;
 
       term.open(terminalRef.current);
-      requestAnimationFrame(() => fit.fit());
+
+      xtermEl = terminalRef.current.querySelector(".xterm");
+      xtermEl?.addEventListener("selectstart", onSelectStart);
+
+      term.onSelectionChange(() => {
+        const selection = term.getSelection();
+        if (selection) {
+          if (!selection.trim()) {
+            term.clearSelection();
+            return;
+          }
+          navigator.clipboard.writeText(selection);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      });
+
+      const doFit = () => {
+        fit.fit();
+        if (term.rows > 2) {
+          term.resize(term.cols, term.rows - 1);
+        }
+      };
+
+      requestAnimationFrame(doFit);
 
       resizeObserver = new ResizeObserver(() => {
-        try { fit.fit(); } catch { /* ignore */ }
+        try { doFit(); } catch { /* ignore */ }
       });
       resizeObserver.observe(terminalRef.current);
-
-      term.write("\x1b[1;34m█▀▀ ▄▄▄ ▀█▀ ▄▄▄ ▄▄▄ ▀█▀ ▄▄▄ █▀▄\x1b[0m\r\n");
-      term.write("\x1b[1;34m█▄▄ ▀▀▄  █  █▀  █▀▄  █  █▀█ █▀▄\x1b[0m\r\n");
-      term.write("\r\n");
-      term.write("\x1b[2m─ Terminal ready — type commands, Enter to run ─\x1b[0m\r\n\r\n");
 
       let lineBuf = "";
       let showPrompt = true;
@@ -82,7 +102,7 @@ export default function TerminalTab() {
         const { Command } = await import("@tauri-apps/plugin-shell");
         const r = await Command.create("zsh", ["-c", "echo $HOME"]).execute();
         if (r.stdout) cwd = r.stdout.trim();
-      } catch {} // fallback: cwd vacío → CWD del proceso
+      } catch {}
 
       const executeCmd = async (cmd: string) => {
         try {
@@ -94,23 +114,26 @@ export default function TerminalTab() {
           if (result.code !== 0 && result.code !== null) {
             term.write(`\r\n\x1b[33m[exit code: ${result.code}]\x1b[0m`);
           }
-          if (cmd.startsWith("cd ")) {
-            const dir = cmd.slice(3).trim() || "~";
+          if (cmd === "cd" || cmd.startsWith("cd ")) {
+            const dir = cmd === "cd" ? "~" : cmd.slice(3).trim() || "~";
             try {
-              const r = await Command.create("zsh", ["-c", `cd "${cwd}" && cd "${dir}" && pwd`]).execute();
+              const q = dir === "~" ? "~" : `"${dir}"`;
+              const r = await Command.create("zsh", ["-c", `cd "${cwd}" && cd ${q} && pwd`]).execute();
               if (r.stdout) cwd = r.stdout.trim();
             } catch {}
           }
-        } catch (e) {
+        } catch {
           term.write(`\r\n\x1b[31m[error]\x1b[0m`);
         }
-        term.write("\r\n$ ");
+        term.write(`\r\n\x1b[32m${cwd || "~"}\x1b[0m $ `);
         showPrompt = false;
+        term.scrollToBottom();
       };
 
       term.onData((data) => {
+        term.scrollToBottom();
         if (showPrompt) {
-          term.write("$ ");
+          term.write(`\x1b[32m${cwd || "~"}\x1b[0m $ `);
           showPrompt = false;
         }
         if (data === "\r") {
@@ -118,7 +141,7 @@ export default function TerminalTab() {
           const cmd = lineBuf.trim();
           lineBuf = "";
           if (cmd) executeCmd(cmd);
-          else { term.write("$ "); showPrompt = false; }
+          else { term.write(`\x1b[32m${cwd || "~"}\x1b[0m $ `); showPrompt = false; }
           return;
         }
         if (data === "\x7f" || data === "\b") {
@@ -129,7 +152,8 @@ export default function TerminalTab() {
           return;
         }
         if (data === "\u0003") {
-          term.write("^C\r\n$ ");
+          term.write("^C\r\n");
+          term.write(`\x1b[32m${cwd || "~"}\x1b[0m $ `);
           lineBuf = "";
           showPrompt = false;
           return;
@@ -141,7 +165,7 @@ export default function TerminalTab() {
       });
 
       setShellAvailable(true);
-      term.write("$ ");
+      term.write(`\x1b[32m${cwd || "~"}\x1b[0m $ `);
       showPrompt = false;
 
       setTerminalReady(true);
@@ -156,16 +180,14 @@ export default function TerminalTab() {
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
+      if (xtermEl) xtermEl.removeEventListener("selectstart", onSelectStart);
     };
   }, []);
 
   useEffect(() => {
     if (!showCommands) return;
     const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (commandsBtnRef.current?.contains(target)) return;
-      const dropdown = document.getElementById("commands-dropdown");
-      if (dropdown && !dropdown.contains(target)) {
+      if (commandsRef.current && !commandsRef.current.contains(e.target as Node)) {
         setShowCommands(false);
       }
     };
@@ -190,53 +212,82 @@ export default function TerminalTab() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <p className="text-[11px] text-on-surface-variant/60 mb-4 flex items-center gap-1.5">
-        <span className="material-symbols-outlined text-[14px] text-primary-container/60">info</span>
-        Live system shell
-      </p>
-      <div className="rounded-xl border border-outline-variant/15 overflow-hidden bg-surface-container-lowest shadow-lg flex flex-col flex-1 min-h-0 relative">
-        <div className="flex items-center px-3 py-2 bg-surface-container-low border-b border-outline-variant/10 shrink-0 gap-2">
-          <span className="text-[10px] text-on-surface-variant/40 font-label-mono">zsh — Cerebro Terminal</span>
+      <div className="rounded-xl overflow-hidden bg-[#0e0e12] flex flex-col flex-1 min-h-0 relative mb-6">
+        <style>{`
+          .xterm {
+            -webkit-user-select: none !important;
+            user-select: none !important;
+            -webkit-touch-callout: none !important;
+          }
+          .xterm .xterm-rows * {
+            -webkit-user-select: none !important;
+            user-select: none !important;
+          }
+          .xterm ::-moz-selection { background: transparent !important; }
+          .xterm ::selection { background: transparent !important; }
+          .xterm .xterm-helper-textarea {
+            position: absolute !important;
+            left: -99999px !important;
+            top: -99999px !important;
+            width: 0 !important;
+            height: 0 !important;
+            opacity: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            outline: none !important;
+            resize: none !important;
+            pointer-events: none !important;
+            z-index: -999 !important;
+            overflow: hidden !important;
+            display: block !important;
+            clip: rect(0,0,0,0) !important;
+          }
+          .xterm-selection { display: none !important; }
+        `}</style>
+        <div ref={terminalRef} className="flex-1 min-h-0" />
+
+        <div ref={commandsRef} className="absolute top-2 right-2 z-10">
           <button
-            ref={commandsBtnRef}
-            onClick={() => {
-              if (!showCommands && commandsBtnRef.current) {
-                const rect = commandsBtnRef.current.getBoundingClientRect();
-                setCommandsPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-              }
-              setShowCommands(!showCommands);
-            }}
-            className="ml-auto text-[10px] text-outline/50 hover:text-on-surface-variant/70 cursor-pointer flex items-center gap-1 transition-colors bg-transparent border-none"
+            onClick={() => setShowCommands((v) => !v)}
+            className="bg-surface-container/80 backdrop-blur-sm border border-outline-variant/20 rounded-lg px-2.5 py-1.5 text-[10px] font-medium text-outline hover:text-on-surface transition-colors flex items-center gap-1"
           >
-            <span className={`material-symbols-outlined text-[12px] transition-transform ${showCommands ? "rotate-90" : ""}`}>chevron_right</span>
-            Comandos
+            <span className="material-symbols-outlined text-[12px]">menu</span>
+            Cmds
           </button>
           {showCommands && (
             <div
-              id="commands-dropdown"
-              className="fixed z-50 bg-surface-container-low border border-outline-variant/15 rounded-lg shadow-lg p-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]"
-              style={{ top: commandsPos.top, right: commandsPos.right }}
+              className="absolute top-full right-0 mt-1 bg-surface-container/95 backdrop-blur-sm border border-outline-variant/20 rounded-xl shadow-xl p-3 min-w-[220px] z-50"
+              onClick={(e) => e.stopPropagation()}
             >
-              <span><code className="font-mono text-primary-container">ls</code> <span className="text-outline/60">list</span></span>
-              <span><code className="font-mono text-primary-container">cd &lt;d&gt;</code> <span className="text-outline/60">navigate</span></span>
-              <span><code className="font-mono text-primary-container">pwd</code> <span className="text-outline/60">current path</span></span>
-              <span><code className="font-mono text-primary-container">mkdir</code> <span className="text-outline/60">create folder</span></span>
-              <span><code className="font-mono text-primary-container">touch</code> <span className="text-outline/60">create file</span></span>
-              <span><code className="font-mono text-primary-container">cat</code> <span className="text-outline/60">view file</span></span>
-              <span><code className="font-mono text-primary-container">cp</code> <span className="text-outline/60">copy</span></span>
-              <span><code className="font-mono text-primary-container">mv</code> <span className="text-outline/60">move/rename</span></span>
-              <span><code className="font-mono text-primary-container">rm</code> <span className="text-outline/60">delete</span></span>
-              <span><code className="font-mono text-primary-container">rm -r</code> <span className="text-outline/60">delete folder</span></span>
-              <span><code className="font-mono text-primary-container">chmod</code> <span className="text-outline/60">permissions</span></span>
-              <span><code className="font-mono text-primary-container">clear</code> <span className="text-outline/60">clear</span></span>
-              <span><code className="font-mono text-primary-container">man</code> <span className="text-outline/60">manual</span></span>
-              <span><code className="font-mono text-primary-container">grep</code> <span className="text-outline/60">search text</span></span>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+                <span><code className="font-mono text-primary-container">ls</code> <span className="text-outline/60">list files</span></span>
+                <span><code className="font-mono text-primary-container">cd &lt;d&gt;</code> <span className="text-outline/60">navigate</span></span>
+                <span><code className="font-mono text-primary-container">pwd</code> <span className="text-outline/60">current path</span></span>
+                <span><code className="font-mono text-primary-container">mkdir</code> <span className="text-outline/60">create folder</span></span>
+                <span><code className="font-mono text-primary-container">touch</code> <span className="text-outline/60">create file</span></span>
+                <span><code className="font-mono text-primary-container">cat</code> <span className="text-outline/60">view file</span></span>
+                <span><code className="font-mono text-primary-container">cp</code> <span className="text-outline/60">copy</span></span>
+                <span><code className="font-mono text-primary-container">mv</code> <span className="text-outline/60">move/rename</span></span>
+                <span><code className="font-mono text-primary-container">rm</code> <span className="text-outline/60">delete file</span></span>
+                <span><code className="font-mono text-primary-container">rm -r</code> <span className="text-outline/60">delete folder</span></span>
+                <span><code className="font-mono text-primary-container">chmod</code> <span className="text-outline/60">permissions</span></span>
+                <span><code className="font-mono text-primary-container">clear</code> <span className="text-outline/60">clear screen</span></span>
+                <span><code className="font-mono text-primary-container">man</code> <span className="text-outline/60">manual page</span></span>
+                <span><code className="font-mono text-primary-container">grep</code> <span className="text-outline/60">search text</span></span>
+                <span><code className="font-mono text-primary-container">find</code> <span className="text-outline/60">find files</span></span>
+                <span><code className="font-mono text-primary-container">echo</code> <span className="text-outline/60">print text</span></span>
+              </div>
             </div>
           )}
         </div>
-        <div ref={terminalRef} className="flex-1 min-h-0" />
+
+        {copied && (
+          <div className="absolute top-4 right-4 bg-primary-container/90 text-white px-3 py-1.5 rounded-lg text-[11px] font-medium shadow-lg animate-in fade-in slide-in-from-top-2 duration-200">
+            Copied
+          </div>
+        )}
         {!terminalReady && !terminalError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-surface-container-lowest text-outline text-[13px]">
+          <div className="absolute inset-0 flex items-center justify-center bg-[#0e0e12] text-outline text-[13px]">
             <span className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-primary-container status-dot-pulse" />
               Loading terminal…
@@ -244,7 +295,7 @@ export default function TerminalTab() {
           </div>
         )}
         {terminalError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-surface-container-lowest p-6 text-center">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[#0e0e12] p-6 text-center">
             <span className="material-symbols-outlined text-[40px] text-error/60">error_outline</span>
             <p className="text-[13px] text-on-surface-variant">Terminal failed to load</p>
             <p className="text-[11px] text-outline/60 font-mono bg-surface-container-low rounded-lg p-3 w-full max-w-md break-all">
@@ -256,7 +307,7 @@ export default function TerminalTab() {
           </div>
         )}
         {terminalReady && shellAvailable === false && !terminalError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-surface-container-lowest p-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-[#0e0e12] p-6">
             <div className="text-center">
               <span className="material-symbols-outlined text-[48px] text-outline/20">terminal</span>
               <p className="text-[13px] text-on-surface-variant mt-3">
@@ -267,7 +318,7 @@ export default function TerminalTab() {
               </p>
             </div>
             <div className="w-full max-w-lg bg-surface-container-low border border-outline-variant/15 rounded-xl p-5">
-              <div className="bg-surface-container-lowest rounded-lg p-4 max-h-48 overflow-y-auto custom-scrollbar mb-4 font-mono text-[13px] leading-relaxed">
+              <div className="bg-[#0e0e12] rounded-lg p-4 max-h-48 overflow-y-auto custom-scrollbar mb-4 font-mono text-[13px] leading-relaxed">
                 {fallbackOutput ? (
                   <pre className="text-on-surface whitespace-pre-wrap">{fallbackOutput}</pre>
                 ) : (
@@ -283,7 +334,7 @@ export default function TerminalTab() {
                   onChange={(e) => setCmdInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleFallbackCmd()}
                   placeholder="$  type a command and press Enter…"
-                  className="flex-1 bg-surface-container-lowest border border-outline-variant/20 rounded-lg px-4 py-3 text-[13px] font-mono text-on-surface placeholder-on-surface-variant/25 outline-none focus:border-primary-container/50 focus:shadow-[0_0_0_1px_rgba(37,99,235,0.2)] transition-all"
+                  className="flex-1 bg-[#0e0e12] border border-outline-variant/20 rounded-lg px-4 py-3 text-[13px] font-mono text-on-surface placeholder-on-surface-variant/25 outline-none focus:border-primary-container/50 focus:shadow-[0_0_0_1px_rgba(37,99,235,0.2)] transition-all"
                   autoFocus
                 />
                 <button

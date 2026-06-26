@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSystemStore, selectLlamaServerState } from "../../stores/system";
 import { useServicesStore } from "../../stores/services";
 import { getEngineActivity } from "../../api/client";
 import EngineIndicator from "./EngineIndicator";
 
 export default function StatusBar() {
+  const { t } = useTranslation();
   const [engineState, setEngineState] = useState<"active" | "suspended" | "unknown">("unknown");
   const startPolling = useSystemStore((s) => s.startPolling);
   useEffect(() => {
@@ -26,7 +28,7 @@ export default function StatusBar() {
   }, []);
 
   const status = useSystemStore((s) => s.status);
-  const servicesOff = useServicesStore((s) => s.servicesOff);
+  const backendReady = useServicesStore((s) => s.backendReady);
   const llamaServer = selectLlamaServerState(useSystemStore.getState());
 
   const engineOk = status?.engine_ok ?? false;
@@ -38,20 +40,20 @@ export default function StatusBar() {
   return (
     <footer aria-label="System status" className="fixed bottom-0 left-0 w-full flex justify-between items-center px-4 md:px-6 py-1 z-50 bg-surface-container-lowest/50 backdrop-blur-sm border-t border-outline-variant/10 text-on-surface-variant/70 text-[11px] font-label-mono shrink-0">
       <div className="flex items-center gap-2">
-        <span>Cerebro OS</span>
+        <span>{t("status.cerebro_os")}</span>
         <span className="opacity-30">•</span>
         <EngineIndicator
           ok={engineOk}
           provider={status?.provider}
           llamaServer={llamaServer}
-          servicesOff={servicesOff}
+          backendReady={backendReady}
           engineState={engineState}
         />
       </div>
       <div className="flex gap-4">
-        <span>RAM {ramUsed.toFixed(1)}/{ramTotal.toFixed(1)}GB</span>
-        {cpuAvg > 0 && <span>CPU {Math.round(cpuAvg)}%</span>}
-        <span>Uptime {uptime}</span>
+        <span>{t("status.ram", { used: ramUsed.toFixed(1), total: ramTotal.toFixed(1) })}</span>
+        {cpuAvg > 0 && <span>{t("status.cpu", { percent: Math.round(cpuAvg) })}</span>}
+        <span>{t("status.uptime")} {uptime}</span>
       </div>
     </footer>
   );

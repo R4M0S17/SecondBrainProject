@@ -1,9 +1,11 @@
 import { useEffect, useState, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { updateClaudeApiKey, getConfig, getHealth } from "../../api/client";
 
 const LS_KEY = "cerebro_claude_api_key";
 
 export default function ClaudeApiKeySection() {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [key, setKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -47,7 +49,7 @@ export default function ClaudeApiKeySection() {
         .then(() => {
           localStorage.removeItem(LS_KEY);
           setHasKey(true);
-          setMsg({ ok: true, text: "Key synced from local storage" });
+          setMsg({ ok: true, text: t("claude.key_synced") });
         })
         .catch(() => {});
     }
@@ -66,7 +68,7 @@ export default function ClaudeApiKeySection() {
       setKey("");
       setShowKey(false);
       setSaving(false);
-      setMsg({ ok: true, text: "Saved locally — will sync when backend starts" });
+            setMsg({ ok: true, text: t("claude.saved_locally") });
       return;
     }
 
@@ -76,9 +78,9 @@ export default function ClaudeApiKeySection() {
       setEditing(false);
       setKey("");
       setShowKey(false);
-      setMsg({ ok: true, text: "API key saved" });
+      setMsg({ ok: true, text: t("claude.key_saved") });
     } catch {
-      setMsg({ ok: false, text: "Failed to save API key" });
+            setMsg({ ok: false, text: t("claude.save_failed") });
     } finally {
       setSaving(false);
     }
@@ -94,7 +96,7 @@ export default function ClaudeApiKeySection() {
   return (
     <section>
       <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-        Claude API Key
+        {t("claude.api_key")}
       </label>
 
       {initialLoading ? (

@@ -1,18 +1,19 @@
 import { useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import ServiceControls from "../components/status/ServiceControls";
-import WorkflowPanel from "../components/automation/WorkflowPanel";
 import { triggerSync } from "../api/client";
 import Toast from "../components/shared/Toast";
-import { QuickModelToggle } from "../components/chat/QuickModelToggle";
 
 interface HeaderProps {
   onDocumentsOpen?: () => void;
+  onMemoryBrowserOpen?: () => void;
+  onWorkflowsOpen?: () => void;
   onSettingsOpen?: () => void;
   onDebugOpen?: () => void;
 }
 
-export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }: HeaderProps) {
-  const [workflowsOpen, setWorkflowsOpen] = useState(false);
+export default function Header({ onDocumentsOpen, onMemoryBrowserOpen, onWorkflowsOpen, onSettingsOpen, onDebugOpen }: HeaderProps) {
+  const { t } = useTranslation();
   const [syncing, setSyncing] = useState(false);
   const [toastState, setToastState] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
@@ -27,8 +28,7 @@ export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }:
     try {
       const res = await triggerSync({ force: true });
       if (res.status === "processing") {
-        showToast("Sync started", "success");
-        // Notify SourcesView to refresh after a brief delay for backend processing
+        showToast(t("sync.started"), "success");
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent("knowledge-sync-complete"));
         }, 3000);
@@ -36,44 +36,34 @@ export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }:
         showToast(`Sync: ${res.status}`, "error");
       }
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Sync failed", "error");
+      showToast(e instanceof Error ? e.message : t("sync.failed"), "error");
     } finally {
       setSyncing(false);
     }
-  }, [showToast]);
+  }, [showToast, t]);
 
   return (
     <header
       data-tauri-drag-region
-      className="flex justify-between items-center w-full px-4 md:px-margin-desktop h-12 bg-background/80 backdrop-blur-md border-b border-outline-variant/30 z-50 shrink-0"
+      className="flex justify-between items-center w-full pl-3 pr-4 md:pl-5 md:pr-margin-desktop h-12 bg-background/80 backdrop-blur-md border-b border-outline-variant/30 z-50 shrink-0"
       role="banner"
     >
-      <div className="flex items-center gap-4" data-tauri-drag-region>
+      <div className="flex items-center gap-2.5" data-tauri-drag-region>
         <img src="/BestLogo.svg" alt="Cerebro" className="h-7 w-7 object-contain shrink-0" />
         <span className="text-sm font-bold text-on-surface select-none">
           Cerebro
         </span>
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
-        <div className="hidden md:flex gap-1">
-          <ServiceControls />
-        </div>
-        <div className="flex items-center gap-1 text-on-surface-variant">
-          <button
-            onClick={onDocumentsOpen}
-            className="p-1.5 hover:text-primary transition-colors rounded hover:bg-surface-container"
-            aria-label="Documents"
-            title="Documents"
-          >
-            <span className="material-symbols-outlined text-[18px]">description</span>
-          </button>
+      <div className="flex items-center shrink-0">
+        {/* Primary actions */}
+        <div className="flex items-center gap-0.5 text-on-surface-variant">
           <button
             onClick={() => void handleSync()}
             disabled={syncing}
-            className="p-1.5 hover:text-primary transition-colors rounded hover:bg-surface-container disabled:opacity-50"
-            aria-label="Sync all sources"
-            title="Sync all sources"
+            className="p-1.5 hover:text-primary transition-colors rounded-lg hover:bg-surface-container disabled:opacity-50"
+            aria-label={t("header.sync")}
+            title={t("header.sync")}
           >
             {syncing ? (
               <span className="inline-block w-[18px] h-[18px] border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -81,35 +71,67 @@ export default function Header({ onDocumentsOpen, onSettingsOpen, onDebugOpen }:
               <span className="material-symbols-outlined text-[18px]">sync</span>
             )}
           </button>
-          <QuickModelToggle />
+          <button
+            onClick={onDocumentsOpen}
+            className="p-1.5 hover:text-primary transition-colors rounded-lg hover:bg-surface-container"
+            aria-label={t("header.documents")}
+            title={t("header.documents")}
+          >
+            <span className="material-symbols-outlined text-[18px]">description</span>
+          </button>
+          <button
+            onClick={onMemoryBrowserOpen}
+            className="p-1.5 hover:text-primary transition-colors rounded-lg hover:bg-surface-container"
+            aria-label={t("header.memories")}
+            title={t("header.memories")}
+          >
+            <span className="material-symbols-outlined text-[18px]">psychology</span>
+          </button>
+          <button
+            onClick={onWorkflowsOpen}
+            className="p-1.5 hover:text-primary transition-colors rounded-lg hover:bg-surface-container"
+            aria-label={t("header.workflows")}
+            title={t("header.workflows")}
+          >
+            <span className="material-symbols-outlined text-[18px]">account_tree</span>
+          </button>
+        </div>
+
+        <div className="w-px h-4 bg-outline-variant/20 mx-1.5" />
+
+        {/* Configuration */}
+        <div className="flex items-center gap-0.5 text-on-surface-variant">
           <button
             onClick={onSettingsOpen}
-            className="p-1.5 hover:text-primary transition-colors rounded hover:bg-surface-container"
-            aria-label="Settings"
-            title="Settings (⌘,)"
+            className="p-1.5 hover:text-primary transition-colors rounded-lg hover:bg-surface-container"
+            aria-label={t("header.settings")}
+            title={t("header.settings")}
           >
             <span className="material-symbols-outlined text-[18px]">settings</span>
           </button>
+        </div>
+
+        <div className="w-px h-4 bg-outline-variant/20 mx-1.5" />
+
+        {/* Advanced */}
+        <div className="flex items-center gap-0.5 text-on-surface-variant">
           <button
             onClick={onDebugOpen}
-            className="p-1.5 hover:text-primary transition-colors rounded hover:bg-surface-container"
-            aria-label="History/Debug"
-            title="Time-Travel Debugger"
+            className="p-1.5 hover:text-primary transition-colors rounded-lg hover:bg-surface-container"
+            aria-label={t("header.debug")}
+            title={t("header.time_travel_debugger")}
           >
             <span className="material-symbols-outlined text-[18px]">history</span>
           </button>
-          <button
-            onClick={() => setWorkflowsOpen(true)}
-            className="p-1.5 hover:text-primary transition-colors rounded hover:bg-surface-container"
-            aria-label="Monitoring"
-            title="Desktop Workflows"
-          >
-            <span className="material-symbols-outlined text-[18px]">monitoring</span>
-          </button>
+        </div>
+
+        <div className="w-px h-4 bg-outline-variant/20 mx-1.5" />
+
+        {/* Service */}
+        <div className="hidden md:flex items-center gap-0.5">
+          <ServiceControls />
         </div>
       </div>
-
-      {workflowsOpen && <WorkflowPanel onClose={() => setWorkflowsOpen(false)} />}
 
       <Toast
         visible={toastState !== null}

@@ -37,11 +37,15 @@ SecondBrain/
 ├── bin/
 │   ├── start_engine.sh     # Launches llama-server from config/{profile}.args
 │   └── models/             # GGUF files (chat, embed, fleet models)
-├── config/
 │   ├── chat.args           # llama-server CLI for chat profile (port 8080)
+│   ├── chat-lowpower.args  # llama-server CLI for low-power 0.5B model (+grammar +ctx-size 8192)
 │   ├── embed.args          # Embedding server (port 8082)
 │   ├── coding.args, deep.args
-│   ├── grammars/agent_response.gbnf   # GBNF template for tool/answer JSON
+│   ├── profiles/           # Env profiles: low-power.env, lite-8gb.env
+│   │   └── low-power.env   # Qwen2.5-0.5B, grammar, ctx=8192, planner=2 steps
+│   ├── grammars/
+│   │   ├── agent_response.gbnf   # GBNF template for tool/answer JSON
+│   │   └── tool_call.gbnf        # GBNF grammar for llama-server --grammar-file
 │   └── settings.toml       # Static defaults (not the runtime config.json)
 ├── core/                   # All backend domain logic (importable package)
 │   ├── agents/             # Runtime, routing, conversation/state stores, planner, enricher
@@ -87,6 +91,8 @@ SecondBrain/
 9. **Layered context assembly** (`ContextBuilder.build`): Token budget with priority: instructions → session summary → long-term memory → recent messages.
 
 10. **Pipeline middleware (parallel design, not wired to `/api/query`)** (`core/pipeline/pipeline.py`): Stages (`IntentDetectionStage`, `PolicyValidationStage`, …) exist for composable preprocessing; **production queries go through `AgentRuntime` directly**.
+
+11. **Profile-based model switching** (`config/profiles/` + `config/chat-lowpower.args`): A **Normal/Low Power** toggle in Settings (`ModelModeToggle`) lets users switch between a 2B model (~2.5 GB RAM) and a 0.5B model (~0.8 GB RAM) at runtime. The backend accepts `PATCH /api/config { model, profile }`, rewrites `config/chat.args` from the profile template (grammar + ctx-size), kills the llama-server process, and restarts with the new model. The preference persists in `localStorage` for offline resilience. The model list filters automatically to show only small models when in low-power mode.
 
 ---
 
@@ -324,8 +330,10 @@ All mounted at `app.include_router(api)` with `prefix="/api"` (`server.py` ~line
 **Primary path: external `llama-server` process** (not Ollama).
 
 - Start: `make engine` → `./bin/start_engine.sh chat` → reads `config/chat.args`, binds `127.0.0.1:8080`.
+- Low-power mode: `make low-power` or toggle in Settings → reads `config/chat-lowpower.args` (Qwen2.5-0.5B, grammar, ctx-size 8192).
 - Embeddings: `make engine-embed` → profile `embed` → port **8082** (`config/embed.args`).
-- Example chat args (`config/chat.args`): `--model bin/models/llama-3.2-3b-instruct-q4_k_m.gguf`, `--ctx-size 4096`, `--temp 0.7`, GPU layers, flash attention.
+- Example chat args (`config/chat.args`): `--model bin/models/Qwen3.5-2B-UD-Q4_K_XL.gguf`, `--ctx-size 4096`, `--temp 0.7`, GPU layers, flash attention.
+- Low-power args (`config/chat-lowpower.args`): `--model bin/models/qwen2.5-0.5b-instruct-q5_k_m.gguf`, `--ctx-size 8192`, `--grammar-file bin/grammars/tool_call.gbnf`.
 
 **Alternate: `ModelManager`** (`core/inference/model_manager.py`) when `CEREBRO_LLAMACPP_SIMPLE=false`:
 
@@ -428,7 +436,9 @@ POST ... "stream": true
 - **Side effects:** Disk stores under `~/.cerebro/`; may start `ModelManager` / health monitor on app lifespan (not in main itself).
 
 #### `Makefile`
-- **Purpose:** Dev ergonomics — `make run`, `make test`, `make engine`, `make lint`.
+- **Purpose:** Dev ergonomics — `make run`, `make test`, `make engine`, `make lint`, `make low-power`.
+- **Notable targets:**
+  - `make low-power`: Sources `config/profiles/low-power.env` and runs `python main.py` — Qwen2.5-0.5B with grammar-constrained output, TaskPlanner limited to 2 steps, short-term memory at 8 messages.
 - **Side effects:** Spawns venv Python, llama-server via shell script.
 
 #### `bin/start_engine.sh`
@@ -499,6 +509,7 @@ POST ... "stream": true
 #### `core/agents/planner.py`
 - **Purpose:** `TaskPlanner` for `/api/query/plan` multi-step decomposition.
 - **Used by:** `query_plan_endpoint` in server (streams plan steps).
+- **Low-power mode:** `CEREBRO_PLANNER_MAX_STEPS=2` env var limits decomposition to 2 steps (the 0.5B model hallucinates on 3+ step plans). Default is 4.
 
 #### `core/agents/math_fast_path.py`
 - **Purpose:** Deterministic arithmetic without LLM.
@@ -686,6 +697,10 @@ POST ... "stream": true
 #### `ui/tray/src/components/status/StatusBar.tsx`
 - **Purpose:** RAM gauge, latency, engine indicator (`EngineIndicator.tsx`).
 
+#### `ui/tray/src/components/settings/ModelModeToggle.tsx`
+- **Purpose:** Normal/Low Power switch inside Settings → Model section. Shows current mode with model name + RAM + speed. Persists choice in `localStorage` (`cerebro_selected_profile`). Filters the model list below to show only small models when in low-power mode.
+- **Key:** Sends `PATCH /api/config { model, profile }` → backend hot-switches llama-server.
+
 #### `ui/tray/src-tauri/`
 - **Purpose:** Tauri config (`tauri.conf.json`), capabilities, Rust `lib.rs` — window management, native permissions.
 
@@ -696,9 +711,13 @@ POST ... "stream": true
 | File | Purpose |
 |------|---------|
 | `config/chat.args` | llama-server flags for default chat model |
+| `config/chat-lowpower.args` | llama-server flags for low-power 0.5B model (+grammar +ctx-size 8192) |
 | `config/embed.args` | Embedding model server flags |
-| `config/grammars/agent_response.gbnf` | GBNF root for agent JSON |
-| `~/.cerebro/state/config.json` | Runtime UI config (model, folders) via PATCH /api/config |
+| `config/profiles/low-power.env` | Env vars for low-power mode (model, grammar, planner steps, RAM thresholds) |
+| `config/profiles/lite-8gb.env` | Env vars for 8 GB M1 Mac profile |
+| `config/grammars/agent_response.gbnf` | GBNF root for agent JSON (dynamic tool names injected) |
+| `config/grammars/tool_call.gbnf` | GBNF grammar for llama-server `--grammar-file` (used in low-power mode) |
+| `~/.cerebro/state/config.json` | Runtime UI config (model, folders, profile) via PATCH /api/config |
 | `~/.cerebro/state/wizard.json` | Wizard completion flag |
 | `.env` / `load_dotenv()` in `main.py` | Local secrets and overrides |
 
@@ -712,14 +731,20 @@ POST ... "stream": true
 | `CEREBRO_INFERENCE_BACKEND` | `llamacpp` | `llamacpp` \| `mlx` \| `claude` |
 | `CEREBRO_LLAMACPP_URL` | `http://127.0.0.1:8080` | Chat server |
 | `CEREBRO_LLAMACPP_EMBED_URL` | `http://127.0.0.1:8082` | Embed server |
-| `CEREBRO_LLAMACPP_MODEL` | `llama-3.2-3b-instruct-q4_k_m.gguf` | Model id in API payloads |
+| `CEREBRO_LLAMACPP_MODEL` | `Qwen3.5-2B-UD-Q4_K_XL.gguf` | Model filename in API payloads |
+| `CEREBRO_LLAMACPP_ARGS_FILE` | `config/chat.args` | Args template for llama-server (low-power uses `chat-lowpower.args`) |
 | `CEREBRO_LLAMACPP_SIMPLE` | `true` | `false` → `ModelManager` subprocesses |
 | `CEREBRO_LLAMACPP_PROFILE` | `chat` | Context size profile in provider |
 | `CEREBRO_PROACTIVE_CONTEXT` | `true` in code / docs vary | Enables `ContextEnricher` |
+| `CEREBRO_PLANNER_MAX_STEPS` | `4` | Max TaskPlanner steps (set to `2` in low-power mode) |
+| `CEREBRO_SHORT_TERM_MAX_MESSAGES` | `35` | Max recent messages in context (set to `8` in low-power mode) |
+| `CEREBRO_RAM_PRIMARY_GB` | `1.0` | Min GB RAM for primary provider |
+| `CEREBRO_RAM_FALLBACK_GB` | `0.3` | Min GB RAM for fallback provider |
 | `CEREBRO_DB` | `~/.cerebro/db` | LanceDB path |
 | `CEREBRO_STATE` | `~/.cerebro/state` | JSON state |
 | `CEREBRO_API_KEY` / `VITE_CEREBRO_KEY` | unset | Optional API auth |
 | `CEREBRO_MLX_ENABLED` | `auto` | MLX secondary registration |
+| `CEREBRO_EMBEDDINGS_BACKEND` | `local` | `local` (sentence-transformers) \| `llamacpp` (external server) |
 | `ANTHROPIC_API_KEY` | — | Required for Claude backend |
 
 ---
@@ -729,7 +754,9 @@ POST ... "stream": true
 1. `make engine` — llama-server chat on :8080  
 2. `make engine-embed` — embeddings on :8082  
 3. `make run` — FastAPI on :7842  
-4. Frontend: `cd ui/tray && npm run dev` (Vite; Tauri optional) — UI talks to :7842  
+4. `make low-power` — same as `make run` but with Qwen2.5-0.5B (grammar + ctx-size 8192)  
+5. Frontend: `cd ui/tray && npm run dev` (Vite; Tauri optional) — UI talks to :7842  
+6. **Settings → Model → Model Mode**: toggle Normal/Low Power at runtime (persists in localStorage)  
 
 ---
 
@@ -743,6 +770,8 @@ POST ... "stream": true
 
 4. **Duplicate `cerebro/` tree** — keep changes in root `core/` and `ui/tray/` unless your release process targets the nested package only.
 
+5. **Low-power mode quality trade-off** — The 0.5B model is excellent at simple code generation (⭐⭐⭐⭐⭐) and basic tools, but poor at reasoning (⭐⭐) and multi-step tasks. The grammar (`--grammar-file`) fixes tool call formatting issues but can't fix logical errors. The TaskPlanner limit of 2 steps mitigates hallucination but limits complex workflows. Users should switch back to Normal mode for debugging, complex queries, or long context tasks.
+
 ---
 
-*Generated as an architectural reference for the SecondBrain / Cerebro repository. For operational fixes and runbooks, see `docs/`, `CLAUDE.md`, and `.cursor/rules/cerebro.mdc`.*
+*For the active plan, see `docs/plans/CURRENT_FOCUS.md`. Low-power design (archived): `docs/plans/maybe-later/LOW_POWER_V2_NANO_MODE.md`.*

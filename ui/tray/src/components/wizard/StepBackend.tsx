@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useWizardStore } from "../../stores/wizard";
 
 interface StepBackendProps {
@@ -5,6 +6,7 @@ interface StepBackendProps {
 }
 
 export default function StepBackend({ onReady }: StepBackendProps) {
+  const { t } = useTranslation();
   const { mode, setMode } = useWizardStore();
 
   const pick = (m: "local" | "claude") => {
@@ -15,7 +17,7 @@ export default function StepBackend({ onReady }: StepBackendProps) {
   return (
     <div className="w-full space-y-3 mb-6">
       <p className="text-[14px] leading-[20px] text-[#e8eaf0] text-center">
-        Choose how Cerebro runs inference.
+        {t("wizard.choose_backend")}
       </p>
 
       <button
@@ -28,10 +30,10 @@ export default function StepBackend({ onReady }: StepBackendProps) {
       >
         <div className="flex items-center gap-2 mb-1">
           <div className={`w-2 h-2 rounded-full ${mode === "local" ? "bg-success-green" : "bg-outline"}`} />
-          <span className="text-[14px] font-semibold text-on-surface">Local · llama.cpp</span>
+          <span className="text-[14px] font-semibold text-on-surface">{t("wizard.local_title")}</span>
         </div>
         <p className="text-[12px] text-outline pl-4">
-          Runs entirely on-device. Private. Requires 4–8 GB RAM.
+          {t("wizard.local_desc")}
         </p>
       </button>
 
@@ -45,10 +47,10 @@ export default function StepBackend({ onReady }: StepBackendProps) {
       >
         <div className="flex items-center gap-2 mb-1">
           <div className={`w-2 h-2 rounded-full ${mode === "claude" ? "bg-[#a78bfa]" : "bg-outline"}`} />
-          <span className="text-[14px] font-semibold text-on-surface">Cloud · Claude API</span>
+          <span className="text-[14px] font-semibold text-on-surface">{t("wizard.cloud_title")}</span>
         </div>
         <p className="text-[12px] text-outline pl-4">
-          Anthropic's frontier models. 200K context. Requires{" "}
+          {t("wizard.cloud_desc")}{" "}
           <code className="text-[#a78bfa] bg-[#1a1030] px-1 rounded">ANTHROPIC_API_KEY</code>.
         </p>
       </button>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "../../stores/settings";
 import { useSystemStore } from "../../stores/system";
 import { switchInferenceBackend } from "../../api/client";
@@ -6,8 +7,10 @@ import FolderManager from "./FolderManager";
 import IndexProgress from "./IndexProgress";
 import ModelSelector from "./ModelSelector";
 import ToolPermissions from "./ToolPermissions";
-import DndToggle from "./DndToggle";
+import FocusModeToggle from "./FocusModeToggle";
+import NotificationsToggle from "./NotificationsToggle";
 import FleetSettings from "./FleetSettings";
+import ModelModeToggle from "./ModelModeToggle";
 import KnowledgeSyncPanel from "./KnowledgeSyncPanel";
 import ClaudeModelSection from "./ClaudeModelSection";
 import ClaudeApiKeySection from "./ClaudeApiKeySection";
@@ -23,8 +26,15 @@ const BACKENDS: { id: BackendId; label: string }[] = [
 const BACKEND_LS_KEY = "cerebro_selected_backend";
 
 export default function SettingsPanel() {
-  const { close, isOpen } = useSettingsStore();
+  const { t, i18n } = useTranslation();
+  const { close, isOpen, patch, config } = useSettingsStore();
   const status = useSystemStore((s) => s.status);
+  const locale = config?.locale || "en";
+
+  const handleLanguageChange = (lang: string) => {
+    i18n.changeLanguage(lang);
+    patch({ locale: lang });
+  };
 
   // Local-selected backend (works offline, persisted)
   const [selectedBackend, setSelectedBackend] = useState<BackendId>(() => {
@@ -99,10 +109,25 @@ export default function SettingsPanel() {
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
+          {/* Language / Idioma */}
+          <section>
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+              {t("settings.language")}
+            </label>
+            <select
+              value={locale}
+              onChange={(e) => handleLanguageChange(e.target.value)}
+              className="w-full py-2 px-3 rounded-[6px] text-[13px] bg-surface-container border border-outline-variant text-on-surface focus:outline-none focus:border-primary"
+            >
+              <option value="en">English</option>
+              <option value="es">Español</option>
+            </select>
+          </section>
+
           {/* Watched Folders */}
           <section>
             <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-              Watched Folders
+              {t("settings.watched_folders")}
             </label>
             <FolderManager />
             <IndexProgress />
@@ -111,7 +136,7 @@ export default function SettingsPanel() {
           {/* Inference Backend */}
           <section>
             <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-              Inference Backend
+              {t("settings.inference_backend")}
             </label>
             <div className="flex gap-2">
               {BACKENDS.map(({ id, label }) => {
@@ -143,17 +168,17 @@ export default function SettingsPanel() {
               {/* ── Local model sections pushed to bottom ── */}
               <div className="pt-4 border-t border-outline-variant">
                 <p className="text-[10px] font-bold tracking-[0.05em] text-outline uppercase mb-3">
-                  Local Model Settings
+                  {t("settings.model")}
                 </p>
                 <section>
                   <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-                    Model
+                    {t("settings.model")}
                   </label>
                   <ModelSelector />
                 </section>
                 <section className="mt-6">
                   <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-                    Fleet Orchestrator
+                    {t("settings.fleet")}
                   </label>
                   <FleetSettings />
                 </section>
@@ -164,13 +189,15 @@ export default function SettingsPanel() {
               {/* ── Local model sections at top ── */}
               <section>
                 <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-                  Model
+                  {t("settings.model")}
                 </label>
-                <ModelSelector />
+                <div className="mt-3">
+                  <ModelSelector />
+                </div>
               </section>
               <section>
                 <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-                  Fleet Orchestrator
+                  {t("settings.fleet")}
                 </label>
                 <FleetSettings />
               </section>
@@ -183,7 +210,7 @@ export default function SettingsPanel() {
           {/* Tool Permissions */}
           <section>
             <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-              Tool Permissions
+              {t("settings.tool_permissions")}
             </label>
             <ToolPermissions />
           </section>
@@ -191,18 +218,29 @@ export default function SettingsPanel() {
           {/* Knowledge Sync */}
           <section>
             <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-              Knowledge Sync
+              {t("settings.knowledge_sync")}
             </label>
             <KnowledgeSyncPanel />
+          </section>
+
+          {/* Focus Mode */}
+          <section>
+            <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
+              {t("settings.focus_mode")}
+            </label>
+            <FocusModeToggle />
           </section>
 
           {/* Notifications */}
           <section>
             <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-              Notifications
+              {t("settings.notifications")}
             </label>
-            <DndToggle />
+            <NotificationsToggle />
           </section>
+
+          {/* Low Power Mode — always at bottom (in development) */}
+          <ModelModeToggle />
         </div>
 
         {/* Status bar at bottom */}

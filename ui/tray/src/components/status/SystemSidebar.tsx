@@ -1,17 +1,14 @@
 import { useState } from "react";
 import { useSystemStore } from "../../stores/system";
-import RamGaugeRing from "./RamGaugeRing";
-import CpuMiniGraph from "./CpuMiniGraph";
-import StorageAccessButton from "./StorageAccessButton";
+import SystemStatusPanel from "./SystemStatusPanel";
 import ActiveFleetList from "./ActiveFleetList";
 
 interface SystemSidebarProps {
   className?: string;
-  onOpenDocuments?: () => void;
 }
 
-export default function SystemSidebar({ className = "", onOpenDocuments }: SystemSidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
+export default function SystemSidebar({ className = "" }: SystemSidebarProps) {
+  const [collapsed, setCollapsed] = useState(true);
   const status = useSystemStore((s) => s.status);
   const usedGb = status?.ram_used_gb ?? 0;
   const totalGb = status?.ram_total_gb ?? (usedGb + (status?.ram_available_gb ?? 1));
@@ -64,14 +61,7 @@ export default function SystemSidebar({ className = "", onOpenDocuments }: Syste
       >
         <span className="material-symbols-outlined text-[16px]">chevron_right</span>
       </button>
-      <div className="mb-6">
-        <h2 className="text-sm font-semibold tracking-wider text-on-surface-variant uppercase mb-5">
-          System Status
-        </h2>
-        <RamGaugeRing />
-        <CpuMiniGraph />
-        <StorageAccessButton onOpen={onOpenDocuments} />
-      </div>
+      <SystemStatusPanel />
       <ActiveFleetList />
     </aside>
   );

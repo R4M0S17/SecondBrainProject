@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useSystemStore } from "../../stores/system";
 
 interface StorageAccessButtonProps {
@@ -5,6 +6,7 @@ interface StorageAccessButtonProps {
 }
 
 export default function StorageAccessButton({ onOpen }: StorageAccessButtonProps) {
+  const { t } = useTranslation();
   const status = useSystemStore((s) => s.status);
   const files = status?.indexed_files ?? 0;
 
@@ -19,14 +21,14 @@ export default function StorageAccessButton({ onOpen }: StorageAccessButtonProps
         </div>
         <div className="flex flex-col items-start">
           <span className="text-xs font-medium text-on-surface-variant uppercase tracking-wider mb-0.5">
-            Storage Access
+            {t("documents.storage_access")}
           </span>
           <span className="text-sm font-medium text-on-surface">
             {!status
-              ? "Connecting…"
+              ? t("status.connecting")
               : files > 0
-                ? `${files} file${files !== 1 ? "s" : ""}`
-                : "0 files"}
+                ? t("documents.file_count", { count: files })
+                : t("documents.file_count", { count: 0 })}
           </span>
         </div>
       </div>

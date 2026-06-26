@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSystemStore } from "../../stores/system";
 
 export default function SwapBanner() {
+  const { t } = useTranslation();
   const swapEvent = useSystemStore((s) => s.swapEvent);
   const [showReady, setShowReady] = useState(false);
 
@@ -23,7 +25,7 @@ export default function SwapBanner() {
         <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
           <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" />
         </svg>
-        <span>{swapEvent.to_model} ready</span>
+        <span>{t("swap.ready", { model: swapEvent.to_model })}</span>
       </div>
     );
   }
@@ -43,7 +45,7 @@ export default function SwapBanner() {
         <path d="M21 12a9 9 0 11-6.219-8.56" strokeLinecap="round" />
       </svg>
       <span>
-        Switching to {swapEvent.to_model} ({swapEvent.reason})
+        {t("swap.switching_to", { model: swapEvent.to_model, reason: swapEvent.reason })}
         {"estimated_seconds" in swapEvent && swapEvent.estimated_seconds != null
           ? ` · ~${swapEvent.estimated_seconds}s`
           : ""}

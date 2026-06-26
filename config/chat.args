@@ -1,14 +1,11 @@
 --model bin/models/Qwen3.5-2B-UD-Q4_K_XL.gguf
---ctx-size 4096
---reasoning off
---context-shift
+--ctx-size 8192
+--n-gpu-layers 99
+--flash-attn on
 --cache-prompt
 --cache-ram 2048
 --cache-type-k q4_0
 --cache-type-v q4_0
---n-gpu-layers 99
---flash-attn on
---temp 0.5
---repeat-penalty 1.1
---threads 4
---mmproj bin/models/mmproj-F16.gguf
+--chat-template chatml
+--grammar-file bin/grammars/tool_call.gbnf
+--log-disable

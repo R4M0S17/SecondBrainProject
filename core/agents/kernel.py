@@ -17,6 +17,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 from loguru import logger
 
+from core.i18n.messages import _L
 from core.inference.registry import ChatProvider, Message
 
 MAX_ITERATIONS = 10
@@ -121,7 +122,7 @@ class CerebroKernel:
         except TimeoutError:
             logger.warning("CerebroKernel timed out after {}s", TIMEOUT_SECONDS)
             result = dict(initial)
-            result["final_answer"] = "Timeout: la consulta superó el límite de 120 segundos."
+            result["final_answer"] = _L("error.timeout")
 
         return AgentState(
             messages=result["messages"],
@@ -172,17 +173,13 @@ class CerebroKernel:
             if key in state["seen_calls"]:
                 logger.warning("Kernel: duplicate tool call '{}', forcing answer.", key)
                 action = "answer"
-                args = {
-                    "answer": "Se detectó un bucle en el uso de herramientas. Por favor reformula tu pregunta."
-                }
+                args = {"answer": _L("error.tool_loop")}
 
         # Hard limits
         if iterations >= MAX_ITERATIONS or len(state["tools_called"]) >= MAX_TOOL_CALLS:
             action = "answer"
             if not args.get("answer"):
-                args = {
-                    "answer": "Se alcanzó el límite de iteraciones. Respuesta parcial basada en el contexto disponible."
-                }
+                args = {"answer": _L("error.max_iterations")}
 
         updated_messages = list(state["messages"])
         updated_messages.append({"role": "assistant", "content": raw})

@@ -305,14 +305,16 @@ async def test_runtime_generates_content_for_manual_fail_cases(
     runtime._context_builder._short_term.push_message = MagicMock()
 
     answer, final_state = await runtime.run(query, agent_id)
-    mock_chat.complete.assert_called_once()
     assert final_state.pending_tool_name == "write_file"
     written = final_state.pending_tool_args["content"]
     if "truthtable" in query:
+        mock_chat.complete.assert_called_once()
         assert "en donde escribas" not in written.lower()
         assert "|" in written or "AND" in written
     else:
-        assert written.strip() != "3 videojuegos de playstation"
+        # Uses heuristic fallback — no LLM call.
+        mock_chat.complete.assert_not_called()
+        assert written.strip() not in ("", "3 videojuegos de playstation")
         assert "\n" in written
     assert "generad" in answer.lower()
 
@@ -432,3 +434,203 @@ async def test_api_query_file_write_pending_tool(tmp_path, monkeypatch):
         assert target.exists()
         assert target.read_text() == "hello"
         assert "Archivo escrito en:" in confirm.json()["answer"]
+
+
+def test_parse_spanish_create_file_without_filename_auto_generates_name(tmp_path):
+    """'crea un archivo con 3 nombres de hombre inventados' should NOT capture 'con' as filename."""
+    roots = [str(tmp_path)]
+    intent = parse_file_write_intent(
+        "crea un archivo con 3 nombres de hombre inventados",
+        write_roots=roots,
+    )
+    assert intent is not None
+    assert intent.filename != "con", "Should not use 'con' as filename"
+    assert intent.filename in ("nombres.txt", "nombres_3.txt", "hombres.txt", "inventados.txt"), (
+        f"Expected auto-generated filename, got '{intent.filename}'"
+    )
+    assert intent.content_source == "spec"
+
+
+def test_parse_spanish_create_file_with_invalid_filename_rejected(tmp_path):
+    """Common Spanish stop words like 'con', 'por', 'para' should not become filenames."""
+    roots = [str(tmp_path)]
+    for stop_word in ("con", "por", "para", "sin", "del", "que"):
+        intent = parse_file_write_intent(
+            f"crea un archivo {stop_word} 3 nombres inventados",
+            write_roots=roots,
+        )
+        assert intent is not None, f"Should still match for stop_word='{stop_word}'"
+        assert intent.filename != stop_word, (
+            f"Should not use '{stop_word}' as filename"
+        )
+
+
+def test_parse_spanish_create_file_explicit_name_with_con_in_content(tmp_path):
+    """Explicit filenames should still work even when they contain 'con'."""
+    roots = [str(tmp_path)]
+    intent = parse_file_write_intent(
+        "crea un archivo lista_con_nombres.txt con 3 nombres de hombre inventados",
+        write_roots=roots,
+    )
+    assert intent is not None
+    assert intent.filename == "lista_con_nombres.txt"
+
+
+def test_strip_generated_file_body_removes_json_action_answer():
+    """JSON {'action': 'answer', 'answer': '...'} envelope should be stripped."""
+    raw = '{"action": "answer", "answer": "Liam\\nNoah\\nOliver"}'
+    result = strip_generated_file_body(raw)
+    assert result == "Liam\nNoah\nOliver"
+
+
+def test_strip_generated_file_body_removes_json_tool_with_content():
+    """JSON {'action': 'tool', 'tool': 'write_file', 'args': {'content': '...'}} should strip."""
+    raw = '{"action": "tool", "tool": "write_file", "args": {"path": "x.txt", "content": "Liam\\nNoah\\nOliver"}}'
+    result = strip_generated_file_body(raw)
+    assert result == "Liam\nNoah\nOliver"  # json.loads unescapes \\n → \n
+
+
+def test_strip_generated_file_body_json_with_newlines():
+    """JSON with literal \\n inside strings should decode properly."""
+    raw = '{"action": "answer", "answer": "Liam\\nNoah\\nOliver"}'
+    result = strip_generated_file_body(raw)
+    assert result == "Liam\nNoah\nOliver"
+
+
+# ----- heuristic fallback tests -----
+
+def test_fallback_4_female_names():
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("4 nombres de mujer")
+    assert result is not None
+    lines = result.split("\n")
+    assert len(lines) == 4
+    assert all(isinstance(n, str) and len(n) > 0 for n in lines)
+
+
+def test_fallback_3_male_names():
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("3 nombres de hombre inventados")
+    assert result is not None
+    lines = result.split("\n")
+    assert len(lines) == 3
+
+
+def test_fallback_5_playstation_games():
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("5 videojuegos de playstation")
+    assert result is not None
+    lines = result.split("\n")
+    assert len(lines) == 4  # capped at available items
+
+
+def test_fallback_recipe_pizza():
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("una receta de pizza")
+    assert result is not None
+    assert any("harina" in line.lower() for line in result.split("\n"))
+
+
+def test_fallback_not_triggered_for_code():
+    from core.agents.file_content_generator import _try_fallback
+    assert _try_fallback("un programa python usando recursion fibonacci") is None
+
+
+def test_fallback_lasagna_recipe():
+    """'receta de lasagna' should produce a complete recipe with ingredients."""
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("una receta de lasagna")
+    assert result is not None
+    assert "lasagna" in result.lower() or "lasaña" in result.lower()
+    assert any(w in result.lower() for w in ("ingrediente", "carne", "horno"))
+
+
+def test_fallback_generic_recipe():
+    """'receta de pollo al horno' should produce a generic recipe template."""
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("una receta de pollo al horno")
+    assert result is not None
+    assert "pollo al horno" in result.lower()
+    assert "ingredientes" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_runtime_file_write_fast_path_lasagna_no_llm(tmp_path, monkeypatch):
+    """'crea un archivo receta.txt con una receta de lasagna' should use fallback."""
+    monkeypatch.setenv("CEREBRO_FILES_PATH", str(tmp_path))
+    agent_id = "general-v1"
+    store = AgentStateStore(state_dir=str(tmp_path / "state"))
+    state = store.load(agent_id)
+    state.profile.authorized_tools = ["write_file"]
+    store.save(state)
+
+    mock_chat = MagicMock()
+    mock_registry = MagicMock(spec=ProviderRegistry)
+    mock_registry.select_for_task = MagicMock(return_value="primary")
+    mock_registry.get_chat = MagicMock(return_value=mock_chat)
+
+    runtime = AgentRuntime(
+        registry=mock_registry,
+        state_store=store,
+        context_builder=MagicMock(_short_term=MagicMock()),
+        tool_registry={},
+    )
+    runtime._context_builder._short_term.push_message = MagicMock()
+
+    answer, final_state = await runtime.run(
+        "crea un archivo receta.txt con una receta de lasagna",
+        agent_id,
+    )
+    mock_chat.complete.assert_not_called()
+    assert final_state.pending_tool_name == "write_file"
+    content = final_state.pending_tool_args["content"]
+    assert "lasagna" in content.lower()
+    assert "receta.txt" in final_state.pending_tool_args["path"]
+    assert "generad" in answer.lower()
+
+
+def test_fallback_2_invented_names():
+    from core.agents.file_content_generator import _try_fallback
+    result = _try_fallback("2 nombres inventados")
+    assert result is not None
+    lines = result.split("\n")
+    assert len(lines) == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_file_write_fast_path_female_names_no_llm(tmp_path, monkeypatch):
+    """'crea un archivo con 4 nombres de mujer' should use fallback, not LLM."""
+    monkeypatch.setenv("CEREBRO_FILES_PATH", str(tmp_path))
+    agent_id = "general-v1"
+    store = AgentStateStore(state_dir=str(tmp_path / "state"))
+    state = store.load(agent_id)
+    state.profile.authorized_tools = ["write_file"]
+    store.save(state)
+
+    mock_chat = MagicMock()
+    mock_registry = MagicMock(spec=ProviderRegistry)
+    mock_registry.select_for_task = MagicMock(return_value="primary")
+    mock_registry.get_chat = MagicMock(return_value=mock_chat)
+
+    runtime = AgentRuntime(
+        registry=mock_registry,
+        state_store=store,
+        context_builder=MagicMock(_short_term=MagicMock()),
+        tool_registry={},
+    )
+    runtime._context_builder._short_term.push_message = MagicMock()
+
+    answer, final_state = await runtime.run(
+        "crea un archivo con 4 nombres de mujer",
+        agent_id,
+    )
+    # Should NOT call the LLM — heuristic fallback kicks in.
+    mock_chat.complete.assert_not_called()
+    assert final_state.pending_tool_name == "write_file"
+    content = final_state.pending_tool_args["content"]
+    lines = content.strip().split("\n")
+    assert len(lines) == 4, f"Expected 4 names, got {len(lines)}: {content}"
+    assert all(len(name) > 0 for name in lines)
+    assert "nombres" in final_state.pending_tool_args["path"].lower() or \
+           "mujer" in final_state.pending_tool_args["path"].lower()
+    assert "generad" in answer.lower()

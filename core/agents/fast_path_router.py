@@ -173,10 +173,6 @@ class FastPathRouter:
         if result is not None:
             return result
 
-        result = self._try_unit_conversion(query, agent_state)
-        if result is not None:
-            return result
-
         result = await self._try_file_write(query, agent_state)
         if result is not None:
             return result
@@ -193,7 +189,15 @@ class FastPathRouter:
         if result is not None:
             return result
 
-        return self._try_file_search(query, agent_state)
+        result = self._try_file_search(query, agent_state)
+        if result is not None:
+            return result
+
+        result = self._try_unit_conversion(query, agent_state)
+        if result is not None:
+            return result
+
+        return None
 
     def _authorized_tools(self, agent_state: AgentState) -> list[str]:
         return list(agent_state.profile.authorized_tools or [])
@@ -210,10 +214,13 @@ class FastPathRouter:
 
     def _try_time_date(self, query: str, agent_state: AgentState) -> FastPathResult | None:
         _ = agent_state
-        q = query.lower().strip()
+        q = query.lower().strip().lstrip("¿").strip()
         if not re.search(
             r"^(what('s| is)( the)?|tell me the|do you know the)\s*(current\s+)?"
-            r"(time|date|day|month|year|hour)\b",
+            r"(time|date|day|month|year|hour)\b"
+            r"|^(qué\s+(día|fecha|hora|año|mes)\s+(es\s+)?(hoy\s+)?(ahora\s+)?)"
+            r"|^(cuál\s+es\s+(la\s+)?(fecha|hora|día)\s+(de\s+)?hoy\s*)"
+            r"|^(que\s+(dia|fecha|hora|año|mes)\s+(es\s+)?(hoy\s+)?)",
             q,
         ):
             return None
@@ -362,11 +369,11 @@ class FastPathRouter:
             return None
 
         answer = _L("confirm.tool_pause", tool_name=tool_name)
-        answer += f"\n\n**{intent.title}**"
+        answer += _L("fastpath.reminder_title", title=intent.title)
         if intent.datetime_str and intent.action == "add":
-            answer += f"\nCuándo: {intent.datetime_str}"
+            answer += _L("fastpath.reminder_when", datetime_str=intent.datetime_str)
         elif intent.datetime_str and intent.action == "delete":
-            answer += f"\nDía: {intent.datetime_str}"
+            answer += _L("fastpath.reminder_day", datetime_str=intent.datetime_str)
 
         return FastPathResult(
             kind="reminder",
@@ -390,13 +397,15 @@ class FastPathRouter:
         q = query.lower().strip()
         if not re.search(
             r"\b(schedule|create\s+event|add\s+meeting|book\s+appointment|"
-            r"set\s+up\s+a\s+call|plan\s+meeting|organize\s+meeting)\b",
+            r"set\s+up\s+a\s+call|plan\s+meeting|organize\s+meeting|"
+            r"crea(r?\s+)?(un\s+)?evento|agendar|programar\s+(una\s+)?(reuni[oó]n|cita|evento))\b",
             q,
         ):
             return None
         if not re.search(
             r"\b(today|tomorrow|next|this|at\s|a las|\d{1,2}(:|\.)\d{2}|"
             r"noon|midnight|morning|afternoon|evening|tonight|"
+            r"mañana|manana|hoy|"
             r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
             q,
         ):
@@ -409,13 +418,14 @@ class FastPathRouter:
             return None
 
         raw_title = re.sub(
-            r"^(schedule|create|add|book|set up|plan|organize)\s+(a|an|the|one)?\s*",
+            r"^(schedule|create|add|book|set up|plan|organize|crea|crear|agendar|programar)\s+"
+            r"(a|an|the|one|un|una|el|la)?\s*",
             "",
             query,
             flags=re.IGNORECASE,
         ).strip()
         title = re.split(
-            r"\s+(today|tomorrow|next\s+\w+|this\s+\w+|on\s+\w+|at\s+|a las)",
+            r"\s+(today|tomorrow|next\s+\w+|this\s+\w+|on\s+\w+|at\s+|a las|mañana|manana|hoy|\d{1,2}\s*(?:am|pm))",
             raw_title,
             maxsplit=1,
             flags=re.IGNORECASE,
@@ -424,12 +434,12 @@ class FastPathRouter:
             r"^(meeting|event|appointment|call)\s+", "", title, flags=re.IGNORECASE
         ).strip()
         if not title or len(title) < 2:
-            title = "Evento"
+            title = _L("calendar.default_event_title")
 
         description = ""
         with_match = re.search(r"\bwith\s+(\w[\w\s]*)", query, re.IGNORECASE)
         if with_match:
-            description = f"Con {with_match.group(1).strip()}"
+            description = _L("calendar.with_person", name=with_match.group(1).strip())
 
         answer = _L("confirm.tool_pause", tool_name="create_calendar_event")
         answer += f"\n\n**{title}**"

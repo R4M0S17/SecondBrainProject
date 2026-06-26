@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -15,6 +15,7 @@ from core.memory.long_term import LongTermStore
 from core.memory.short_term import ShortTermStore
 from core.memory.vector_store import VectorStore
 from core.tools.registry import ToolRegistry, register_calendar_tools
+from tests.test_fix_cerebro.conftest import make_stub_chat_complete
 
 
 @pytest.mark.asyncio
@@ -48,6 +49,7 @@ async def test_runtime_invokes_get_upcoming_events_when_llm_requests_tool(tmp_pa
     short_term = ShortTermStore()
     long_term = LongTermStore(vector_store=vector_store, agent_id=GENERAL_AGENT_ID, embed=embed)
     context_builder = ContextBuilder(short_term=short_term, long_term=long_term)
+    context_builder.maybe_consolidate = AsyncMock(return_value=False)
 
     reg = ToolRegistry()
     register_calendar_tools(reg)
@@ -58,11 +60,7 @@ async def test_runtime_invokes_get_upcoming_events_when_llm_requests_tool(tmp_pa
         '{"action": "tool", "tool": "get_upcoming_events", "args": {"hours_ahead": 24}}',
         '{"action": "answer", "answer": "Listo: usé el calendario."}',
     ]
-    mock_chat = MagicMock()
-    mock_chat.complete = AsyncMock(side_effect=seq)
-    mock_chat.is_available = MagicMock(return_value=True)
-    mock_chat.model_id = MagicMock(return_value="stub")
-    mock_chat.context_window = MagicMock(return_value=4096)
+    mock_chat = make_stub_chat_complete(seq)
 
     provider_registry = ProviderRegistry(
         ram_threshold_primary_gb=0.01,
@@ -79,6 +77,7 @@ async def test_runtime_invokes_get_upcoming_events_when_llm_requests_tool(tmp_pa
         tool_definitions=reg.definitions(),
         enricher=None,
     )
+    runtime._fast_path_router.try_all = AsyncMock(return_value=None)
 
     answer, final = await runtime.run("¿Qué hay hoy en el calendario?", GENERAL_AGENT_ID)
 

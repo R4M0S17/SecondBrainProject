@@ -1,17 +1,45 @@
 # Plans & roadmaps
 
-All documents live flat in this directory (no subdirectories).
+## Empieza aquí
 
-| Category | Documents |
-|----------|-----------|
-| **Stabilization / fixes** | [`fix-cerebro.md`](fix-cerebro.md) · [`fix-plan-v2.md`](fix-plan-v2.md) · [`impleme-fix.md`](impleme-fix.md) · [`impleme-fix-implementation.md`](impleme-fix-implementation.md) · [`FIX_PHASES.md`](FIX_PHASES.md) |
-| **Feature specs** | [`Agentic_implementation.md`](Agentic_implementation.md) · [`CLAUDE_API_FRONTEND.md`](CLAUDE_API_FRONTEND.md) · [`CLAUDE_API_INTEGRATION.md`](CLAUDE_API_INTEGRATION.md) · [`FLEET_ORCHESTRATOR_FRONTEND.md`](FLEET_ORCHESTRATOR_FRONTEND.md) · [`FLEET_ORCHESTRATOR_PHASE1_SUMMARY.md`](FLEET_ORCHESTRATOR_PHASE1_SUMMARY.md) · [`FRONTEND_STATUS_DIAGNOSIS.md`](FRONTEND_STATUS_DIAGNOSIS.md) · [`LOCAL_MODEL_FLEET_ORCHESTRATOR.md`](LOCAL_MODEL_FLEET_ORCHESTRATOR.md) · [`file-search-multi-root.md`](file-search-multi-root.md) · [`web-search-tavily.md`](web-search-tavily.md) |
-| **Optimization** | [`Llama_backend_optimization_path.md`](Llama_backend_optimization_path.md) · [`Optimization_Plan.md`](Optimization_Plan.md) · [`OPTIMIZATION_IMPLEMENTATION_ROADMAP.md`](OPTIMIZATION_IMPLEMENTATION_ROADMAP.md) · [`OPTIMIZATION_ROADMAP.md`](OPTIMIZATION_ROADMAP.md) |
-| **Future vision** | [`future-cognitive-os.md`](future-cognitive-os.md) · [`ideas-future.md`](ideas-future.md) |
-| **Research / ideas** | [`Qwen3.5-0.8B-integration-ideas.md`](Qwen3.5-0.8B-integration-ideas.md) · [`semantic_context_compressor.md`](semantic_context_compressor.md) |
-| **Roadmaps** | [`implementation-roadmap.md`](implementation-roadmap.md) · [`plan_cerebro_implementacion.md`](plan_cerebro_implementacion.md) |
+| Documento | Qué es |
+|-----------|--------|
+| **[`CURRENT_FOCUS.md`](CURRENT_FOCUS.md)** | **Documento maestro** — evaluación honesta, qué cambiar/no cambiar, posicionamiento, plan v0.2 |
+| [`implementation-roadmap.md`](implementation-roadmap.md) | Índice + estado; apunta a CURRENT_FOCUS |
+| [`maybe-later/`](maybe-later/) | Visión, fleet, cognitive OS, low power, etc. — **no prioridad** |
+
+---
+
+## Specs activas (incrementales)
+
+| Documento | Cuándo usar |
+|-----------|-------------|
+| [`engine-backend-split.md`](engine-backend-split.md) | **Separar backend (`:7842`) y motor LLM (`:8080`)** — plan de implementación |
+| [`file-search-multi-root.md`](file-search-multi-root.md) | Fase 1 — ampliar búsqueda a Desktop/Documents |
+| [`workflows-tab-implementation.md`](workflows-tab-implementation.md) | **Pestaña Flujos** — grabación UI, recetas, diseño cybernetic (4 fases) |
+| [`i18n-implementation.md`](i18n-implementation.md) | Fase 2 — errores y wizard primero |
+| [`SECURITY_AUDIT_RESULTS.md`](SECURITY_AUDIT_RESULTS.md) | Fase 3 — hardening P0 |
+| [`SECURITY_HARDENING_PLAN.md`](SECURITY_HARDENING_PLAN.md) | Detalle de seguridad (referencia) |
+| [`web-search-tavily.md`](web-search-tavily.md) | Opcional; no bloquea v0.2 |
+| [`new_fast_paths_implementation.md`](new_fast_paths_implementation.md) | Referencia fast paths ya hechos |
+
+---
+
+## Archivado — quizás más adelante
+
+[`maybe-later/README.md`](maybe-later/README.md) explica qué hay y por qué no es backlog activo:
+
+- Cognitive OS, ideas futuras
+- Fleet orchestrator, Low Power Nano
+- Knowledge sync (plan grande)
+- Optimización backend, Docker, Windows port
+- Dashboard redesign, fix plans históricos
+- Claude API integration docs (ya en código)
+
+---
 
 ## Related
 
-- Manual regression evidence: [`../testing/`](../testing/)
-- Incident write-ups: [`../incidents/`](../incidents/)
+- Manual QA: [`../testing/`](../testing/)
+- Incidents: [`../incidents/`](../incidents/)
+- Fast paths (congelados): [`../architecture/fast-paths.md`](../architecture/fast-paths.md)

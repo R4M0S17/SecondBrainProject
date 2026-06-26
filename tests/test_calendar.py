@@ -545,12 +545,16 @@ def test_add_reminder_non_macos_returns_informative_message():
         result = handler_add_reminder("Buy milk", "tomorrow at 9am")
     assert "macOS" in result
     assert "Buy milk" in result
-    assert "Calendario" in result or "calendario" in result
+    assert (
+        "Calendario" in result
+        or "calendario" in result
+        or "recordatorio" in result
+    )
 
 
 def test_add_reminder_bad_date_returns_error():
     result = handler_add_reminder("Something", "not a date xyzzy")
-    assert "Could not parse" in result
+    assert "Could not parse" in result or "No pude interpretar" in result
     assert "not a date xyzzy" in result
 
 
@@ -609,12 +613,15 @@ def test_limit_keyword_event_matches_caps_at_three():
 
 def test_limit_keyword_event_matches_same_day_bundle():
     now = datetime.now(UTC)
-    day = now + timedelta(days=5)
+    day = now.replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=5)
     events = [
         CalendarEvent(title="A", start=day, end=day + timedelta(hours=1)),
         CalendarEvent(title="B", start=day + timedelta(hours=2), end=day + timedelta(hours=3)),
         CalendarEvent(
-            title="C", start=now + timedelta(days=6), end=now + timedelta(days=6, hours=1)
+            title="C", start=now.replace(hour=12, minute=0, second=0, microsecond=0)
+            + timedelta(days=6),
+            end=now.replace(hour=12, minute=0, second=0, microsecond=0)
+            + timedelta(days=6, hours=1),
         ),
     ]
     limited = limit_keyword_event_matches(events, max_results=3)

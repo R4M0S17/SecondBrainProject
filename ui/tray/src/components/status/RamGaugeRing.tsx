@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSystemStore } from "../../stores/system";
 
 export default function RamGaugeRing() {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
   const status = useSystemStore((s) => s.status);
 
@@ -9,11 +11,11 @@ export default function RamGaugeRing() {
     return (
       <div className="bg-surface-container/40 rounded-xl p-5 border border-outline-variant/20 mb-4">
         <div className="flex justify-between items-start mb-4">
-          <span className="text-xs font-medium text-on-surface-variant">Memory Allocation</span>
+          <span className="text-xs font-medium text-on-surface-variant">{t("status.memory_allocation")}</span>
           <span className="material-symbols-outlined text-[16px] text-outline/40">memory</span>
         </div>
         <div className="flex justify-center py-6">
-          <div className="text-[11px] text-outline/40 animate-pulse">Connecting…</div>
+          <div className="text-[11px] text-outline/40 animate-pulse">{t("status.connecting")}</div>
         </div>
       </div>
     );
@@ -32,7 +34,7 @@ export default function RamGaugeRing() {
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex justify-between items-start mb-4 text-left"
       >
-        <span className="text-xs font-medium text-on-surface-variant">Memory Allocation</span>
+        <span className="text-xs font-medium text-on-surface-variant">{t("status.memory_allocation")}</span>
         <div className="flex items-center gap-2">
           {collapsed && (
             <span className="text-xs font-label-mono text-primary-container tabular-nums">
@@ -73,14 +75,14 @@ export default function RamGaugeRing() {
                   {usedGb.toFixed(2)}
                 </span>
                 <span className="text-[10px] text-outline uppercase">
-                  GB / {totalGb.toFixed(1)}
+                  {t("status.gb_of", { total: totalGb.toFixed(1) })}
                 </span>
               </div>
             </div>
           </div>
           <div className="mt-2 text-center text-[10px] text-on-surface-variant font-label-mono">
-            {Math.round(percent)}% UTILIZED
-            {isPressed && " • HIGH PRESSURE"}
+            {t("status.utilized", { percent: Math.round(percent) })}
+            {isPressed && <span className="text-[10px] text-error font-semibold"> • {t("status.high_pressure")}</span>}
           </div>
         </>
       )}

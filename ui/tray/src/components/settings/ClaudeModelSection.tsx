@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 const CLAUDE_MODELS = [
   { id: "claude-fable-5", label: "Fable 5", ctx: "1M" },
   { id: "claude-opus-4-8", label: "Opus 4.8", ctx: "1M" },
@@ -6,10 +8,11 @@ const CLAUDE_MODELS = [
 ];
 
 export default function ClaudeModelSection() {
+  const { t } = useTranslation();
   return (
     <section>
       <label className="block text-[11px] font-bold tracking-[0.05em] text-outline uppercase mb-2">
-        Claude Models
+        {t("claude.models")}
       </label>
       <div className="space-y-1">
         {CLAUDE_MODELS.map((m) => (

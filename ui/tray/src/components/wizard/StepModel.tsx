@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getLlamaCppModels, wizardCheckModels } from "../../api/client";
 import type { LlamaCppModel } from "../../api/types";
 
@@ -9,6 +10,7 @@ interface StepModelProps {
 type CheckState = "checking" | "ok" | "missing" | "error";
 
 export default function StepModel({ onReady }: StepModelProps) {
+  const { t } = useTranslation();
   const [state, setState] = useState<CheckState>("checking");
   const [message, setMessage] = useState<string>("");
   const [models, setModels] = useState<LlamaCppModel[]>([]);
@@ -57,7 +59,7 @@ export default function StepModel({ onReady }: StepModelProps) {
   return (
     <div className="w-full space-y-3 mb-6">
       <p className="text-[14px] text-[#e8eaf0] text-center mb-4">
-        Verifying GGUF model files in{" "}
+        {t("wizard.verify_models")}{" "}
         <code className="text-primary-container bg-surface-container px-1 rounded">bin/models/</code>.
       </p>
 
@@ -89,10 +91,10 @@ export default function StepModel({ onReady }: StepModelProps) {
             }`}
           >
             {state === "checking"
-              ? "Scanning model files…"
+              ? t("wizard.scanning")
               : state === "ok"
-              ? `${models.length} model${models.length !== 1 ? "s" : ""} found`
-              : message || "No models found"}
+              ? t("wizard.models_found", { count: models.length })
+              : message || t("wizard.no_models")}
           </span>
         </div>
 
@@ -111,16 +113,16 @@ export default function StepModel({ onReady }: StepModelProps) {
       {(state === "missing" || state === "error") && (
         <>
           <p className="text-[12px] text-outline text-center">
-            Place GGUF files in{" "}
+            {t("wizard.retry_models")}{" "}
             <code className="text-primary-container bg-surface-container px-1 rounded">bin/models/</code>
-            , then click Retry.
+            {t("wizard.then_click")}
           </p>
           <div className="flex justify-center">
             <button
               onClick={check}
               className="px-4 py-1.5 text-[12px] bg-primary-container text-on-primary-container rounded hover:opacity-90 transition-opacity font-semibold"
             >
-              Retry
+              {t("wizard.retry")}
             </button>
           </div>
         </>

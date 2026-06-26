@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useChatStore } from "../../stores/chat";
 import type { ToolCallRecord } from "../../api/types";
 
@@ -18,6 +19,7 @@ function toolDisplayName(name: string): string {
 }
 
 export default function OutputTab() {
+  const { t } = useTranslation();
   const messages = useChatStore((s) => s.messages);
 
   const toolCalls: (ToolCallRecord & { msgIdx: number; tcIdx: number })[] = [];
@@ -34,15 +36,15 @@ export default function OutputTab() {
     <div className="flex-1 flex flex-col min-h-0">
       <p className="text-[11px] text-on-surface-variant/60 mb-4 flex items-center gap-1.5">
         <span className="material-symbols-outlined text-[14px] text-primary-container/60">info</span>
-        Resultados de herramientas ejecutadas
+        {t("output.tools_executed")}
       </p>
       <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
         {toolCalls.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-outline">
             <span className="material-symbols-outlined text-[40px] text-outline/30">output</span>
-            <p className="text-[13px]">No tools executed yet</p>
+            <p className="text-[13px]">{t("output.no_tools")}</p>
             <p className="text-[11px] text-outline/60 text-center max-w-sm">
-              Ask the agent to run scripts, search files, or perform tasks. Results will appear here.
+              {t("output.no_tools_desc")}
             </p>
           </div>
         ) : (
@@ -65,7 +67,7 @@ export default function OutputTab() {
                           ? "bg-[#1a2e1a] text-[#4ade80]"
                           : "bg-[#2a1e1e] text-[#f87171]"
                       }`}>
-                        {tc.approved ? "Executed" : "Denied"}
+                        {tc.approved ? t("output.executed") : t("output.denied")}
                       </span>
                     </div>
                     <span className="text-[10px] text-outline/50 font-label-mono">
@@ -75,7 +77,7 @@ export default function OutputTab() {
                   {tc.args_summary && tc.args_summary !== "{}" && (
                     <div className="mb-2">
                       <div className="text-[9px] text-outline/50 uppercase tracking-wider font-bold mb-1">
-                        Argumentos
+                        {t("output.arguments")}
                       </div>
                       <pre className="text-[11px] text-on-surface-variant/80 font-mono whitespace-pre-wrap bg-surface-container-lowest/50 rounded-lg p-2.5 border border-outline-variant/5">
                         {tc.args_summary}
@@ -84,11 +86,11 @@ export default function OutputTab() {
                   )}
                   <div>
                     <div className="text-[9px] text-outline/50 uppercase tracking-wider font-bold mb-1">
-                      Resultado
+                      {t("output.result")}
                     </div>
                     <pre className="text-[12px] text-on-surface font-mono whitespace-pre-wrap max-h-40 overflow-y-auto bg-surface-container-lowest/50 rounded-lg p-2.5 border border-outline-variant/5 leading-relaxed">
                       {tc.result_summary || (
-                        <span className="text-on-surface-variant/40 italic">No result</span>
+                        <span className="text-on-surface-variant/40 italic">{t("output.no_result")}</span>
                       )}
                     </pre>
                   </div>

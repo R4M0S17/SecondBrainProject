@@ -15,10 +15,6 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
   };
 }
 
-function renderInStore(component: React.ReactElement) {
-  return render(component);
-}
-
 describe("MessageBubble", () => {
   it("renders user message on the right", () => {
     const msg = makeMessage({ role: "user", content: "Hi there" });
@@ -47,7 +43,7 @@ describe("MessageBubble", () => {
     });
     const msg = makeMessage({ role: "assistant", content: "" });
     render(<MessageBubble message={msg} />);
-    expect(screen.getByText(/Searching 5 files…/)).toBeInTheDocument();
+    expect(screen.getByText(/Searching 5 file\(s\)…/)).toBeInTheDocument();
   });
 
   it("renders searching web indicator", () => {

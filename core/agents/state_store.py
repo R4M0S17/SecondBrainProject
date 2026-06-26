@@ -179,7 +179,10 @@ class AgentStateStore:
             try:
                 with open(json_file, encoding="utf-8") as f:
                     data = json.load(f)
-                profiles.append(_profile_from_dict(data["profile"]))
+                profile_data = data.get("profile")
+                if not isinstance(profile_data, dict):
+                    continue
+                profiles.append(_profile_from_dict(profile_data))
             except (json.JSONDecodeError, KeyError):
                 logger.warning("Skipping unreadable agent file: {}", json_file.name)
         return profiles

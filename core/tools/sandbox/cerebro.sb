@@ -1,0 +1,32 @@
+;; macOS sandbox-exec profile for untrusted Python execution
+;; WARNING: sandbox-exec is a deprecated, undocumented Apple API.
+;; This is a best-effort stopgap.
+(version 1)
+
+(deny default)
+
+;; Allow reading the Python framework and stdlib
+(allow file-read* (subpath "/System/Library/Frameworks/Python.framework"))
+(allow file-read* (subpath "/usr/lib"))
+(allow file-read* (subpath "/usr/share"))
+
+;; Allow reading the sandbox temp directory
+(allow file-read* (subpath "/private/tmp/cerebro-sandbox"))
+
+;; Allow executing Python
+(allow process-exec (literal "/usr/bin/python3"))
+(allow process-exec (literal "/usr/bin/python3.11"))
+(allow process-exec (literal "/usr/bin/python3.12"))
+
+;; Deny all network access
+(deny network*)
+
+;; Deny writes everywhere (temp dir writes handled by parent process)
+(deny file-write*)
+
+;; Deny system configuration reads
+(deny sysctl*)
+
+;; Deny IPC (mach, sysv)
+(deny ipc-posix*)
+(deny mach*)

@@ -12,6 +12,29 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _teardown_app_state_leaks():
+    """Reset shared FastAPI app_state after each test to avoid cross-file pollution."""
+    yield
+    from core.observability.response_meta import MetricsCollector
+    from ui.tray.server import app_state
+
+    app_state.runtime = None
+    app_state.provider_registry = None
+    app_state.vector_store = None
+    app_state.router = None
+    app_state.model_manager = None
+    app_state.planner = None
+    app_state.enricher = None
+    app_state.embedding_provider = None
+    app_state.fleet_orchestrator = None
+    app_state.short_term = None
+    app_state.state_store = None
+    app_state.metrics = MetricsCollector()
+    app_state._config = {}
+    app_state._pending_tools = {}
+
+
 @pytest.fixture
 def mock_provider() -> MagicMock:
     """Return a mock ChatProvider with an async complete()."""

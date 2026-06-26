@@ -5,15 +5,15 @@ Canonical technical docs live under **`docs/`** at the repository root.
 | Area | Path | Contents |
 |------|------|----------|
 | **Architecture & pipeline** | [`architecture/`](architecture/) | Fast paths, program overview, memory plan, unificación Cerebro |
-| **Frontend UI** | [`frontend/`](frontend/) | Design specs, roadmap, redesign plan, changelog |
-| **Guides & runbooks** | [`guides/`](guides/) | How to run, quickstart, macOS port, merge steps, knowledge-sync |
+| **Frontend UI** | [`frontend/`](frontend/) | Design specs, roadmap, redesign plan, changelog, **[agent memory browser](frontend/MEMORY_BROWSER.md)** |
+| **Guides & runbooks** | [`guides/`](guides/) | **[`howToRun.md`](guides/howToRun.md)** · [`running-es.md`](guides/running-es.md) · quickstart, desktop launch |
 | **Inference backends** | [`inference/`](inference/) | llama.cpp, MLX, RAM optimization |
-| **Plans & roadmaps** | [`plans/`](plans/) | Features (Claude, fleet orchestrator, file search), stabilization, optimization, future vision |
+| **Plans & roadmaps** | [`plans/`](plans/) | **Active:** [`CURRENT_FOCUS.md`](plans/CURRENT_FOCUS.md) · Archived vision in [`maybe-later/`](plans/maybe-later/) |
 | **Reference** | [`reference/`](reference/) | Specs, benchmarks, comparisons, issues ledger, changelogs |
 | **Records (ADRs)** | [`records/`](records/) | Semantic compressor decisions and plans |
 | **Incidents** | [`incidents/`](incidents/) | Calendar bugs, llamacpp fixes |
 | **Testing & QA** | [`testing/`](testing/) | Test reports, manual QA sessions, E2E tests, smoke tests |
-| **Implementation notes** | [`implementation/`](implementation/) | Path RAG hybrid, local RAG injector, knowledge sync agent |
+| **Implementation notes** | [`implementation/`](implementation/) | Path RAG hybrid, local RAG injector, knowledge sync agent, **[phase-0-stabilization](implementation/phase-0-stabilization.md)** |
 | **Project / product** | [`project/`](project/) | Specs v1.0/v1.1, current state, Obsidian inspiration |
 | **Connection / API** | [`connection/`](connection/) | REST API guide, backend-frontend wiring progress |
 

@@ -1,0 +1,36 @@
+name: Security Scan
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python dependency audit
+        run: |
+          pip install pip-audit
+          pip install -e ".[dev]"
+          pip freeze > /tmp/requirements.txt
+          pip-audit --requirement /tmp/requirements.txt --severity HIGH
+
+      - name: Node dependency audit
+        working-directory: ui/tray
+        run: npm audit --audit-level=high
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect secrets
+        uses: Yelp/detect-secrets@v1.4.0
+        with:
+          baseline: .secrets.baseline
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2

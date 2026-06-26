@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import type { Message } from "../../stores/chat";
 import { useChatStore } from "../../stores/chat";
 import MarkdownRenderer from "./MarkdownRenderer";
@@ -7,7 +8,7 @@ import SourcesPanel from "./SourcesPanel";
 import ToolHistoryPanel from "./ToolHistoryPanel";
 import MemoryPanel from "./MemoryPanel";
 
-function useTypewriter(fullText: string, isStreaming: boolean, speed: number = 5) {
+function useTypewriter(fullText: string, isStreaming: boolean, _speed: number = 5) {
   const [displayed, setDisplayed] = useState(0);
   const fullTextRef = useRef(fullText);
   fullTextRef.current = fullText;
@@ -33,6 +34,7 @@ interface MessageBubbleProps {
 }
 
 export default function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
+  const { t } = useTranslation();
   const { role, content, metadata, expandedPanel, id } = message;
   const typewriterLen = useTypewriter(content, !!isStreaming);
   const displayText = isStreaming ? content.slice(0, typewriterLen) : content;
@@ -61,8 +63,8 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
             <div className="text-xs text-on-surface-variant italic flex items-center gap-1.5 mb-1">
               <span className="material-symbols-outlined text-[14px] animate-spin">sync</span>
               {searchingWeb
-                ? "Searching the web…"
-                : `Searching ${searchingSources?.count ?? 0} file${(searchingSources?.count ?? 0) !== 1 ? "s" : ""}…`
+                ? t("searching.web")
+                : t("searching.files", { count: searchingSources?.count ?? 0 })
               }
             </div>
           )}

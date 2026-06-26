@@ -110,6 +110,10 @@ export default function ModelSelector() {
   const recommended = RECOMMENDED.filter((r) => !installedNames.has(r.name));
   const mlxModels = models.filter((m) => m.provider === "mlx");
 
+  const visibleLlamaModels = llamaCppModels;
+  const visibleMlxModels = mlxModels;
+  const visibleRecommended = recommended;
+
   return (
     <section className="space-y-4">
       {/* llama.cpp models */}
@@ -119,19 +123,19 @@ export default function ModelSelector() {
         </p>
         {llamaCppLoading ? (
           <p className="text-[11px] font-mono text-outline px-2 py-1">Loading…</p>
-        ) : llamaCppModels.length === 0 ? (
+        ) : visibleLlamaModels.length === 0 ? (
           <p className="text-[11px] font-mono text-outline px-2 py-1">
             No GGUF models found
           </p>
         ) : (
           <div className="space-y-1">
-            {llamaCppModels.map((m) => (
+            {visibleLlamaModels.map((m) => (
               <RadioRow
                 key={m.name}
                 name={m.name.replace(/\.GGUF$/i, "")}
                 sub={`llama.cpp · ${m.size_gb > 0 ? `${m.size_gb} GB` : "GGUF"}`}
                 badge="GGUF"
-                isActive={m.name === activeModel}
+                isActive={m.name.toLowerCase() === activeModel?.toLowerCase()}
                 onClick={() => handleSelect(m.name)}
               />
             ))}
@@ -153,19 +157,19 @@ export default function ModelSelector() {
       )}
 
       {/* MLX models */}
-      {mlxModels.length > 0 && (
+      {visibleMlxModels.length > 0 && (
         <div>
           <p className="text-[10px] font-mono uppercase tracking-widest text-outline mb-1 px-1">
             Apple Silicon · MLX
           </p>
           <div className="space-y-1">
-            {mlxModels.map((m) => (
+            {visibleMlxModels.map((m) => (
               <RadioRow
                 key={m.name}
                 name={m.name.split("/").pop() ?? m.name}
                 sub="MLX · Apple Silicon"
                 badge="MLX"
-                isActive={m.name === activeModel}
+                isActive={m.name.toLowerCase() === activeModel?.toLowerCase()}
                 onClick={() => handleSelect(m.name)}
               />
             ))}
@@ -174,13 +178,13 @@ export default function ModelSelector() {
       )}
 
       {/* Recommended models */}
-      {recommended.length > 0 && (
+      {visibleRecommended.length > 0 && (
         <div>
           <p className="text-[10px] font-mono uppercase tracking-widest text-outline mb-1 px-1">
             Recommended
           </p>
           <div className="space-y-1 opacity-60">
-            {recommended.map((r) => (
+            {visibleRecommended.map((r) => (
               <RadioRow
                 key={r.name}
                 name={r.name}

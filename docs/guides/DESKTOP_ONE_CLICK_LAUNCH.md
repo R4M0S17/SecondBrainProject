@@ -2,6 +2,8 @@
 
 **Goal:** Double-click **Cerebro** in the Dock or Applications and get the chat UI **without opening Terminal**.
 
+**Update (2026-06-25 — engine/backend split):** Opening the app now starts **only the backend** (`:7842`). The LLM engine (`:8080`) is controlled via **Start engine** / **Stop engine** in the header (or `POST /api/engine/start`). Settings, history, and documents work without loading the GGUF. See [`docs/plans/engine-backend-split.md`](../plans/engine-backend-split.md).
+
 **Chosen approach:** **Tauri desktop app + integrated service launcher** (Phase 1–3 below).
 
 ---
@@ -17,15 +19,20 @@
 
 ---
 
-## What “done” looks like
+## What “done” looks like (post-split)
 
 1. **Cerebro.app** in `/Applications` (or Dock) with your logo.
-2. First click (or every click if services stopped):
-   - Starts `llama-server` on `:8080` if not healthy (via existing `bin/start_engine.sh`).
-   - Starts Python API on `:7842` if not reachable (your `.venv` + `main.py`).
-   - Waits until `curl http://127.0.0.1:7842/api/health` succeeds (with timeout + error UI).
-3. Window opens; chat works like today.
-4. Optional: quitting the app can leave services running (faster next open) or stop them — **recommend leave running** on 8 GB Macs (model load is slow).
+2. First click:
+   - Starts Python API on `:7842` if not reachable (background, via `cerebro_desktop_backend.sh`).
+   - **Does not** load the GGUF until you click **Start engine**.
+3. Window opens; settings, documents, and fast paths (math, calendar read) work without the engine.
+4. **Start engine** → `POST /api/engine/start` → llama-server on `:8080` → full LLM chat.
+5. **Stop engine** → frees ~2 GB RAM; backend and settings stay available.
+6. Quitting the app leaves the backend running (faster next open on 8 GB Macs).
+
+**Legacy full stack:** `make desktop-launch-full` or `make dev-full` (backend + motor together).
+
+### Original “done” (pre-split, still available via `desktop-launch-full`)
 
 **Out of scope for Phase 1–3:** Embedding server on `:8082` — with the **lite-8gb** profile, embeddings are in-process; you only need **chat engine + backend**.
 
@@ -698,12 +705,23 @@ make desktop-install
 
 ---
 
-### Button behavior summary
+### Button behavior summary (post-split, 2026-06-25)
 
 | Button | What it does | How (desktop app) |
 |--------|----------------|-------------------|
-| **Turn on engine** | Starts `llama-server` `:8080` + Cerebro API `:7842` if down | `invoke("restart_cerebro_services")` → `cerebro_desktop_launcher.sh` |
-| **Turn off** | Stops processes on `:8080` and `:7842` | `invoke("stop_cerebro_services")` → `cerebro_desktop_stop.sh` |
+| **Start engine** | Starts `llama-server` `:8080` only | `POST /api/engine/start` (fallback: `start_cerebro_engine`) |
+| **Stop engine** | Stops `:8080` and `:8082`; backend stays | `POST /api/engine/stop` |
+
+Backend auto-starts on app open via `ensure_backend_on_startup` in Tauri `setup`.
+
+**Legacy (full stack):**
+
+| Button / command | What it does |
+|------------------|--------------|
+| `restart_cerebro_services` | Engine + backend (`desktop-launch-full`) |
+| `stop_cerebro_services` | Stops engine + backend |
+
+### Button behavior summary (legacy doc below)
 
 After **Turn off**, the window stays open but chat will fail until **Turn on** (or Dock relaunch). Status bar should show engine **down** once `GET http://localhost:7842/api/status` fails or returns `engine_ok: false`.
 

@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 interface TypingIndicatorProps {
   model?: string;
 }
 
 export default function TypingIndicator({ model = "local" }: TypingIndicatorProps) {
+  const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -16,7 +18,7 @@ export default function TypingIndicator({ model = "local" }: TypingIndicatorProp
   const seconds = elapsed % 60;
 
   return (
-    <div className="flex flex-col gap-3" aria-live="polite" aria-label="Assistant is thinking">
+    <div className="flex flex-col gap-3" aria-live="polite" aria-label={t("chat.thinking", { model })}>
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-[2px]">
           <div className="w-[4px] h-[4px] bg-primary-container rounded-full typing-dot" />
@@ -25,7 +27,7 @@ export default function TypingIndicator({ model = "local" }: TypingIndicatorProp
         </div>
         <div className="flex items-center gap-2">
           <span className="italic text-on-surface-variant text-sm">
-            Thinking with {model}
+            {t("chat.thinking", { model })}
           </span>
           <span className="text-outline text-xs tabular-nums">
             {minutes > 0 ? `${minutes}m ` : ""}{seconds}s

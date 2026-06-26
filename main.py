@@ -6,26 +6,47 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Load persisted secrets (API keys) from ~/.cerebro/state/secrets.json
-try:
-    import json as _json
-    from pathlib import Path as _Path
-
-    _secrets_file = (
-        _Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser() / "secrets.json"
-    )
-    if _secrets_file.exists():
-        for _k, _v in _json.loads(_secrets_file.read_text()).items():
-            os.environ.setdefault(_k, _v)
-except Exception:
-    pass
-
 import os
 import re
 import signal
 import subprocess
 import sys
 from pathlib import Path
+
+# Load persisted secrets (API keys) from ~/.cerebro/state/secrets.json
+try:
+    import json as _json
+
+    _state_dir = Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser()
+    _secrets_path = _state_dir / "secrets.json"
+    if _secrets_path.exists():
+        for _k, _v in _json.loads(_secrets_path.read_text()).items():
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
+
+# Auto-generate CEREBRO_API_KEY on first run
+try:
+    import json as _json
+    import secrets as _secrets
+
+    _state_dir = Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser()
+    _secrets_path = _state_dir / "secrets.json"
+    if "CEREBRO_API_KEY" not in os.environ:
+        _existing = {}
+        if _secrets_path.exists():
+            _existing = _json.loads(_secrets_path.read_text())
+        if "CEREBRO_API_KEY" not in _existing:
+            _new_key = f"ck_{_secrets.token_urlsafe(32)}"
+            _existing["CEREBRO_API_KEY"] = _new_key
+            _state_dir.mkdir(parents=True, exist_ok=True)
+            _secrets_path.write_text(_json.dumps(_existing, indent=2))
+            _secrets_path.chmod(0o600)
+            os.environ["CEREBRO_API_KEY"] = _new_key
+        else:
+            os.environ.setdefault("CEREBRO_API_KEY", _existing["CEREBRO_API_KEY"])
+except Exception:
+    pass
 
 import httpx
 import numpy as np
@@ -100,6 +121,57 @@ def _prompt_lite_profile() -> None:
 
 _prompt_lite_profile()
 
+
+def _prompt_language() -> None:
+    if "CEREBRO_LOCALE" in os.environ or not sys.stdin.isatty():
+        return
+    print()
+    answer = input("🌐 Language / Idioma [E]nglish / [S]panish [E]: ").strip().lower()
+    if answer in ("s", "spanish", "español", "es"):
+        os.environ["CEREBRO_LOCALE"] = "es"
+        print("✅ Idioma: Español")
+    else:
+        os.environ["CEREBRO_LOCALE"] = "en"
+        print("✅ Language: English")
+    print()
+
+
+_prompt_language()
+
+# Sync locale + profile from persisted config.json if env not already set
+_PROFILE_FROM_CONFIG = "normal"
+try:
+    _cfg_path = Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser() / "config.json"
+    if _cfg_path.exists():
+        import json as _json
+
+        _cfg = _json.loads(_cfg_path.read_text())
+        if "locale" in _cfg and "CEREBRO_LOCALE" not in os.environ:
+            os.environ["CEREBRO_LOCALE"] = str(_cfg["locale"])
+        from core.feature_flags import (
+            MAIN_CHAT_MODEL,
+            LOW_POWER_CHAT_MODEL,
+            apply_profile_guard,
+            config_needs_low_power_migration,
+            low_power_mode_enabled,
+        )
+
+        if config_needs_low_power_migration(_cfg):
+            _cfg = apply_profile_guard(_cfg)
+            _cfg_path.write_text(_json.dumps(_cfg, indent=2))
+            _PROFILE_FROM_CONFIG = _cfg.get("profile") or "normal"
+            _lp_model = _cfg.get("model") or LOW_POWER_CHAT_MODEL
+            os.environ["CEREBRO_LLAMACPP_MODEL"] = _lp_model
+        elif "CEREBRO_LLAMACPP_MODEL" not in os.environ:
+            persisted = _cfg.get("model")
+            if isinstance(persisted, str) and persisted:
+                os.environ["CEREBRO_LLAMACPP_MODEL"] = persisted
+            else:
+                os.environ["CEREBRO_LLAMACPP_MODEL"] = MAIN_CHAT_MODEL
+except Exception:
+    pass
+
+CEREBRO_HOST = os.getenv("CEREBRO_HOST", "127.0.0.1")
 DB_PATH = os.path.expanduser(os.getenv("CEREBRO_DB", "~/.cerebro/db"))
 STATE_DIR = os.path.expanduser(os.getenv("CEREBRO_STATE", "~/.cerebro/state"))
 PORT = int(os.getenv("CEREBRO_PORT", "7842"))
@@ -178,32 +250,109 @@ def _setup_llamacpp(
     return embed, llamacpp_chat
 
 
+def _ensure_engine_running(engine_script: Path, profile: str = "normal") -> None:
+    """Start llama-server on :8080 if not already healthy."""
+    from core.feature_flags import auto_start_engine_enabled
+
+    if not auto_start_engine_enabled():
+        return
+
+    import subprocess as _sp
+    import time as _time
+
+    # Retry a few times in case the launcher started the engine but it hasn't bound the port yet
+    for attempt in range(3):
+        try:
+            pid = _sp.run(
+                ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if pid.returncode == 0 and pid.stdout.strip():
+                return  # Already running
+        except Exception:
+            pass
+        if attempt < 2:
+            _time.sleep(1)
+
+    if engine_script.is_file():
+        logger = __import__("loguru").logger
+        logger.info("Engine not running — starting llama-server (profile: {})…", profile)
+        engine_profile = "chat-lowpower" if profile == "low-power" else "chat"
+        _sp.Popen(
+            ["bash", str(engine_script), engine_profile],
+            cwd=Path(__file__).parent,
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            start_new_session=True,
+        )
+        _time.sleep(1)
+
+
 def _ensure_chat_args() -> None:
     """Ensure config/chat.args points to LLAMACPP_MODEL with mmproj for vision.
 
     If the file was stale (e.g. from a previous hot-swap), rewrite it and
     restart the engine so the new args take effect.
     """
-    args_path = Path(__file__).parent / LLAMACPP_ARGS_FILE
+    # Determine args file based on profile
+    profile = _PROFILE_FROM_CONFIG
+    low_power = os.getenv("CEREBRO_LOW_POWER_ENABLED", "").lower() in ("1", "true", "yes")
+    if low_power:
+        profile = "low-power"
+    args_file = "config/chat-lowpower.args" if profile == "low-power" else "config/chat.args"
+    args_path = Path(__file__).parent / args_file
     if not args_path.is_file():
         return
     content = args_path.read_text()
+    # Strip comments — llama-server $(cat) would choke on them
+    clean = re.sub(r"#.*$", "", content, flags=re.MULTILINE)
+    clean = re.sub(r"\n\s*\n", "\n", clean).strip()
+    # Ensure each flag is on its own line (fixes concatenated flags like
+    # --log-disable--mmproj from previous _update_args_mmproj bugs)
+    clean = re.sub(r"(?<=[^\n])--", r"\n--", clean).strip()
     model_line = f"--model bin/models/{LLAMACPP_MODEL}"
     new_content = re.sub(
         r"^--model\s+.*$",
         model_line,
-        content,
+        clean,
         flags=re.MULTILINE,
     )
     if _VISION_MODEL_RE.search(LLAMACPP_MODEL):
         if not re.search(r"^--mmproj\s+", new_content, re.MULTILINE):
-            new_content += "--mmproj bin/models/mmproj-F16.gguf\n"
+            new_content += "\n--mmproj bin/models/mmproj-F16.gguf\n"
     else:
         new_content = re.sub(r"^--mmproj\s+.*$\n?", "", new_content, flags=re.MULTILINE)
-    if new_content == content:
+
+    _engine_script = Path(__file__).parent / "bin" / "start_engine.sh"
+
+    # Ensure --mmproj flag is present if the model is vision-capable
+    def _ensure_mmproj(path: Path) -> None:
+        if not _VISION_MODEL_RE.search(LLAMACPP_MODEL):
+            return
+        _content = path.read_text()
+        if "--mmproj" not in _content:
+            _mmproj_dir = Path(__file__).parent / "bin" / "models"
+            _mmproj_files = sorted(_mmproj_dir.glob("mmproj*.gguf"))
+            if _mmproj_files:
+                with open(path, "a") as _f:
+                    _f.write(f"--mmproj bin/models/{_mmproj_files[0].name}\n")
+
+    _model_path = Path(__file__).parent / "bin" / "models" / LLAMACPP_MODEL
+    if not _model_path.is_file():
+        logger = __import__("loguru").logger
+        logger.warning(
+            "Model file not found: {} — skipping chat.args rewrite to avoid engine failure",
+            _model_path,
+        )
+        _ensure_engine_running(_engine_script, profile)
         return
 
-    args_path.write_text(new_content)
+    if clean == new_content:
+        _ensure_mmproj(args_path)
+        _ensure_engine_running(_engine_script, profile)
+        return
+
+    args_path.write_text(new_content + "\n")
+    _ensure_mmproj(args_path)
     logger = __import__("loguru").logger
     logger.info("chat.args was stale — rewrote to match {}. Restarting engine.", LLAMACPP_MODEL)
     try:
@@ -222,16 +371,18 @@ def _ensure_chat_args() -> None:
                 except OSError:
                     pass
             _time.sleep(2)
-        engine_script = Path(__file__).parent / "bin" / "start_engine.sh"
-        if engine_script.is_file():
+        from core.feature_flags import auto_start_engine_enabled
+
+        if auto_start_engine_enabled() and _engine_script.is_file():
+            engine_profile = "chat-lowpower" if profile == "low-power" else "chat"
             subprocess.Popen(
-                ["bash", str(engine_script), "chat"],
+                ["bash", str(_engine_script), engine_profile],
                 cwd=Path(__file__).parent,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            logger.info("Engine restarted with {}. Waiting for health…", LLAMACPP_MODEL)
+            logger.info("Engine restarted with {} (profile: {}). Waiting for health…", LLAMACPP_MODEL, profile)
             _time.sleep(1)
     except Exception as exc:
         logger.warning("Failed to restart engine after chat.args update: {}", exc)
@@ -249,18 +400,22 @@ def _build_app_state() -> None:
     from core.inference.engine_suspender import EngineSuspender
 
     engine_suspender = EngineSuspender(timeout_s=180)
-    try:
-        _pid = subprocess.run(
-            ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if _pid.returncode == 0 and _pid.stdout.strip():
-            engine_suspender.bind_pid(int(_pid.stdout.strip()))
-            engine_suspender.start_background()
-    except Exception:
-        logger.warning("EngineSuspender: could not find engine PID — suspender disabled")
+    if INFERENCE_BACKEND == "llamacpp":
+        try:
+            _pid = subprocess.run(
+                ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if _pid.returncode == 0 and _pid.stdout.strip():
+                first_pid = int(_pid.stdout.strip().split("\n")[0])
+                engine_suspender.bind_pid(first_pid)
+                engine_suspender.start_background()
+            else:
+                logger.info("EngineSuspender: no llama-server on :8080 — suspender idle")
+        except Exception as exc:
+            logger.warning("EngineSuspender: bind failed: {}", exc)
     app_state.engine_suspender = engine_suspender
 
     # ── AdaptiveContext: shrink ctx-size under RAM pressure ───────────
@@ -536,6 +691,17 @@ def _build_app_state() -> None:
     register_math_tools(cal_registry)
     register_web_tools(cal_registry)
 
+    from core.tools.security_audit import audit_confirmation_gates
+
+    audit_issues = audit_confirmation_gates(cal_registry)
+    if audit_issues:
+        logger.warning("Security audit — state-changing tools without confirmation:")
+        for issue in audit_issues:
+            logger.warning(f"  • {issue}")
+        if os.environ.get("CEREBRO_API_KEY") and CEREBRO_HOST in ("0.0.0.0", "::"):
+            logger.critical("Security audit failed — refusing to start in production mode")
+            raise SystemExit(1)
+
     if INFERENCE_BACKEND == "llamacpp":
         from core.agents.runtime import _SYSTEM_TEMPLATE
         from core.inference.prompt_cache import sync_prompt_cache
@@ -566,6 +732,7 @@ def _build_app_state() -> None:
         cerebro_files_path=CEREBRO_FILES_PATH,
         enabled=PROACTIVE_CONTEXT and not is_sandbox(),
         macos_permissions=app_state.macos_permissions,
+        language=os.getenv("CEREBRO_LOCALE", "en"),
     )
 
     time_travel_db = os.path.join(DB_PATH, "time_travel.sqlite")
@@ -607,6 +774,8 @@ def _build_app_state() -> None:
 
     app_state.runtime = runtime
     app_state.vector_store = vector_store
+    app_state.state_store = state_store
+    app_state.short_term = short_term
     app_state.provider_registry = registry
     app_state.router = router
     app_state.enricher = enricher
@@ -614,8 +783,20 @@ def _build_app_state() -> None:
     app_state.embedding_provider = embed
     app_state.inference_engine = llm_engine
 
+    from core.security.secrets import SecretsManager
+    _state_dir_path = Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser()
+    app_state.secrets_mgr = SecretsManager(
+        _state_dir_path,
+        env_api_key=os.environ.get("CEREBRO_API_KEY"),
+    )
+
     if INFERENCE_BACKEND == "llamacpp":
+        from core.feature_flags import auto_start_engine_enabled
+        from core.inference.engine_desired import set_engine_desired
         from core.inference.health_monitor import LlamaServerHealthMonitor
+
+        if auto_start_engine_enabled():
+            set_engine_desired("on")
 
         app_state.llama_health_monitor = LlamaServerHealthMonitor(
             base_url=LLAMACPP_URL,
@@ -625,5 +806,22 @@ def _build_app_state() -> None:
 
 
 if __name__ == "__main__":
+    from loguru import logger as _logger
+
+    if CEREBRO_HOST in ("0.0.0.0", "::"):
+        _logger.warning(
+            "⚠  Binding to %s — Cerebro will be reachable from other machines on your network. "
+            "Set CEREBRO_API_KEY to require authentication.",
+            CEREBRO_HOST,
+        )
+        _api_key = os.environ.get("CEREBRO_API_KEY", "")
+        if not _api_key:
+            _logger.critical(
+                "CEREBRO_API_KEY is required when binding to %s. "
+                "Set CEREBRO_HOST=127.0.0.1 or provide CEREBRO_API_KEY.",
+                CEREBRO_HOST,
+            )
+            raise SystemExit(1)
+
     _build_app_state()
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host=CEREBRO_HOST, port=PORT)

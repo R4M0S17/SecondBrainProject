@@ -17,8 +17,13 @@
     ],
     "resources": [
       "icons/tray-icon.png",
+      "resources/cerebro_desktop_common.sh",
+      "resources/cerebro_desktop_backend.sh",
+      "resources/cerebro_desktop_engine.sh",
       "resources/cerebro_desktop_launcher.sh",
-      "resources/cerebro_desktop_stop.sh"
+      "resources/cerebro_desktop_stop.sh",
+      "resources/cerebro_desktop_stop_backend.sh",
+      "resources/cerebro_desktop_stop_engine.sh"
     ]
   },
   "app": {
@@ -42,8 +47,7 @@
       }
     ],
     "security": {
-      "csp": null,
-      "capabilities": ["main-capability", "dev-capability"]
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:7842; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; form-action 'none'; base-uri 'self'"
     }
   },
   "identifier": "com.cerebro.app",

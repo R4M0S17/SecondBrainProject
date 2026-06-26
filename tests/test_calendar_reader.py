@@ -81,9 +81,9 @@ def test_birthday_jxa_template_has_calendar_discovery_and_apostrophe_pattern():
 
 
 def test_applescript_upcoming_template_limits_upper_bound():
-    t = calendar_reader_mod._AS_FETCH_UPCOMING
-    assert "cutoffDate" in t
-    assert "start date ≤ cutoffDate" in t
+    t = calendar_reader_mod._JXA_FETCH_UPCOMING
+    assert "cutoff" in t
+    assert "_lessThanEquals: cutoff" in t
     assert "{hours_ahead}" in t
 
 
@@ -134,20 +134,11 @@ def test_contacts_birthdays_json_to_events_respects_window():
 
 @pytest.mark.asyncio
 async def test_apple_backend_async_timeout_kills_process():
-    proc = MagicMock()
-    proc.communicate = AsyncMock(side_effect=TimeoutError)
-    proc.kill = MagicMock()
-    proc.wait = AsyncMock(return_value=0)
-
-    async def fake_exec(*_a, **_k):
-        return proc
-
     with patch("integrations.calendar_reader.platform.system", return_value="Darwin"):
         with patch(
-            "integrations.calendar_reader.asyncio.create_subprocess_exec",
-            side_effect=fake_exec,
+            "integrations.calendar_reader.asyncio.to_thread",
+            side_effect=TimeoutError,
         ):
             b = AppleCalendarBackend()
             r = await b.get_upcoming_events_async(24, communicate_timeout=0.1)
-    proc.kill.assert_called_once()
     assert r.status == "timeout"

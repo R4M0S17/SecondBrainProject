@@ -6,22 +6,46 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "shell:default",
-    "shell:allow-open",
-{
-  "identifier": "shell:allow-execute",
-  "allow": [
-    { "name": "bash", "cmd": "bash", "args": true },
-    { "name": "zsh", "cmd": "zsh", "args": true }
-  ]
-},
-{
-  "identifier": "shell:allow-spawn",
-  "allow": [
-    { "name": "bash", "cmd": "bash", "args": true },
-    { "name": "zsh", "cmd": "zsh", "args": true }
-  ]
-},
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "http://localhost:7842/**" }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "restart-engine",
+          "cmd": "/bin/bash",
+          "args": [
+            { "validator": "\\S+" }
+          ]
+        },
+        {
+          "name": "stop-engine",
+          "cmd": "/bin/bash",
+          "args": [
+            { "validator": "\\S+" }
+          ]
+        },
+        {
+          "name": "open-in-browser",
+          "cmd": "/usr/bin/open",
+          "args": [
+            { "validator": "https?://\\S+" }
+          ]
+        },
+        {
+          "name": "zsh",
+          "cmd": "/bin/zsh",
+          "args": [
+            { "validator": "-c" },
+            { "validator": ".*" }
+          ]
+        }
+      ]
+    },
     "dialog:default",
     "dialog:allow-open"
   ]

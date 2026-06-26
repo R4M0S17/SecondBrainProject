@@ -63,8 +63,8 @@ def test_read_file_nonexistent_returns_error(tmp_path):
 
 def test_write_file_creates_content(tmp_path):
     target = tmp_path / "out.txt"
-    ok = write_file(str(target), "data", [str(tmp_path)])
-    assert ok is True
+    result = write_file(str(target), "data", [str(tmp_path)])
+    assert "Archivo escrito" in result or result is True
     assert target.read_text() == "data"
 
 

@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 interface FolderListProps {
   folders: string[];
   onAdd: () => void;
@@ -11,6 +13,7 @@ export default function FolderList({
   onRemove,
   minFoldersMessage,
 }: FolderListProps) {
+  const { t } = useTranslation();
   return (
     <div className="w-full space-y-1">
       {folders.map((folder) => (
@@ -27,7 +30,7 @@ export default function FolderList({
           <button
             onClick={() => onRemove(folder)}
             className="text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity ml-2 shrink-0"
-            aria-label={`Remove ${folder}`}
+            aria-label={t("documents.remove_folder", { folder })}
           >
             <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
               <path d="M18 6L6 18M6 6l12 12" />
@@ -43,7 +46,7 @@ export default function FolderList({
         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
           <path d="M12 5v14M5 12h14" />
         </svg>
-        Add Folder
+        {t("documents.add_folder")}
       </button>
 
       {folders.length === 0 && minFoldersMessage && (

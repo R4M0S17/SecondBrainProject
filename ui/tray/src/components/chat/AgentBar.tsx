@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useChatStore } from "../../stores/chat";
 import { useSettingsStore } from "../../stores/settings";
 import { useSystemStore } from "../../stores/system";
@@ -29,6 +30,7 @@ const AGENT_BG: Record<AgentId, string> = {
 };
 
 export default function AgentBar() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const { activeAgent, setActiveAgent } = useChatStore();
   const status = useSystemStore((s) => s.status);
@@ -113,11 +115,11 @@ export default function AgentBar() {
       <div className="flex items-center gap-2">
         <button
           onClick={() => clearMessages()}
-          title="Clear conversation"
+          title={t("chat.clear")}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-on-surface-variant/50 hover:text-error hover:bg-error/10 transition-colors"
         >
           <span className="material-symbols-outlined text-[16px]">delete</span>
-          Clear
+          {t("chat.clear")}
         </button>
         <div className="text-xs text-on-surface-variant/60 font-label-mono truncate max-w-[140px]">
           {model}

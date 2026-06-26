@@ -74,18 +74,32 @@ def make_stub_chat_complete(
     """Build mock chat with .complete returning JSON strings (or async callable)."""
     mock_chat = MagicMock()
     if isinstance(side_effect, list):
-        mock_chat.complete = AsyncMock(side_effect=side_effect)
+        responses = list(side_effect)
+
+        async def _complete(_messages: Any, **_kwargs: Any) -> str:
+            if not responses:
+                return ""
+            return responses.pop(0)
+
+        mock_chat.complete = AsyncMock(side_effect=_complete)
+
+        async def _stream(_messages: Any):
+            if False:
+                yield ""
+
+        mock_chat.stream = _stream
     else:
         mock_chat.complete = AsyncMock(side_effect=side_effect)
+
+        async def _empty_stream(_messages: Any, **_kwargs: Any):
+            if False:
+                yield ""
+
+        mock_chat.stream = _empty_stream
+
     mock_chat.is_available = MagicMock(return_value=True)
     mock_chat.model_id = MagicMock(return_value="stub-model.gguf")
     mock_chat.context_window = MagicMock(return_value=4096)
-
-    async def _empty_stream(_messages: Any) -> AsyncIterator[str]:
-        if False:
-            yield ""
-
-    mock_chat.stream = _empty_stream
     return mock_chat
 
 
@@ -148,3 +162,4 @@ def install_runtime_for_query_e2e(
     app_state.provider_registry = registry
     app_state.router = router
     app_state.model_manager = None
+    app_state.enricher = None

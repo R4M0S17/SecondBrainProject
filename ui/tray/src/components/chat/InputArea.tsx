@@ -1,11 +1,13 @@
-import { useRef, useState, KeyboardEvent, ChangeEvent } from "react";
+import { useRef, useState, useEffect, KeyboardEvent, ChangeEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { useChatStore } from "../../stores/chat";
 import { useSettingsStore } from "../../stores/settings";
-import { useServicesStore } from "../../stores/services";
+import { useServicesStore, needsLocalEngine } from "../../stores/services";
 import { useSystemStore, selectLlamaServerState, selectIsClaudeMode } from "../../stores/system";
+import { useTabStore } from "../../stores/tab";
 import { ApiError } from "../../api/errors";
 import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles, startIndex, getConfig } from "../../api/client";
-import CommandAutocomplete, { COMMANDS } from "./CommandAutocomplete";
+import CommandAutocomplete, { buildCommands } from "./CommandAutocomplete";
 import type { FileAttachment } from "../../api/types";
 import { AGENTS } from "../../api/types";
 import { isTextLikeFile, isImageLikeFile, buildLocalAttachment } from "../../utils/fileProcessing";
@@ -16,12 +18,14 @@ interface UploadedFile {
 }
 
 export default function InputArea() {
+  const { t } = useTranslation();
   const [text, setText] = useState("");
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [selectedCmdIndex, setSelectedCmdIndex] = useState(-1);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeTab = useTabStore((s) => s.activeTab);
 
   const {
     addMessage,
@@ -40,10 +44,12 @@ export default function InputArea() {
     clearMessages,
   } = useChatStore();
   const { refresh, setSwapEvent, status } = useSystemStore();
-  const servicesOff = useServicesStore((s) => s.servicesOff);
+  const backendReady = useServicesStore((s) => s.backendReady);
   const llamaServer = selectLlamaServerState(useSystemStore.getState());
   const isClaude = selectIsClaudeMode(status);
-  const inputDisabled = isLoading || servicesOff;
+  const engineOk = status?.engine_ok ?? false;
+  const needsEngine = needsLocalEngine(status?.provider);
+  const inputDisabled = isLoading || !backendReady;
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
@@ -51,7 +57,7 @@ export default function InputArea() {
     const show = val.startsWith("/");
     setShowAutocomplete(show);
     if (show) {
-      const matches = COMMANDS.filter((c) => c.name.startsWith(val.toLowerCase()));
+      const matches = buildCommands(t).filter((c) => c.name.startsWith(val.toLowerCase()));
       setSelectedCmdIndex(matches.length > 0 ? 0 : -1);
     } else {
       setSelectedCmdIndex(-1);
@@ -72,7 +78,7 @@ export default function InputArea() {
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     const matches = showAutocomplete
-      ? COMMANDS.filter((c) => c.name.startsWith(text.toLowerCase()))
+      ? buildCommands(t).filter((c) => c.name.startsWith(text.toLowerCase()))
       : [];
 
     if (showAutocomplete && matches.length > 0) {
@@ -111,23 +117,20 @@ export default function InputArea() {
     }
   };
 
-  const send = async () => {
-    const query = text.trim();
+  const sendQuery = async (query: string) => {
     if (!query || isLoading) return;
 
-    if (servicesOff) {
-      return;
-    }
+    if (!backendReady) return;
 
-    if (!isClaude && llamaServer === "restarting") {
+    if (!isClaude && needsEngine && !engineOk && llamaServer === "restarting") {
       addMessage({
         role: "assistant",
-        content: "El motor de inferencia se está reiniciando. Espera un momento e inténtalo de nuevo.",
+        content: t("input.engine_restarting"),
       });
       return;
     }
 
-    const matchedCmd = COMMANDS.find((c) => c.name === query);
+    const matchedCmd = buildCommands(t).find((c) => c.name === query);
     if (matchedCmd) {
       handleCommand(matchedCmd);
       return;
@@ -140,7 +143,7 @@ export default function InputArea() {
     let messageContent = query;
     if (uploadedFiles.length > 0) {
       const fileNames = uploadedFiles.map((uf) => uf.file.name).join(", ");
-      messageContent = `${query}\n\n[Attached files: ${fileNames}]`;
+      messageContent = `${query}\n\n${t("input.attached_files", { names: fileNames })}`;
     }
 
     addMessage({ role: "user", content: messageContent });
@@ -210,7 +213,7 @@ export default function InputArea() {
               updateMessage(assistantId, { content: result.answer, metadata: result.metadata });
             } catch (e: unknown) {
               updateMessage(assistantId, {
-                content: `Error: ${(e as Error).message ?? "Confirmation failed"}`,
+                content: t("error.generic", { message: (e as Error).message ?? "Confirmation failed" }),
               });
             } finally {
               setLoading(false);
@@ -286,7 +289,7 @@ export default function InputArea() {
               updateMessage(assistantId, { content: result.answer, metadata: result.metadata });
             } catch (e: unknown) {
               updateMessage(assistantId, {
-                content: `Error: ${(e as Error).message ?? "Confirmation failed"}`,
+                content: t("error.generic", { message: (e as Error).message ?? "Confirmation failed" }),
               });
             } finally {
               setLoading(false);
@@ -314,8 +317,8 @@ export default function InputArea() {
           msg === "Network request failed";
         updateMessage(assistantId, {
           content: isNetworkDown
-            ? "Cannot reach the backend. Make sure `make run` is running on port 7842."
-            : `Error: ${msg}`,
+            ? t("error.backend_unreachable")
+            : t("error.generic", { message: msg }),
         });
       }
     } finally {
@@ -327,6 +330,11 @@ export default function InputArea() {
     }
   };
 
+  const send = async () => {
+    const query = text.trim();
+    void sendQuery(query);
+  };
+
   const handleCommand = async (cmd: { name: string; description: string }) => {
     addMessage({ role: "user", content: cmd.name });
     setText("");
@@ -336,47 +344,47 @@ export default function InputArea() {
 
     switch (cmd.name) {
       case "/help": {
-        const cmdList = COMMANDS.map(
+        const cmdList = buildCommands(t).map(
           (c) => `\`${c.name}\` — ${c.description}`,
         ).join("\n");
         addMessage({
           role: "assistant",
-          content: `Available commands:\n\n${cmdList}`,
+          content: t("commands.help_response", { list: cmdList }),
         });
         break;
       }
       case "/clear": {
         clearMessages();
-        addMessage({ role: "assistant", content: "Conversation cleared." });
+        addMessage({ role: "assistant", content: t("commands.clear_response") });
         break;
       }
       case "/model": {
         const model = useSettingsStore.getState().activeModel || "local";
         addMessage({
           role: "assistant",
-          content: `Currently running model: **${model}**`,
+          content: t("commands.model_response", { model }),
         });
         break;
       }
       case "/status": {
         const s = useSystemStore.getState().status;
         if (!s) {
-          addMessage({ role: "assistant", content: "System status not available." });
+          addMessage({ role: "assistant", content: t("commands.status_unavailable") });
         } else {
           addMessage({
             role: "assistant",
-            content: [
-              `**Engine**: ${s.engine_ok ? "✅ Active" : "❌ Offline"}`,
-              `**Model**: ${s.model}`,
-              `**Provider**: ${s.provider}`,
-              `**Latency**: ${s.p95_latency_ms}ms (p95)`,
-              `**RAM**: ${s.ram_used_gb.toFixed(1)}/${s.ram_total_gb.toFixed(1)} GB (${s.ram_pressure})`,
-              `**CPU**: ${s.cpu_percent}%`,
-              `**Indexed files**: ${s.indexed_files}`,
-              `**Queries**: ${s.queries_total}`,
-              `**Memory hits**: ${s.memory_hits}`,
-              `**Tool calls**: ${s.tool_call_count}`,
-            ].join("\n"),
+            content: t("commands.status_response", {
+              engine: s.engine_ok ? t("commands.engine_active") : t("commands.engine_offline"),
+              model: s.model,
+              provider: s.provider,
+              latency: s.p95_latency_ms,
+              ram: `${s.ram_used_gb.toFixed(1)}/${s.ram_total_gb.toFixed(1)} GB (${s.ram_pressure})`,
+              cpu: s.cpu_percent,
+              files: s.indexed_files,
+              queries: s.queries_total,
+              hits: s.memory_hits,
+              calls: s.tool_call_count,
+            }),
           });
         }
         break;
@@ -385,23 +393,23 @@ export default function InputArea() {
         const agentList = AGENTS.map((a) => `\`${a.id}\` — ${a.label}`).join("\n");
         addMessage({
           role: "assistant",
-          content: `Available agents:\n\n${agentList}`,
+          content: t("commands.agents_response", { list: agentList }),
         });
         break;
       }
       case "/index": {
         const indexMsg = addMessage({
           role: "assistant",
-          content: "Starting re-index of watched folders...",
+          content: t("commands.index_started"),
         });
         try {
           const result = await startIndex([]);
           updateMessage(indexMsg, {
-            content: `Indexing started with job ID: \`${result.job_id}\``,
+            content: t("commands.index_job_id", { job_id: result.job_id }),
           });
         } catch (e: unknown) {
           updateMessage(indexMsg, {
-            content: `Index failed: ${(e as Error).message}`,
+            content: t("commands.index_failed", { message: (e as Error).message }),
           });
         }
         break;
@@ -411,8 +419,8 @@ export default function InputArea() {
         addMessage({
           role: "assistant",
           content: s
-            ? `Memory recall hits: **${s.memory_hits}**\nIndexed files: **${s.indexed_files}**`
-            : "System status not available.",
+            ? t("commands.memory_response", { hits: s.memory_hits, files: s.indexed_files })
+            : t("commands.status_unavailable"),
         });
         break;
       }
@@ -442,12 +450,12 @@ export default function InputArea() {
         a.download = `cerebro-export-${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        addMessage({ role: "assistant", content: "Conversation exported." });
+        addMessage({ role: "assistant", content: t("commands.export_response") });
         break;
       }
       case "/refresh": {
         void refresh();
-        addMessage({ role: "assistant", content: "System status refreshed." });
+        addMessage({ role: "assistant", content: t("commands.refresh_response") });
         break;
       }
       case "/settings": {
@@ -458,12 +466,12 @@ export default function InputArea() {
           );
           addMessage({
             role: "assistant",
-            content: `Current configuration:\n\n${lines.join("\n")}`,
+            content: t("commands.settings_response", { lines: lines.join("\n") }),
           });
         } catch {
           addMessage({
             role: "assistant",
-            content: "Could not fetch configuration.",
+            content: t("commands.settings_unavailable"),
           });
         }
         break;
@@ -513,7 +521,16 @@ export default function InputArea() {
     setUploadedFiles([]);
   };
 
-  const engineOk = status?.engine_ok ?? false;
+  useEffect(() => {
+    if (activeTab !== "chat") return;
+    const action = useChatStore.getState().consumePendingChatAction();
+    if (!action) return;
+    setText(action.query);
+    if (action.autoSend) {
+      requestAnimationFrame(() => sendQuery(action.query));
+    }
+  }, [activeTab]);
+
   const latency = status?.p95_latency_ms ?? 0;
 
   return (
@@ -528,8 +545,8 @@ export default function InputArea() {
         <button
           onClick={() => fileInputRef.current?.click()}
           className="p-2 text-on-surface-variant hover:text-primary-container transition-colors"
-          aria-label="Add files"
-          title="Upload files (images, PDFs, documents)"
+          aria-label={t("input.add_files")}
+          title={t("input.file_upload")}
         >
           <span className="material-symbols-outlined text-[20px]">add</span>
         </button>
@@ -542,18 +559,20 @@ export default function InputArea() {
           accept="image/*,.pdf,.txt,.csv,.doc,.docx"
           onChange={handleFileSelect}
           className="hidden"
-          aria-label="File upload"
+          aria-label={t("input.file_upload")}
         />
 
         <textarea
           ref={textareaRef}
           rows={1}
-          aria-label="Chat input"
+          aria-label={t("chat.placeholder")}
           className="flex-1 bg-transparent border-none outline-none resize-none text-on-surface text-sm focus:ring-0 focus:outline-none placeholder:text-outline/50 px-2 custom-scrollbar"
           placeholder={
-            servicesOff
-              ? "Engine is off — use Turn on to chat again"
-              : "Ask Cerebro or issue a command..."
+            !backendReady
+              ? t("chat.backend_off_placeholder")
+              : needsEngine && !engineOk
+                ? t("chat.engine_off_placeholder")
+                : t("chat.placeholder")
           }
           value={text}
           onChange={handleChange}
@@ -563,7 +582,7 @@ export default function InputArea() {
 
         <div className="flex items-center gap-2 pr-2 text-on-surface-variant">
           {/* Mic button */}
-          <button className="p-2 hover:text-primary transition-colors" aria-label="Voice input" title="Voice input">
+          <button className="p-2 hover:text-primary transition-colors" aria-label={t("input.voice_input")} title={t("input.voice_input")}>
             <span className="material-symbols-outlined text-[20px]">mic</span>
           </button>
 
@@ -571,17 +590,17 @@ export default function InputArea() {
             <button
               onClick={cancelRequest}
               className="p-1.5 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors"
-              aria-label="Cancel request"
-              title="Cancel (Esc)"
+              aria-label={t("chat.cancel")}
+              title={t("chat.cancel")}
             >
               <span className="material-symbols-outlined text-[18px]">close</span>
             </button>
           ) : (
             <button
               onClick={() => void send()}
-              disabled={!text.trim() || isLoading || servicesOff}
+              disabled={!text.trim() || isLoading || !backendReady}
               className="p-1.5 bg-primary-container/10 text-primary-container rounded-lg border border-primary-container/20 hover:bg-primary-container/20 transition-colors disabled:opacity-30"
-              aria-label="Send message"
+              aria-label={t("chat.send")}
             >
               <span className="material-symbols-outlined text-[18px]">send</span>
             </button>
@@ -591,7 +610,10 @@ export default function InputArea() {
 
       {/* Status footer */}
       <div className="text-center mt-3 text-xs text-outline/50 font-label-mono">
-        Engine Status: {engineOk ? "Active" : "Offline"} • Latency {latency}ms
+        {t("input.engine_status", {
+          status: engineOk ? t("commands.engine_active") : t("commands.engine_offline"),
+          latency,
+        })}
       </div>
     </div>
   );

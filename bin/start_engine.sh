@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e
+set -o nounset -o errexit -o pipefail
 
-PROFILE=${1:-chat}
+PROFILE="${1:-chat}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CEREBRO_DIR="$(dirname "$SCRIPT_DIR")"
 ARGS_FILE="${CEREBRO_DIR}/config/${PROFILE}.args"
@@ -83,9 +83,18 @@ if [ -z "${LLAMA_SERVER}" ]; then
   exit 1
 fi
 
+# Read args as array — split each line so --flag and value are separate elements
+LLAMA_ARGS=()
+while IFS= read -r LINE; do
+  [[ -z "$LINE" || "$LINE" == \#* ]] && continue
+  # shellcheck disable=SC2206
+  read -ra SPLIT <<< "$LINE"
+  LLAMA_ARGS+=("${SPLIT[@]}")
+done < "$ARGS_FILE"
+
 echo "Starting llama-server with profile: ${PROFILE} on port ${PORT} (${LLAMA_SERVER})"
 exec "${LLAMA_SERVER}" \
   --host 127.0.0.1 \
   --port "${PORT}" \
   --prio 3 \
-  $(cat "$ARGS_FILE")
+  "${LLAMA_ARGS[@]}"

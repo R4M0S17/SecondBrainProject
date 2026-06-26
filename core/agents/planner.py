@@ -47,9 +47,9 @@ class TaskPlanner:
         self._runtime = runtime
         raw = os.getenv("CEREBRO_PLANNER_MAX_STEPS")
         if raw is not None:
-            self.max_steps = min(int(raw), 2)
+            self.max_steps = min(int(raw), MAX_STEPS_PER_TASK)
         else:
-            self.max_steps = 4
+            self.max_steps = MAX_STEPS_PER_TASK
 
     @staticmethod
     def is_complex_task(query: str) -> bool:

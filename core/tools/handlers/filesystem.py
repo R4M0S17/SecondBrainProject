@@ -5,6 +5,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from core.i18n.messages import _L
 from loguru import logger
 
 READ_FILE_MAX_BYTES = 8192
@@ -359,19 +360,19 @@ def search_files(
     lines = [_format_search_line(p) for p in shown]
 
     if not lines:
-        parts = [f"patrón '{pattern}'"]
+        parts = [_L("filesystem.search_filter_pattern", value=pattern)]
         if name_contains:
-            parts.append(f"nombre contiene '{name_contains}'")
+            parts.append(_L("filesystem.search_filter_name", value=name_contains))
         if extension:
-            parts.append(f"extensión '{extension}'")
+            parts.append(_L("filesystem.search_filter_extension", value=extension))
         if query_text and query_text.strip():
-            parts.append(f"texto '{query_text.strip()}'")
+            parts.append(_L("filesystem.search_filter_text", value=query_text.strip()))
         detail = ", ".join(parts)
-        return f"No se encontraron archivos ({detail}) en: {roots_label}"
+        return _L("filesystem.not_found", detail=detail, roots_label=roots_label)
 
     header = ""
     if total_found > len(shown):
-        header = f"Mostrando {len(shown)} de {total_found} (límite {cap}):\n"
+        header = _L("filesystem.showing_results", shown=len(shown), total=total_found, cap=cap)
     return header + "\n".join(lines)
 
 

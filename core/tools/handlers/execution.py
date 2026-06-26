@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import collections  # noqa: F401 — pre-loaded so sandbox import doesn't trigger sub-imports
 import datetime  # noqa: F401
 import itertools  # noqa: F401
 import json  # noqa: F401
 import math  # noqa: F401
+import os
 import re  # noqa: F401
 import subprocess
 import sys
@@ -22,6 +24,7 @@ from core.tools.handlers.filesystem import PathNotAuthorizedError, validate_path
 # filesystem or network access — so it is safe to allow.
 ALLOWED_MODULES = frozenset({"math", "datetime", "json", "re", "collections", "itertools", "time"})
 MAX_OUTPUT_CHARS = 4000
+SANDBOX_PROFILE = Path(__file__).parent.parent / "sandbox" / "cerebro.sb"
 
 
 def _make_safe_import(allowed: frozenset):
@@ -42,6 +45,47 @@ def _make_safe_import(allowed: frozenset):
         return importlib.import_module(name)
 
     return _import
+
+
+class SubprocessSandbox:
+    SANDBOX_PROFILE = SANDBOX_PROFILE
+
+    @classmethod
+    async def execute(cls, code: str, timeout: int = 30) -> str:
+        tmp_dir = Path("/tmp/cerebro-sandbox")
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_file = tmp_dir / f"exec_{os.urandom(4).hex()}.py"
+        tmp_file.write_text(code)
+
+        try:
+            if sys.platform == "darwin" and cls.SANDBOX_PROFILE.exists():
+                cmd = [
+                    "sandbox-exec",
+                    "-f", str(cls.SANDBOX_PROFILE),
+                    "/usr/bin/python3", str(tmp_file),
+                ]
+            else:
+                return execute_python(code, timeout)
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except TimeoutError:
+                proc.kill()
+                return "Error: Execution timed out"
+
+            output = (stdout or stderr).decode()[:MAX_OUTPUT_CHARS]
+            return output
+
+        finally:
+            tmp_file.unlink(missing_ok=True)
 
 
 def execute_python(code: str, timeout_seconds: int = 10) -> str:

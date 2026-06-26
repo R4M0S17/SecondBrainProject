@@ -249,7 +249,7 @@ def test_calendar_instructions_under_prompt_budget():
     assert len(instructions) < 1500
     assert "get_upcoming_events" in instructions
     assert "create_calendar_event" in instructions
-    assert instructions.count('{"action": "tool"') == 2
+    assert instructions.count('{"action": "tool"') == 3
 
 
 def test_calendar_prefix_routes_correctly():

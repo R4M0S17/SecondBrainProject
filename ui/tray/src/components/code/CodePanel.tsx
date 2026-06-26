@@ -1,17 +1,19 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import TerminalTab from "./TerminalTab";
 import OutputTab from "./OutputTab";
 import ScratchTab from "./ScratchTab";
 
 type CodeTab = "terminal" | "output" | "scratch";
 
-const TABS: { id: CodeTab; label: string; icon: string }[] = [
-  { id: "terminal", label: "Terminal", icon: "terminal" },
-  { id: "output", label: "Output", icon: "output" },
-  { id: "scratch", label: "Scratch", icon: "edit_note" },
+const TAB_IDS: { id: CodeTab; icon: string }[] = [
+  { id: "terminal", icon: "terminal" },
+  { id: "output", icon: "output" },
+  { id: "scratch", icon: "edit_note" },
 ];
 
 export default function CodePanel() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<CodeTab>("terminal");
 
   return (
@@ -19,10 +21,10 @@ export default function CodePanel() {
       <div className="flex items-center justify-between border-b border-outline-variant/20 mb-5 pb-3">
         <div className="flex items-center gap-3">
           <span className="material-symbols-outlined text-[22px] text-primary-container">code</span>
-          <h2 className="text-[15px] font-semibold text-on-surface">Code</h2>
+          <h2 className="text-[15px] font-semibold text-on-surface">{t("code.title")}</h2>
         </div>
         <div className="flex gap-1">
-          {TABS.map((tab) => (
+          {TAB_IDS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
@@ -33,7 +35,7 @@ export default function CodePanel() {
               }`}
             >
               <span className="material-symbols-outlined text-[16px]">{tab.icon}</span>
-              {tab.label}
+                {t("code." + tab.id)}
             </button>
           ))}
         </div>

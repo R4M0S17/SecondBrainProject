@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -49,6 +50,7 @@ def reset_state(tmp_path):
     app_state.runtime = None
     app_state.vector_store = None
     app_state.provider_registry = None
+    app_state.router = MagicMock()
     app_state.active_agent_id = "general-v1"
     app_state.metrics = MetricsCollector()
     app_state._config = {}
@@ -60,6 +62,7 @@ def reset_state(tmp_path):
     app_state.runtime = None
     app_state.vector_store = None
     app_state.provider_registry = None
+    app_state.router = MagicMock()
     app_state.active_agent_id = "general-v1"
     app_state.metrics = MetricsCollector()
     app_state._config = {}
@@ -398,7 +401,20 @@ async def test_config_get_returns_empty_dict_by_default(client):
     async with client as c:
         resp = await c.get("/api/config")
     assert resp.status_code == 200
-    assert resp.json() == {}
+    data = resp.json()
+    assert data.get("low_power_available") is False
+    assert data.get("profile") == "normal"
+
+
+@pytest.mark.asyncio
+async def test_config_patch_rejects_low_power_when_disabled(client):
+    async with client as c:
+        resp = await c.patch(
+            "/api/config",
+            json={"profile": "low-power", "model": "qwen2.5-0.5b-instruct-q5_k_m.gguf"},
+        )
+    assert resp.status_code == 400
+    assert "development" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -436,8 +452,8 @@ async def test_patch_config_rebinds_read_handlers(client, tmp_path):
 
     from core.tools.handlers.filesystem import read_file
 
-    extra = tmp_path / "new_watch"
-    extra.mkdir()
+    extra = Path.home() / ".cerebro-pytest-watch"
+    extra.mkdir(exist_ok=True)
     (extra / "hi.txt").write_text("hello")
     startup = tmp_path / "startup"
     startup.mkdir()
@@ -448,11 +464,16 @@ async def test_patch_config_rebinds_read_handlers(client, tmp_path):
     mock_rt._tool_registry = tr
     app_state.runtime = mock_rt
 
-    async with client as c:
-        resp = await c.patch("/api/config", json={"watched_folders": [str(extra)]})
-    assert resp.status_code == 200
-    body = tr["read_file"](path=str(extra / "hi.txt"))
-    assert body == "hello"
+    try:
+        async with client as c:
+            resp = await c.patch("/api/config", json={"watched_folders": [str(extra)]})
+        assert resp.status_code == 200
+        body = tr["read_file"](path=str(extra / "hi.txt"))
+        assert body == "hello"
+    finally:
+        import shutil
+
+        shutil.rmtree(extra, ignore_errors=True)
 
 
 @pytest.mark.asyncio

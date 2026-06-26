@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useWizardStore } from "../../stores/wizard";
 import { wizardSetFolders, wizardComplete } from "../../api/client";
 import WizardDots from "./WizardDots";
@@ -7,10 +8,16 @@ import StepLlamaCpp from "./StepLlamaCpp";
 import StepModel from "./StepModel";
 import StepFolders from "./StepFolders";
 
-const LOCAL_LABELS = ["Choose Backend", "Start llama.cpp", "Check Models", "Add Folders"];
-const CLAUDE_LABELS = ["Choose Backend", "Add Folders"];
+const LOCAL_LABELS = [
+  "wizard.step_backend",
+  "wizard.step_llamacpp",
+  "wizard.step_model",
+  "wizard.step_folders",
+];
+const CLAUDE_LABELS = ["wizard.step_backend", "wizard.step_folders"];
 
 export default function WizardShell() {
+  const { t } = useTranslation();
   const { currentStep, mode, advance } = useWizardStore();
   const [stepReady, setStepReady] = useState(false);
   const [isAdvancing, setIsAdvancing] = useState(false);
@@ -41,8 +48,8 @@ export default function WizardShell() {
   const isClaudeMode = mode === "claude";
   const total = isClaudeMode ? 2 : 4;
   const visualStep = isClaudeMode && currentStep === 3 ? 1 : currentStep;
-  const labels = isClaudeMode ? CLAUDE_LABELS : LOCAL_LABELS;
-  const stepLabel = labels[visualStep] ?? "";
+  const labelKeys = isClaudeMode ? CLAUDE_LABELS : LOCAL_LABELS;
+  const stepLabel = t(labelKeys[visualStep] ?? "");
 
   return (
     <div className="w-full h-full flex flex-col bg-background">
@@ -70,7 +77,7 @@ export default function WizardShell() {
           <h1 className="text-[22px] font-bold leading-[28px] tracking-[-0.01em] text-[#e8eaf0] mb-1">
             Cerebro
           </h1>
-          <p className="text-[14px] text-outline">Your private AI second brain</p>
+          <p className="text-[14px] text-outline">{t("wizard.subtitle")}</p>
         </div>
 
         {/* Step dots */}
@@ -92,7 +99,7 @@ export default function WizardShell() {
               : "bg-surface-container text-outline cursor-not-allowed"
           }`}
         >
-          {isAdvancing ? "Please wait…" : currentStep === 3 ? "Finish" : "Continue"}
+          {isAdvancing ? t("wizard.waiting") : currentStep === 3 ? t("wizard.finish") : t("wizard.continue")}
           {!isAdvancing && (
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
               <path d="M5 12h14M12 5l7 7-7 7" />

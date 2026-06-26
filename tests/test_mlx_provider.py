@@ -223,7 +223,7 @@ def test_mlx_available_false_when_insufficient_ram(mocker):
     mocker.patch("platform.machine", return_value="arm64")
     mocker.patch(
         "core.inference.platform.psutil.virtual_memory",
-        return_value=mocker.Mock(total=8 * 1024**3),
+        return_value=mocker.Mock(total=2 * 1024**3),
     )
     import core.inference.platform as plat
 

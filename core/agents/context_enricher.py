@@ -140,7 +140,10 @@ class ContextEnricher:
             events_str = ""
             files_str = ""
             template = LOCALE_TEMPLATES[self.language]
-            now_str = datetime.now().astimezone().strftime("%A %d de %B de %Y, %H:%M %Z")
+            if self.language == "es":
+                now_str = datetime.now().astimezone().strftime("%A %d de %B de %Y, %H:%M %Z")
+            else:
+                now_str = datetime.now().astimezone().strftime("%A %B %d, %Y %H:%M %Z")
 
             if isinstance(cal_raw, Exception):
                 logger.debug("ContextEnricher: Calendar async failed: {}", type(cal_raw).__name__)

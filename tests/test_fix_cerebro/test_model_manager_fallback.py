@@ -35,6 +35,12 @@ def test_build_app_state_falls_back_when_model_swap_files_missing(tmp_path, monk
     monkeypatch.setenv("CEREBRO_DB", str(db))
     monkeypatch.setenv("CEREBRO_STATE", str(state))
     monkeypatch.setenv("CEREBRO_MLX_ENABLED", "false")
+    monkeypatch.delenv("CEREBRO_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "core.tools.security_audit.audit_confirmation_gates",
+        lambda _registry: [],
+    )
+    monkeypatch.setattr("core.security.secrets.SecretsManager", lambda *a, **k: None)
 
     import main
 
@@ -51,6 +57,9 @@ def test_build_app_state_falls_back_when_model_swap_files_missing(tmp_path, monk
             "CEREBRO_LLAMACPP_SIMPLE",
             "CEREBRO_DB",
             "CEREBRO_STATE",
+            "CEREBRO_INFERENCE_BACKEND",
+            "CEREBRO_MLX_ENABLED",
+            "CEREBRO_LLAMACPP_MODEL",
         ):
             monkeypatch.delenv(key, raising=False)
         importlib.reload(mm_mod)

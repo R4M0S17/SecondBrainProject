@@ -1,103 +1,189 @@
-# How to Run Cerebro (llama.cpp + Frontend)
+# How to Run Cerebro
 
 Spanish version: [`running-es.md`](running-es.md).
 
-You need **3 terminals**. Run them in this order.
+> **TL;DR (development):** `npm run tauri:dev` → backend starts automatically, **LLM stays off** until you click **Start engine** in the header.
 
 ---
 
-## Fix required before first run
-
-The `.args` config files have a bug — fix them once:
+## First-time setup (once)
 
 ```bash
-sed -i '' 's/^--flash-attn$/--flash-attn on/' \
-  /Users/mb/Desktop/Javier/SecondBrain/cerebro/config/chat.args \
-  /Users/mb/Desktop/Javier/SecondBrain/cerebro/config/coding.args \
-  /Users/mb/Desktop/Javier/SecondBrain/cerebro/config/deep.args
+cd /Users/mb/Desktop/Javier/SecondBrain
+make install
+make desktop-config    # writes ~/.cerebro/desktop.json (needed for Tauri + desktop scripts)
 ```
 
 ---
 
-## Terminal 1 — llama.cpp engine (start first)
+## Recommended — Tauri dev (UI hot-reload, LLM on demand)
+
+Best when you edit React/UI code and want the native window.
+
+### One terminal
 
 ```bash
-cd /Users/mb/Desktop/Javier/SecondBrain/cerebro
+cd /Users/mb/Desktop/Javier/SecondBrain/ui/tray
+npm run tauri:dev
+```
+
+**What happens:**
+
+| Step | Behavior |
+|------|----------|
+| App opens | Tauri window (native shell) |
+| Backend `:7842` | Auto-starts in background if not running |
+| LLM `:8080` | **Does not** start — waits for **Start engine** |
+| UI changes | Hot-reload on save |
+
+Use **Start engine** / **Stop engine** in the header (top bar) to control the llama-server.
+
+With the engine **off**, you can still use: Settings, documents, history, and fast paths (math, calendar read, file search, etc.).
+
+### Optional: explicit backend in a second terminal
+
+If you prefer to see backend logs in a terminal:
+
+```bash
+# Terminal 1
+cd /Users/mb/Desktop/Javier/SecondBrain
+make lite          # 8 GB Mac — recommended
+# or: make run
+
+# Terminal 2
+cd /Users/mb/Desktop/Javier/SecondBrain/ui/tray
+npm run tauri:dev
+```
+
+---
+
+## Packaged app (Dock / Applications)
+
+```bash
+cd /Users/mb/Desktop/Javier/SecondBrain
+make desktop-app && make desktop-install
+open /Applications/Cerebro.app
+```
+
+| Action | Result |
+|--------|--------|
+| Open app | Backend `:7842` auto-starts |
+| **Start engine** | LLM `:8080` only |
+| **Stop engine** | Frees ~2 GB RAM; backend stays up |
+| Code changes | **Not** auto-applied — rebuild with `make desktop-app && make desktop-install` |
+
+Daily open after install:
+
+```bash
+open /Applications/Cerebro.app
+```
+
+---
+
+## Other run modes
+
+### Legacy — everything in one terminal (backend + LLM auto)
+
+```bash
+cd /Users/mb/Desktop/Javier/SecondBrain
+make dev-full
+```
+
+Same as pre-split behavior: loads the GGUF on boot (~2.5 GB RAM).
+
+### Classic dev — 3 terminals (manual control)
+
+```bash
+# Terminal 1 — backend only
+make lite    # or make run
+
+# Terminal 2 — LLM (only when you need chat)
 make engine
+
+# Terminal 3 — browser UI (no Tauri shell)
+cd ui/tray && npm run dev
 ```
 
-Wait until you see `llama server listening` before moving on.
-Leave this terminal running.
+### Desktop scripts (no npm)
 
-**Profile options** (pick one instead of `make engine`):
-
-| Command | Best for |
-|---|---|
-| `make engine` | Chat, quick questions (ctx 2048, less RAM) |
-| `make engine-code` | Code analysis (ctx 8192 — close Chrome first) |
-| `make engine-deep` | Documents, RAG, summaries (ctx 6144) |
+```bash
+make desktop-backend    # API :7842 only
+make desktop-engine     # llama-server :8080 only
+make desktop-launch-full # both (legacy one-click)
+make desktop-stop       # stop everything
+make desktop-stop-engine   # stop LLM only
+```
 
 ---
 
-## Terminal 2 — Cerebro backend
+## Engine control (API)
 
 ```bash
-cd /Users/mb/Desktop/Javier/SecondBrain/cerebro
-source .venv/bin/activate
-CEREBRO_INFERENCE_BACKEND=llamacpp make run
+curl -s http://127.0.0.1:7842/api/engine/status | jq
+curl -X POST http://127.0.0.1:7842/api/engine/start
+curl -X POST http://127.0.0.1:7842/api/engine/stop
 ```
-
-Server starts at `http://localhost:7842`.
-Leave this terminal running.
-
-> Ollama must also be running for embeddings: `ollama serve` (if not already running)
 
 ---
 
-## Terminal 3 — Frontend
-
-### Option A: Dev mode (browser, hot reload)
+## Health check
 
 ```bash
-cd /Users/mb/Desktop/Javier/SecondBrain/cerebro/ui/tray
-npm run dev
+curl -s http://127.0.0.1:7842/api/health
+curl -s http://127.0.0.1:7842/api/status | jq .engine_ok
 ```
 
-### Option B: Desktop app (opens like a real Mac app)
-
-```bash
-cd /Users/mb/Desktop/Javier/SecondBrain/cerebro/ui/tray
-npx tauri dev
-```
-
-This opens Cerebro as a native desktop window (not in the browser). Requires Rust + Tauri CLI installed. If you get a "tauri not found" error, install Rust first:
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Then re-run `npx tauri dev`.
-
-> **Note**: `npx tauri dev` rebuilds the Rust binary on first run — expect 2-5 minutes the first time.
-
----
-
-## Quick health check
-
-```bash
-curl http://localhost:7842/status
-```
-
-Look for `"provider": "llamacpp"` in the response.
+- `engine_ok: false` → backend up, LLM off (expected before **Start engine**)
+- `engine_ok: true` → LLM ready for chat
 
 ---
 
 ## Troubleshooting
 
-**`make engine` fails with `--flash-attn` error** → Run the fix command above (one time only).
+### LLM starts by itself after ~10–30 seconds
 
-**Cerebro says connection error** → llama-server isn't running yet. Start Terminal 1 first.
+The health monitor only auto-restarts the engine when `engine_desired` is `"on"`. By default it is **`off`** until you press **Start engine**.
 
-**Very slow responses** → Close Chrome, use `make engine` instead of `make engine-code`.
+If it still auto-starts:
 
-**Mac freezes 2-3 sec when stopping engine** → Normal, macOS releasing RAM.
+```bash
+# 1. Stop the engine
+make desktop-stop-engine
+
+# 2. Clear stale "desired: on" state (from a previous session)
+rm -f ~/.cerebro/state/engine.json
+
+# 3. Restart backend (close make run / make lite, or:)
+make desktop-stop-backend
+
+# 4. Relaunch Tauri
+cd ui/tray && npm run tauri:dev
+```
+
+Do **not** use `make dev-full` or `make desktop-launch-full` if you want button-only engine control.
+
+### Start engine button disabled
+
+Backend is down. Wait for auto-start or run `make lite` in a terminal.
+
+### Chat works for math/calendar but not open-ended questions
+
+Engine is off — click **Start engine** and wait 15–90 s (model load).
+
+### Other issues
+
+| Symptom | Fix |
+|---------|-----|
+| `make desktop-app` fails | Run `make desktop-config`; check `~/.cerebro/desktop.json` |
+| Settings don't load | Backend down — `make run` or `make desktop-backend` |
+| Port in use | `make desktop-stop` then retry |
+| `--flash-attn` error | `sed -i '' 's/^--flash-attn$/--flash-attn on/' config/chat.args config/coding.args config/deep.args` |
+| Mac freezes 2–3s on Stop engine | Normal — macOS freeing ~2.5 GB RAM |
+
+---
+
+## Related docs
+
+- [`DESKTOP_ONE_CLICK_LAUNCH.md`](DESKTOP_ONE_CLICK_LAUNCH.md) — build `.app`, Dock, packaging
+- [`8gb-mac-quickstart.md`](8gb-mac-quickstart.md) — RAM profile
+- [`engine-backend-split-phase4-5.md`](../implementation/engine-backend-split-phase4-5.md) — architecture notes

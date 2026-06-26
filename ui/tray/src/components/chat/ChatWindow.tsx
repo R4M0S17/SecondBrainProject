@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useChatStore } from "../../stores/chat";
 import { useSettingsStore } from "../../stores/settings";
 import MessageBubble from "./MessageBubble";
@@ -14,6 +15,7 @@ interface ChatWindowProps {
 }
 
 export default function ChatWindow({ className = "" }: ChatWindowProps) {
+  const { t } = useTranslation();
   const { messages, isLoading, pendingConfirmation } = useChatStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -69,7 +71,7 @@ export default function ChatWindow({ className = "" }: ChatWindowProps) {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 opacity-40">
             <img src="/BestLogo.svg" alt="Cerebro" className="w-12 h-12 opacity-60" />
-            <p className="text-sm text-on-surface-variant">Ask anything about your notes…</p>
+            <p className="text-sm text-on-surface-variant">{t("chat.empty")}</p>
           </div>
         )}
 

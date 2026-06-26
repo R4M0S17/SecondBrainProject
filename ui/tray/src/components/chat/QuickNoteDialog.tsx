@@ -1,19 +1,29 @@
 import { useState, useEffect, useRef } from "react";
-import { writeQuickNote } from "../../api/client";
+import { useTranslation } from "react-i18next";
+import { useChatStore } from "../../stores/chat";
+import { useDashboardStore } from "../../stores/dashboard";
+import { useSettingsStore } from "../../stores/settings";
+import { writeQuickNote, createMemoryEpisode } from "../../api/client";
 import Dialog from "../shared/Dialog";
 
 interface QuickNoteDialogProps {
   open: boolean;
   onClose: () => void;
+  showPostSaveActions?: boolean;
 }
 
-export default function QuickNoteDialog({ open, onClose }: QuickNoteDialogProps) {
+type NoteDestination = "file" | "memory";
+
+export default function QuickNoteDialog({ open, onClose, showPostSaveActions }: QuickNoteDialogProps) {
+  const { t } = useTranslation();
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [destination, setDestination] = useState<NoteDestination>("file");
+  const [indexing, setIndexing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -23,6 +33,8 @@ export default function QuickNoteDialog({ open, onClose }: QuickNoteDialogProps)
       setDone(false);
       setPath("");
       setError(null);
+      setDestination("file");
+      setIndexing(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
@@ -32,13 +44,48 @@ export default function QuickNoteDialog({ open, onClose }: QuickNoteDialogProps)
     setSaving(true);
     setError(null);
     try {
-      const res = await writeQuickNote(content.trim(), title.trim() || undefined);
-      setPath(res.path);
-      setDone(true);
+      if (destination === "memory") {
+        const tags = title.trim() ? ["quick-note", title.trim()] : ["quick-note"];
+        await createMemoryEpisode(content.trim(), tags);
+        setPath(t("note.saved"));
+        setDone(true);
+      } else {
+        const res = await writeQuickNote(content.trim(), title.trim() || undefined);
+        setPath(res.path);
+        setDone(true);
+      }
+      useDashboardStore.getState().pushActivity({
+        id: "",
+        label: t("note.quick_note"),
+        description: path || content.slice(0, 60),
+        timestamp: new Date(),
+        icon: "edit_note",
+      });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save note");
+      setError(e instanceof Error ? e.message : t("note.failed"));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleOpenInChat = () => {
+    const query = title.trim()
+      ? `Resume and expand this note: ${path}\n\nTitle: ${title}\nContent: ${content}`
+      : `Resume and expand this note: ${path}\n\n${content}`;
+    useChatStore.getState().setPendingChatAction({ query, autoSend: false, agentId: "auto" });
+    onClose();
+  };
+
+  const handleIndexNow = async () => {
+    if (!path) return;
+    setIndexing(true);
+    try {
+      const dir = path.substring(0, path.lastIndexOf("/"));
+      await useSettingsStore.getState().startIndexing([dir]);
+    } catch {
+      // silent
+    } finally {
+      setIndexing(false);
     }
   };
 
@@ -47,28 +94,67 @@ export default function QuickNoteDialog({ open, onClose }: QuickNoteDialogProps)
       {done ? (
         <div className="text-center py-6 space-y-3">
           <span className="material-symbols-outlined text-4xl text-primary">check_circle</span>
-          <p className="text-on-surface font-medium">Note saved</p>
+          <p className="text-on-surface font-medium">{t("note.saved")}</p>
           <p className="text-sm text-on-surface-variant truncate">{path}</p>
-          <button
-            onClick={onClose}
-            className="mt-2 px-5 py-2 rounded-full bg-primary text-on-primary text-sm"
-          >
-            Done
-          </button>
+          <div className="flex justify-center gap-3 mt-2 flex-wrap">
+            <button onClick={onClose} className="px-5 py-2 rounded-full bg-primary text-on-primary text-sm">
+              {t("note.done")}
+            </button>
+            {showPostSaveActions && (
+              <>
+                <button
+                  onClick={handleOpenInChat}
+                  className="px-4 py-2 rounded-full text-sm text-on-surface-variant hover:bg-surface-container border border-outline-variant/30"
+                >
+                  {t("note.open_in_chat")}
+                </button>
+                <button
+                  onClick={handleIndexNow}
+                  disabled={indexing || !path}
+                  className="px-4 py-2 rounded-full text-sm text-on-surface-variant hover:bg-surface-container border border-outline-variant/30 disabled:opacity-40"
+                >
+                  {indexing ? t("note.indexing") : t("note.index_now")}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
-          <h3 className="text-lg font-semibold text-on-surface">Quick Note</h3>
+          <h3 className="text-lg font-semibold text-on-surface">{t("note.quick_note")}</h3>
+
+          {/* Destination selector */}
+          {showPostSaveActions && (
+            <div className="flex gap-2">
+              {(["file", "memory"] as NoteDestination[]).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDestination(d)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                    destination === d
+                      ? "bg-primary-container/20 border-primary text-primary"
+                      : "bg-surface-container border-outline-variant/50 text-on-surface-variant hover:border-outline-variant"
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[16px] align-text-bottom mr-1">
+                    {d === "file" ? "description" : "psychology"}
+                  </span>
+                  {t(`note.dest_${d}`)}
+                </button>
+              ))}
+            </div>
+          )}
+
           <input
             ref={inputRef}
             type="text"
-            placeholder="Title (optional)"
+            placeholder={t("note.title_placeholder")}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             className="w-full px-3 py-2 rounded-lg bg-surface-container text-on-surface border border-outline-variant/50 outline-none focus:border-primary text-sm"
           />
           <textarea
-            placeholder="Write your note…"
+            placeholder={t("note.content_placeholder")}
             value={content}
             onChange={(e) => setContent(e.target.value)}
             rows={5}
@@ -88,14 +174,14 @@ export default function QuickNoteDialog({ open, onClose }: QuickNoteDialogProps)
               onClick={onClose}
               className="px-4 py-2 rounded-full text-sm text-on-surface-variant hover:bg-surface-container"
             >
-              Cancel
+              {t("note.cancel")}
             </button>
             <button
               onClick={handleSave}
               disabled={!content.trim() || saving}
               className="px-5 py-2 rounded-full bg-primary text-on-primary text-sm disabled:opacity-40"
             >
-              {saving ? "Saving…" : "Save Note"}
+              {saving ? t("note.saving") : t("note.save")}
             </button>
           </div>
         </div>

@@ -8,6 +8,15 @@ from loguru import logger
 from core.agents.state_store import AgentProfile
 from core.tools.registry import ToolDefinition, ToolRegistry
 
+LLM_BLOCKED_TOOLS: frozenset[str] = frozenset({
+    "upload_file",
+    "run_script",
+})
+
+
+def is_llm_allowed(tool_name: str) -> bool:
+    return tool_name not in LLM_BLOCKED_TOOLS
+
 
 @dataclass
 class PolicyResult:
@@ -38,8 +47,14 @@ class PolicyEngine:
         self._read_paths = [str(Path(p).resolve()) for p in watched_paths]
 
     def _is_under(self, path: str, authorized: list[str]) -> bool:
-        resolved = str(Path(path).resolve())
-        return any(resolved.startswith(auth) for auth in authorized)
+        resolved = Path(path).resolve()
+        for auth in authorized:
+            try:
+                resolved.relative_to(Path(auth).resolve())
+                return True
+            except ValueError:
+                continue
+        return False
 
     async def validate_call(
         self,

@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useSystemStore } from "../../stores/system";
 
 const HISTORY_LEN = 12;
 
 export default function CpuMiniGraph() {
+  const { t } = useTranslation();
   const status = useSystemStore((s) => s.status);
   const cpuPercent = status?.cpu_percent ?? 0;
   const historyRef = useRef<number[]>([]);
@@ -18,13 +20,13 @@ export default function CpuMiniGraph() {
     return (
       <div className="bg-surface-container/40 rounded-xl p-5 border border-outline-variant/20 mb-6">
         <div className="flex justify-between items-start mb-3">
-          <span className="text-xs font-medium text-on-surface-variant">Compute Load</span>
+          <span className="text-xs font-medium text-on-surface-variant">{t("status.compute_load")}</span>
           <span className="material-symbols-outlined text-[16px] text-outline/40">speed</span>
         </div>
         <div className="flex items-end gap-3 mb-2">
           <span className="font-label-mono text-2xl text-outline/40">—</span>
         </div>
-        <div className="text-[10px] text-outline/40">Waiting for data…</div>
+        <div className="text-[10px] text-outline/40">{t("status.waiting_data")}</div>
       </div>
     );
   }
@@ -36,7 +38,7 @@ export default function CpuMiniGraph() {
   return (
     <div className="bg-surface-container/40 rounded-xl p-5 border border-outline-variant/20 mb-6 hover:bg-surface-container/60 transition-colors">
       <div className="flex justify-between items-start mb-3">
-        <span className="text-xs font-medium text-on-surface-variant">Compute Load</span>
+        <span className="text-xs font-medium text-on-surface-variant">{t("status.compute_load")}</span>
         <span className="material-symbols-outlined text-[16px] text-primary-container">speed</span>
       </div>
       <div className="flex items-end gap-3 mb-2">

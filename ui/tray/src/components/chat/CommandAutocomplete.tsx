@@ -1,22 +1,30 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 export interface Command {
   name: string;
   description: string;
 }
 
-export const COMMANDS: Command[] = [
-  { name: "/help", description: "Show available commands" },
-  { name: "/clear", description: "Clear conversation history" },
-  { name: "/model", description: "Show current active model" },
-  { name: "/status", description: "Show system status (RAM, latency, model)" },
-  { name: "/agents", description: "List available agents" },
-  { name: "/index", description: "Re-index all watched folders" },
-  { name: "/memory", description: "Show memory usage and recall stats" },
-  { name: "/export", description: "Export conversation to file" },
-  { name: "/refresh", description: "Refresh system status" },
-  { name: "/settings", description: "Show current configuration" },
+export const COMMAND_DEFS: { name: string; descriptionKey: string }[] = [
+  { name: "/help", descriptionKey: "commands.help" },
+  { name: "/clear", descriptionKey: "commands.clear" },
+  { name: "/model", descriptionKey: "commands.model" },
+  { name: "/status", descriptionKey: "commands.status" },
+  { name: "/agents", descriptionKey: "commands.agents" },
+  { name: "/index", descriptionKey: "commands.index" },
+  { name: "/memory", descriptionKey: "commands.memory" },
+  { name: "/export", descriptionKey: "commands.export" },
+  { name: "/refresh", descriptionKey: "commands.refresh" },
+  { name: "/settings", descriptionKey: "commands.settings" },
 ];
+
+export function buildCommands(t: (key: string) => string): Command[] {
+  return COMMAND_DEFS.map((d) => ({
+    name: d.name,
+    description: t(d.descriptionKey),
+  }));
+}
 
 interface CommandAutocompleteProps {
   query: string;
@@ -29,8 +37,10 @@ export default function CommandAutocomplete({
   selectedIndex,
   onSelect,
 }: CommandAutocompleteProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const filter = query.toLowerCase();
+  const COMMANDS = buildCommands(t);
   const matches = COMMANDS.filter((c) => c.name.startsWith(filter));
 
   useEffect(() => {

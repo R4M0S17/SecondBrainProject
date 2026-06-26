@@ -5,11 +5,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.i18n.messages import _L
 from core.inference.engine import InferenceEngine
 from core.memory.vector_store import SearchResult, VectorStore
 from core.utils.compressor import SemanticCompressor
 
-NO_INFO_RESPONSE = "No encontré información sobre eso en tus documentos."
+NO_INFO_RESPONSE = _L("rag.no_info")
 
 SYSTEM_PROMPT = (
     "Eres un asistente personal que responde ÚNICAMENTE basándose en el contexto\n"
