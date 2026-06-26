@@ -23,6 +23,46 @@ export interface MemoryRef {
   relevance_score: number;
 }
 
+/** Long-term agent memory episode (LanceDB agent_memory). Frontend-only mock until API ships. */
+export interface MemoryEpisode {
+  id: string;
+  content: string;
+  tags: string[];
+  created_at: number;
+  confidence: number;
+  source: "episode" | "consolidation" | "archived" | "manual";
+  pinned: boolean;
+  agent_id: string;
+}
+
+export interface MemorySessionContext {
+  session_summary: string;
+  working_memory: Record<string, string>;
+  last_consolidation_at: number | null;
+  messages_in_short_term: number;
+}
+
+export interface MemoryBrowserStats {
+  episodes_stored: number;
+  recall_hits_session: number;
+  queries_with_recall: number;
+  context_memory_pct: number;
+}
+
+export interface MemoryRecallResult {
+  episode: MemoryEpisode;
+  relevance_score: number;
+}
+
+export interface MemoryEpisodesResponse {
+  episodes: MemoryEpisode[];
+  stats: MemoryBrowserStats;
+}
+
+export interface MemoryRecallResponse {
+  results: MemoryRecallResult[];
+}
+
 export interface ResponseMetadata {
   sources_used: SourceRef[];
   tools_called: ToolCallRecord[];
@@ -77,6 +117,7 @@ export interface ConversationSummary {
   last_active: string;
   message_count: number;
   first_user_message: string;
+  pinned?: boolean;
 }
 
 export interface ConversationDetail {
@@ -85,6 +126,7 @@ export interface ConversationDetail {
   started_at: string;
   last_active: string;
   messages: ConversationMessage[];
+  pinned?: boolean;
 }
 
 export interface IndexResponse {
@@ -104,6 +146,14 @@ export interface HealthResponse {
   last_restart_at: string | null;
   restart_count_session: number;
   message: string | null;
+}
+
+export interface EngineStatusResponse {
+  desired: "on" | "off";
+  running: boolean;
+  model: string;
+  llama_server: "up" | "restarting" | "down";
+  embed_running: boolean;
 }
 
 export interface StatusResponse {
@@ -212,6 +262,12 @@ export interface AppConfig {
   mlx_enabled?: boolean;
   /** Whether an ANTHROPIC_API_KEY has been configured. */
   claude_has_key?: boolean;
+  /** Inference profile: 'normal' for 2B model, 'low-power' for 0.5B model. */
+  profile?: "normal" | "low-power";
+  /** False while Nano v2 is in development — Low Power toggle disabled in UI. */
+  low_power_available?: boolean;
+  /** UI language/locale: 'en' or 'es'. */
+  locale?: string;
   /** Knowledge sync configuration. */
   knowledge_sync?: {
     enabled: boolean;
@@ -301,17 +357,91 @@ export interface DebugStepDetail extends DebugStep {
 
 // ── Desktop Automation types ──────────────────────────────────────────
 
+export interface WorkflowStep {
+  order: number;
+  app?: string;
+  action: string;
+  detail?: string;
+}
+
+export interface WorkflowParameter {
+  name: string;
+  type: string;
+  description: string;
+  default?: string;
+}
+
 export interface Workflow {
   id: string;
   name: string;
   description: string;
+  workflow_type: "desktop" | "recipe";
   applescript: string;
-  parameters: { name: string; type: string; description: string }[];
+  recipe_key?: string;
+  parameters: WorkflowParameter[];
+  steps: WorkflowStep[];
   tags: string[];
   created_at: number;
   updated_at: number;
   run_count: number;
   last_run: number | null;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  started_at: number;
+  finished_at: number | null;
+  success: boolean;
+  output: string | null;
+  error: string | null;
+  params: Record<string, string>;
+}
+
+export interface RecordingPreviewEvent {
+  timestamp: number;
+  app: string;
+  action: string;
+  detail: string;
+}
+
+export interface RecordingStatus {
+  recording: boolean;
+  event_count: number;
+  apps: string[];
+  duration_sec: number;
+  started_at: number | null;
+  preview: RecordingPreviewEvent[];
+}
+
+export interface WorkflowRecipe {
+  id: string;
+  recipe_key: string;
+  name: string;
+  description: string;
+  parameters: WorkflowParameter[];
+  steps: WorkflowStep[];
+  tags?: string[];
+}
+
+export interface WorkflowRunResponse {
+  result: string;
+  success: boolean;
+  run_id?: string;
+  error?: string | null;
+  dry_run?: boolean;
+}
+
+export interface WorkflowExport {
+  version: number;
+  name: string;
+  description: string;
+  workflow_type: "desktop" | "recipe";
+  applescript: string;
+  recipe_key?: string | null;
+  parameters: WorkflowParameter[];
+  steps: WorkflowStep[];
+  tags: string[];
 }
 
 // ── Claude models ───────────────────────────────────────────────────────
@@ -393,6 +523,32 @@ export interface SyncImportResponse {
   status: string;
   added: number;
   errors: string[];
+}
+
+export interface FolderFileEntry {
+  path: string;
+  size_bytes: number;
+  modified: number;
+}
+
+export interface FolderAnalyzeRequest {
+  path: string;
+  max_depth?: number;
+  include_summary?: boolean;
+}
+
+export interface FolderAnalyzeResponse {
+  path: string;
+  total_files: number;
+  total_dirs: number;
+  total_size_mb: number;
+  by_extension: Record<string, number>;
+  largest_files: FolderFileEntry[];
+  tree_preview: string;
+  indexed_count: number;
+  indexed_sample: string[];
+  summary: string | null;
+  warnings: string[];
 }
 
 export const CLAUDE_MODELS: ClaudeModel[] = [

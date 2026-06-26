@@ -11,6 +11,7 @@ into /status for richer aggregate stats.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import inspect
 import json
 import os
@@ -44,6 +45,7 @@ from fastapi import (
     FastAPI,
     File,
     HTTPException,
+    Request,
     Security,
     UploadFile,
     status,
@@ -53,10 +55,12 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from core.agents.conversation_store import ConversationStore
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
+from core.middleware.rate_limit import RateLimitMiddleware
+from core.security.secrets import AuthState, SecretsManager
 from core.inference.inference_warnings import (
     clear_inference_warnings,
     consume_inference_warnings,
@@ -67,6 +71,12 @@ from core.ingestion.pipeline import IngestionPipeline
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
 from core.tools.handlers.upload import process_uploaded_file
+from core.tools.folder_analysis import analyze_folder, PathNotAuthorizedError
+from core.feature_flags import (
+    apply_profile_guard,
+    config_needs_low_power_migration,
+    low_power_mode_enabled,
+)
 from ui.tray.wizard import recommend_lite_profile
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -127,6 +137,7 @@ class ConversationSummary(BaseModel):
     last_active: str
     message_count: int
     first_user_message: str
+    pinned: bool = False
 
 
 class ConversationDetail(BaseModel):
@@ -135,6 +146,7 @@ class ConversationDetail(BaseModel):
     started_at: str
     last_active: str
     messages: list[ConversationMessage]
+    pinned: bool = False
 
 
 class ToolConfirmRequest(BaseModel):
@@ -183,6 +195,90 @@ class QuickNoteRequest(BaseModel):
     title: str | None = None
 
 
+class FolderAnalyzeRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    max_depth: int = Field(default=4, ge=1, le=8)
+    include_summary: bool = False
+
+
+class FolderFileEntry(BaseModel):
+    path: str
+    size_bytes: int
+    modified: float
+
+
+class FolderAnalyzeResponse(BaseModel):
+    path: str
+    total_files: int
+    total_dirs: int
+    total_size_mb: float
+    by_extension: dict[str, int]
+    largest_files: list[FolderFileEntry]
+    tree_preview: str
+    indexed_count: int = 0
+    indexed_sample: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MemoryEpisodeModel(BaseModel):
+    id: str
+    content: str
+    tags: list[str] = Field(default_factory=list)
+    created_at: float
+    confidence: float
+    source: Literal["episode", "consolidation", "archived", "manual"]
+    pinned: bool = False
+    agent_id: str
+
+
+class MemoryBrowserStatsModel(BaseModel):
+    episodes_stored: int
+    recall_hits_session: int
+    queries_with_recall: int
+    context_memory_pct: int
+
+
+class MemoryEpisodesResponse(BaseModel):
+    episodes: list[MemoryEpisodeModel]
+    stats: MemoryBrowserStatsModel
+
+
+class MemorySessionResponse(BaseModel):
+    session_summary: str
+    working_memory: dict[str, str] = Field(default_factory=dict)
+    last_consolidation_at: float | None = None
+    messages_in_short_term: int = 0
+
+
+class MemoryEpisodeCreateRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    tags: list[str] = Field(default_factory=lambda: ["manual"])
+    agent_id: str | None = None
+
+
+class MemoryEpisodePatchRequest(BaseModel):
+    content: str | None = None
+    tags: list[str] | None = None
+    pinned: bool | None = None
+    agent_id: str | None = None
+
+
+class MemoryRecallRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    agent_id: str | None = None
+    min_confidence: float = 0.0
+
+
+class MemoryRecallResultModel(BaseModel):
+    episode: MemoryEpisodeModel
+    relevance_score: float
+
+
+class MemoryRecallResponse(BaseModel):
+    results: list[MemoryRecallResultModel]
+
+
 @dataclass
 class _IndexJob:
     status: Literal["running", "done", "error"] = "running"
@@ -195,6 +291,14 @@ class HealthResponse(BaseModel):
     last_restart_at: str | None = None
     restart_count_session: int = 0
     message: str | None = None
+
+
+class EngineStatusResponse(BaseModel):
+    desired: Literal["on", "off"]
+    running: bool
+    model: str
+    llama_server: Literal["up", "restarting", "down"]
+    embed_running: bool
 
 
 class StatusResponse(BaseModel):
@@ -307,9 +411,13 @@ class AppState:
         self.macos_permissions: dict[str, str] = {"calendar": "unknown"}
         self.ram_monitor: RamMonitor = RamMonitor()
         self.llama_health_monitor: Any = None
+        self.engine_suspender: Any = None
+        self.secrets_mgr: SecretsManager | None = None
         self.time_travel_recorder: Any = None
         self.recorder: Any = None
         self.workflow_store: Any = None
+        self.short_term: Any = None  # ShortTermStore | None
+        self.state_store: Any = None  # AgentStateStore | None
         # Maps conversation_id → llama-server slot_id for KV cache reuse.
         self._active_slots: dict[str, int] = {}
         self._load_wizard_state()
@@ -317,7 +425,12 @@ class AppState:
     def _load_config(self) -> dict[str, Any]:
         try:
             if self._config_file.exists():
-                return json.loads(self._config_file.read_text())
+                raw = json.loads(self._config_file.read_text())
+                if config_needs_low_power_migration(raw):
+                    migrated = apply_profile_guard(raw)
+                    self._config_file.write_text(json.dumps(migrated, indent=2))
+                    return migrated
+                return raw
         except Exception:
             pass
         return {}
@@ -384,16 +497,24 @@ def _save_secret(key: str, value: str) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 _API_KEY_HEADER = APIKeyHeader(name="X-Cerebro-Key", auto_error=False)
-_CEREBRO_API_KEY: str = os.getenv("CEREBRO_API_KEY", "")
+auth_state = AuthState(api_key=os.getenv("CEREBRO_API_KEY", "") or None)
 
 
-async def _verify_api_key(key: str | None = Security(_API_KEY_HEADER)) -> None:
-    if not _CEREBRO_API_KEY:
+_LOCAL_PEERS = ("127.0.0.1", "::1", "localhost")
+
+async def _verify_api_key(
+    request: Request,
+    key: str | None = Security(_API_KEY_HEADER),
+) -> None:
+    peer = request.client.host if request.client else ""
+    if peer in _LOCAL_PEERS:
         return
-    if key != _CEREBRO_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or missing API key"
-        )
+    current_key = auth_state.api_key
+    if not current_key:
+        return
+    if not key or not hmac.compare_digest(key, current_key):
+        logger.warning(f"Auth failure from {peer}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
 
 
 async def _start_component_in_background(name: str, starter) -> None:
@@ -504,12 +625,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Cerebro API", version="1.0.0", lifespan=lifespan, dependencies=[Depends(_verify_api_key)]
 )
+ALLOWED_ORIGINS = [
+    "tauri://localhost",
+    "https://tauri.localhost",
+]
+
+if os.environ.get("CEREBRO_DEV"):
+    ALLOWED_ORIGINS.extend([
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+    ])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "X-Cerebro-Key"],
 )
+app.add_middleware(RateLimitMiddleware, default_rpm=60)
+
 api = APIRouter(prefix="/api")
 
 
@@ -664,6 +799,48 @@ async def quick_note_endpoint(req: QuickNoteRequest) -> dict[str, str]:
     path.write_text(content)
     logger.info("Quick note saved to {}", path)
     return {"status": "ok", "path": str(path)}
+
+
+@api.post("/folder/analyze", response_model=FolderAnalyzeResponse)
+async def analyze_folder_endpoint(req: FolderAnalyzeRequest) -> FolderAnalyzeResponse:
+    authorized = app_state.authorized_read_paths or []
+    indexed: dict[str, float] = {}
+    if app_state.vector_store is not None:
+        try:
+            indexed = app_state.vector_store.get_indexed_files()
+        except Exception:
+            logger.warning("Could not get indexed files for folder analysis")
+    try:
+        result = analyze_folder(
+            req.path,
+            authorized,
+            max_depth=req.max_depth,
+            indexed_files=indexed,
+        )
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(e))
+    except PathNotAuthorizedError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail=str(e))
+
+    largest_files = [
+        FolderFileEntry(path=f["path"], size_bytes=f["size_bytes"], modified=f["modified"])
+        for f in result.largest_files
+    ]
+
+    return FolderAnalyzeResponse(
+        path=result.path,
+        total_files=result.total_files,
+        total_dirs=result.total_dirs,
+        total_size_mb=round(result.total_size_bytes / (1024 * 1024), 2),
+        by_extension=result.by_extension,
+        largest_files=largest_files,
+        tree_preview=result.tree_preview,
+        indexed_count=result.indexed_files,
+        indexed_sample=result.indexed_paths,
+        warnings=result.warnings,
+    )
 
 
 def _build_metadata(
@@ -1315,6 +1492,188 @@ async def delete_document_endpoint(source_path: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# ── Agent memory (long-term episodic store) ─────────────────────────────────
+
+
+def _memory_agent_id(agent_id: str | None) -> str:
+    return agent_id or app_state.active_agent_id or GENERAL_AGENT_ID
+
+
+def _memory_long_term(agent_id: str | None = None) -> Any:
+    from core.memory.long_term import LongTermStore
+
+    if app_state.vector_store is None or app_state.embedding_provider is None:
+        raise HTTPException(status_code=503, detail="Memory store not available")
+    aid = _memory_agent_id(agent_id)
+    return LongTermStore(
+        vector_store=app_state.vector_store,
+        agent_id=aid,
+        embed=app_state.embedding_provider,
+    )
+
+
+_CHARS_PER_TOKEN = 4
+_CONTEXT_TOKEN_BUDGET = 3500
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // _CHARS_PER_TOKEN)
+
+
+def _last_consolidation_ts(chunks: list[Any]) -> float | None:
+    from core.memory.long_term import infer_episode_ui_source
+
+    candidates = [
+        c.created_at
+        for c in chunks
+        if infer_episode_ui_source(c) == "consolidation"
+    ]
+    return max(candidates) if candidates else None
+
+
+def _memory_browser_stats(episode_count: int) -> MemoryBrowserStatsModel:
+    stats = app_state.metrics.get_stats()
+    queries_with_recall = stats.queries_total if stats.memory_hits > 0 else 0
+    context_pct = 0
+    if app_state.state_store is not None:
+        agent_state = app_state.state_store.load(_memory_agent_id(None))
+        wm_text = " ".join(str(v) for v in agent_state.working_memory.values())
+        used = _estimate_tokens(agent_state.session_summary) + _estimate_tokens(wm_text)
+        context_pct = min(100, int((used / _CONTEXT_TOKEN_BUDGET) * 100))
+    return MemoryBrowserStatsModel(
+        episodes_stored=episode_count,
+        recall_hits_session=stats.memory_hits,
+        queries_with_recall=queries_with_recall,
+        context_memory_pct=context_pct,
+    )
+
+
+@api.get("/memory/episodes", response_model=MemoryEpisodesResponse)
+async def list_memory_episodes(
+    agent_id: str | None = None,
+    limit: int = 100,
+) -> MemoryEpisodesResponse:
+    from core.memory.long_term import chunk_to_episode_dict
+
+    store = _memory_long_term(agent_id)
+    aid = _memory_agent_id(agent_id)
+    all_chunks = store.get_agent_episodes(aid, limit=5000)
+    capped = all_chunks[: max(1, min(limit, 500))]
+    episodes = [MemoryEpisodeModel(**chunk_to_episode_dict(c)) for c in capped]
+    return MemoryEpisodesResponse(
+        episodes=episodes,
+        stats=_memory_browser_stats(len(all_chunks)),
+    )
+
+
+@api.get("/memory/session", response_model=MemorySessionResponse)
+async def get_memory_session(agent_id: str | None = None) -> MemorySessionResponse:
+    aid = _memory_agent_id(agent_id)
+    session_summary = ""
+    working_memory: dict[str, str] = {}
+    if app_state.state_store is not None:
+        agent_state = app_state.state_store.load(aid)
+        session_summary = agent_state.session_summary
+        working_memory = {str(k): str(v) for k, v in agent_state.working_memory.items()}
+
+    messages_in_short_term = 0
+    if app_state.short_term is not None:
+        messages_in_short_term = len(app_state.short_term.get_context().active_messages)
+
+    last_consolidation_at: float | None = None
+    try:
+        store = _memory_long_term(agent_id)
+        chunks = store.get_agent_episodes(aid, limit=500)
+        last_consolidation_at = _last_consolidation_ts(chunks)
+    except HTTPException:
+        pass
+
+    return MemorySessionResponse(
+        session_summary=session_summary,
+        working_memory=working_memory,
+        last_consolidation_at=last_consolidation_at,
+        messages_in_short_term=messages_in_short_term,
+    )
+
+
+@api.post("/memory/episodes", response_model=MemoryEpisodeModel)
+async def create_memory_episode(body: MemoryEpisodeCreateRequest) -> MemoryEpisodeModel:
+    from core.memory.long_term import _row_to_chunk, chunk_to_episode_dict
+
+    store = _memory_long_term(body.agent_id)
+    tags = list(body.tags) if body.tags else ["manual"]
+    if "manual" not in tags:
+        tags.append("manual")
+    episode_id = await store.store_episode(body.content.strip(), tags, source="manual")
+    row = store._find_row(episode_id, _memory_agent_id(body.agent_id))
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to read created episode")
+    return MemoryEpisodeModel(**chunk_to_episode_dict(_row_to_chunk(row)))
+
+
+@api.delete("/memory/episodes/{episode_id}")
+async def delete_memory_episode(
+    episode_id: str,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    store = _memory_long_term(agent_id)
+    deleted = await store.delete_episode(episode_id, _memory_agent_id(agent_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    return {"deleted": True, "id": episode_id}
+
+
+@api.patch("/memory/episodes/{episode_id}", response_model=MemoryEpisodeModel)
+async def patch_memory_episode(
+    episode_id: str,
+    body: MemoryEpisodePatchRequest,
+) -> MemoryEpisodeModel:
+    from core.memory.long_term import _row_to_chunk, chunk_to_episode_dict
+
+    store = _memory_long_term(body.agent_id)
+    aid = _memory_agent_id(body.agent_id)
+    if body.content is not None or body.tags is not None:
+        ok = await store.update_episode(
+            episode_id,
+            content=body.content,
+            tags=body.tags,
+            agent_id=aid,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Episode not found")
+    if body.pinned is not None:
+        ok = await store.set_episode_pinned(episode_id, body.pinned, aid)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Episode not found")
+    row = store._find_row(episode_id, aid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    return MemoryEpisodeModel(**chunk_to_episode_dict(_row_to_chunk(row)))
+
+
+@api.post("/memory/recall", response_model=MemoryRecallResponse)
+async def recall_memory(body: MemoryRecallRequest) -> MemoryRecallResponse:
+    from core.memory.long_term import RetrievalContext, chunk_to_episode_dict
+
+    store = _memory_long_term(body.agent_id)
+    ctx = RetrievalContext(
+        query=body.query,
+        task_tags=[],
+        date_range=None,
+        source_filter=[],
+        min_confidence=body.min_confidence,
+    )
+    chunks = await store.search(body.query, ctx)
+    results = [
+        MemoryRecallResultModel(
+            episode=MemoryEpisodeModel(**chunk_to_episode_dict(c)),
+            relevance_score=c.score,
+        )
+        for c in chunks
+    ]
+    return MemoryRecallResponse(results=results)
+
+
 @api.get("/health", response_model=HealthResponse)
 async def health_endpoint() -> HealthResponse:
     if app_state.llama_health_monitor is None:
@@ -1342,6 +1701,81 @@ async def engine_activity_endpoint() -> dict:
             else "unknown"
         )
     }
+
+
+def _bind_engine_suspender_if_running() -> None:
+    from core.inference.engine_manager import listen_pids
+
+    suspender = getattr(app_state, "engine_suspender", None)
+    if suspender is None:
+        return
+    pids = listen_pids(8080)
+    if not pids:
+        return
+    try:
+        suspender.bind_pid(pids[0])
+        suspender.start_background()
+    except Exception as exc:
+        logger.warning("EngineSuspender rebind after engine start failed: {}", exc)
+
+
+@api.get("/engine/status", response_model=EngineStatusResponse)
+async def engine_status_endpoint() -> EngineStatusResponse:
+    from core.inference.engine_manager import get_status
+
+    status = get_status(
+        config=app_state._config,
+        health_monitor=app_state.llama_health_monitor,
+    )
+    return EngineStatusResponse(
+        desired=status.desired,
+        running=status.running,
+        model=status.model,
+        llama_server=status.llama_server,
+        embed_running=status.embed_running,
+    )
+
+
+@api.post("/engine/start", response_model=EngineStatusResponse)
+async def engine_start_endpoint() -> EngineStatusResponse:
+    backend = os.getenv("CEREBRO_INFERENCE_BACKEND", "llamacpp").lower()
+    if backend != "llamacpp":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Local engine control is not available for inference backend '{backend}'",
+        )
+
+    from core.inference.engine_manager import start_engine_sync
+
+    status = await asyncio.to_thread(
+        start_engine_sync,
+        config=app_state._config,
+    )
+    if not status.running:
+        raise HTTPException(status_code=503, detail="Engine failed to become healthy")
+
+    _bind_engine_suspender_if_running()
+    return EngineStatusResponse(
+        desired=status.desired,
+        running=status.running,
+        model=status.model,
+        llama_server=status.llama_server,
+        embed_running=status.embed_running,
+    )
+
+
+@api.post("/engine/stop", response_model=EngineStatusResponse)
+async def engine_stop_endpoint() -> EngineStatusResponse:
+    from core.inference.engine_manager import stop_engine_sync
+
+    status = await asyncio.to_thread(stop_engine_sync, config=app_state._config)
+    return EngineStatusResponse(
+        desired=status.desired,
+        running=status.running,
+        model=status.model,
+        llama_server=status.llama_server,
+        embed_running=status.embed_running,
+    )
 
 
 @api.get("/status", response_model=StatusResponse)
@@ -1467,8 +1901,48 @@ async def list_conversations() -> list[ConversationSummary]:
                 last_active=r.last_active,
                 message_count=len(r.turns),
                 first_user_message=first_user_msg[:120],
+                pinned=r.pinned,
             )
         )
+    return result
+
+
+@api.get("/conversations/search", response_model=list[ConversationSummary])
+async def search_conversations(q: str = "") -> list[ConversationSummary]:
+    if not q.strip():
+        return await list_conversations()
+    records = app_state.conv_store.list_all()
+    query_lower = q.lower()
+    result: list[ConversationSummary] = []
+    for r in records:
+        first_user_msg = next((t.content for t in r.turns if t.role == "user"), "")
+        if query_lower in first_user_msg.lower():
+            result.append(
+                ConversationSummary(
+                    conv_id=r.conv_id,
+                    agent_id=r.agent_id,
+                    started_at=r.started_at,
+                    last_active=r.last_active,
+                    message_count=len(r.turns),
+                    first_user_message=first_user_msg[:120],
+                    pinned=r.pinned,
+                )
+            )
+            continue
+        for t in r.turns:
+            if query_lower in t.content.lower():
+                result.append(
+                    ConversationSummary(
+                        conv_id=r.conv_id,
+                        agent_id=r.agent_id,
+                        started_at=r.started_at,
+                        last_active=r.last_active,
+                        message_count=len(r.turns),
+                        first_user_message=first_user_msg[:120],
+                        pinned=r.pinned,
+                    )
+                )
+                break
     return result
 
 
@@ -1499,7 +1973,53 @@ async def get_conversation(conv_id: str) -> ConversationDetail:
         started_at=record.started_at,
         last_active=record.last_active,
         messages=messages,
+        pinned=record.pinned,
     )
+
+
+@api.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str) -> dict[str, bool]:
+    deleted = app_state.conv_store.delete(conv_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Conversation '{conv_id}' not found")
+    return {"deleted": True}
+
+
+class BatchDeleteRequest(BaseModel):
+    ids: list[str]
+
+
+class BatchPinRequest(BaseModel):
+    ids: list[str]
+    pinned: bool
+
+
+@api.post("/conversations/batch-delete")
+async def batch_delete_conversations(body: BatchDeleteRequest) -> dict[str, int]:
+    deleted = 0
+    for conv_id in body.ids:
+        if app_state.conv_store.delete(conv_id):
+            deleted += 1
+    return {"deleted": deleted}
+
+
+@api.post("/conversations/batch-pin")
+async def batch_pin_conversations(body: BatchPinRequest) -> dict[str, int]:
+    updated = 0
+    for conv_id in body.ids:
+        if app_state.conv_store.set_pinned(conv_id, body.pinned):
+            updated += 1
+    return {"updated": updated}
+
+
+@api.patch("/conversations/{conv_id}")
+async def patch_conversation(conv_id: str, body: dict) -> dict[str, bool]:
+    pinned = body.get("pinned")
+    if pinned is not None:
+        ok = app_state.conv_store.set_pinned(conv_id, bool(pinned))
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Conversation '{conv_id}' not found")
+    return {"ok": True}
 
 
 def _fleet_hardware_payload(hw: Any) -> dict[str, Any]:
@@ -1608,30 +2128,83 @@ async def fleet_config(req: FleetModeRequest) -> dict[str, Any]:
     return app_state._config
 
 
+class ConfigUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str | None = Field(None, min_length=1, max_length=256)
+    inference_backend: str | None = None
+    locale: str | None = Field(None, pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
+    profile: str | None = Field(None, min_length=1, max_length=64)
+    watched_folders: list[str] | None = None
+    proactive_context: bool | None = None
+
+    @field_validator("watched_folders")
+    @classmethod
+    def validate_paths(cls, v):
+        if v:
+            home = Path.home()
+            for p in v:
+                resolved = Path(p).resolve()
+                if not resolved.is_relative_to(home):
+                    raise ValueError(f"Path {p} is outside home directory")
+        return v
+
+    @field_validator("profile")
+    @classmethod
+    def validate_profile(cls, v):
+        if v:
+            import re as _re
+            if not _re.match(r'^[a-zA-Z0-9_-]+$', v):
+                raise ValueError("Profile must be alphanumeric (plus hyphens/underscores)")
+        return v
+
+
 @api.get("/config")
 async def get_config() -> dict[str, Any]:
     cfg = dict(app_state._config)
+    cfg.setdefault("locale", os.getenv("CEREBRO_LOCALE", "en"))
     cfg["claude_has_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    cfg["low_power_available"] = low_power_mode_enabled()
+    if not low_power_mode_enabled():
+        cfg["profile"] = "normal"
     return cfg
 
 
 @api.patch("/config")
-async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    app_state._config.update(settings)
+async def patch_config(settings: ConfigUpdateRequest = Body(...)) -> dict[str, Any]:
+    patch = settings.model_dump(exclude_none=True)
+    if not low_power_mode_enabled() and patch.get("profile") == "low-power":
+        raise HTTPException(
+            status_code=400,
+            detail="Low Power mode is in development and not available yet. Use profile 'normal'.",
+        )
+    # Save previous model BEFORE _config.update() overwrites it
+    prev_model = app_state._config.get("model") if "model" in patch else None
+    app_state._config.update(patch)
 
     # Determine profile and args_file before model switch
     profile_args_file: str | None = None
-    if "profile" in settings:
-        profile_name = settings["profile"]
+    if "profile" in patch:
+        profile_name = patch["profile"]
         profile_args_map = {
             "normal": "config/chat.args",
             "low-power": "config/chat-lowpower.args",
         }
         profile_args_file = profile_args_map.get(profile_name, "config/chat.args")
         app_state._config["profile"] = profile_name
+        # Persist profile to desktop.json so launcher uses correct args file
+        try:
+            _desktop_cfg_path = Path.home() / ".cerebro" / "desktop.json"
+            if _desktop_cfg_path.is_file():
+                _dcfg = json.loads(_desktop_cfg_path.read_text())
+                _dcfg["profile"] = profile_name
+                _desktop_cfg_path.write_text(json.dumps(_dcfg, indent=2))
+                logger.info("Persisted profile='{}' to desktop.json", profile_name)
+        except Exception:
+            logger.warning("Failed to persist profile to desktop.json")
 
-    if "model" in settings and app_state.provider_registry is not None:
-        model_name: str = settings["model"]
+    if "model" in patch and app_state.provider_registry is not None:
+        model_name: str = patch["model"]
         registry = app_state.provider_registry
 
         target = "llamacpp"
@@ -1645,23 +2218,29 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
         registry.set_primary(target)
 
         # Hot-switch the running llama-server to the selected model
-        prev_model = app_state._config.get("model")
         if target == "llamacpp" and app_state.model_manager is None and model_name != prev_model:
             try:
-                await _switch_llamacpp_model(model_name, profile_args_file or "config/chat.args")
+                await _switch_llamacpp_model(model_name, profile_args_file or "config/chat.args", app_state._config.get("profile", "normal"))
             except Exception:
                 logger.exception("Failed to hot-switch model")
 
     # If only profile changed (no model switch), restart with the new args
-    if "profile" in settings and "model" not in settings and profile_args_file:
+    if "profile" in patch and "model" not in patch and profile_args_file:
         try:
-            current_model = app_state._config.get("model", "")
-            await _switch_llamacpp_model(current_model, profile_args_file)
+            # Determine the correct model for the new profile
+            profile_name = patch["profile"]
+            if profile_name == "low-power":
+                # Use the low-power model from config
+                new_model = app_state._config.get("model", "qwen2.5-0.5b-instruct-q5_k_m.gguf")
+            else:
+                # Use the default model for normal profile
+                new_model = "Qwen3.5-2B-UD-Q4_K_XL.gguf"
+            await _switch_llamacpp_model(new_model, profile_args_file, profile_name)
         except Exception:
             logger.exception("Failed to restart engine with new profile")
 
-    if "inference_backend" in settings and app_state.provider_registry is not None:
-        backend: str = settings["inference_backend"]
+    if "inference_backend" in patch and app_state.provider_registry is not None:
+        backend: str = patch["inference_backend"]
         registry = app_state.provider_registry
         if backend in registry.available_providers():
             registry.set_primary(backend)
@@ -1683,8 +2262,8 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 registry.available_providers(),
             )
 
-    if "anthropic_api_key" in settings:
-        key: str = settings.pop("anthropic_api_key")
+    if "anthropic_api_key" in patch:
+        key: str = patch.pop("anthropic_api_key")
         os.environ["ANTHROPIC_API_KEY"] = key
         if (
             app_state.provider_registry is not None
@@ -1696,15 +2275,20 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
                 logger.exception("Failed to update Claude provider API key")
         _save_secret("ANTHROPIC_API_KEY", key)
         app_state._config["claude_has_key"] = True
-        settings.pop("claude_has_key", None)
+        patch.pop("claude_has_key", None)
 
-    if "watched_folders" in settings and app_state.runtime is not None:
+    if "locale" in patch:
+        os.environ["CEREBRO_LOCALE"] = str(patch["locale"])
+        if app_state.enricher:
+            app_state.enricher.language = str(patch["locale"])
+
+    if "watched_folders" in patch and app_state.runtime is not None:
         from functools import partial
 
         from core.tools.handlers.filesystem import list_directory, read_file, search_files
 
         startup_reads = list(app_state.authorized_read_paths or [])
-        merged_reads = list(dict.fromkeys(startup_reads + list(settings["watched_folders"])))
+        merged_reads = list(dict.fromkeys(startup_reads + list(patch["watched_folders"])))
         app_state.authorized_read_paths = merged_reads
         tr = app_state.runtime._tool_registry
         if "read_file" in tr:
@@ -1715,7 +2299,52 @@ async def patch_config(settings: dict[str, Any] = Body(...)) -> dict[str, Any]:
             tr["search_files"] = partial(search_files, authorized_paths=merged_reads)
 
     app_state._save_config()
-    return app_state._config
+    out = dict(app_state._config)
+    out["low_power_available"] = low_power_mode_enabled()
+    if not low_power_mode_enabled():
+        out["profile"] = "normal"
+    return out
+
+
+class SetSecretRequest(BaseModel):
+    key: str = Field(..., pattern=r"^(ANTHROPIC_API_KEY|TAVILY_API_KEY|CEREBRO_GITHUB_TOKEN)$")
+    value: SecretStr
+
+
+@api.post("/secrets")
+async def set_secret(req: SetSecretRequest) -> dict[str, str]:
+    if app_state.secrets_mgr is not None:
+        app_state.secrets_mgr.set(req.key, req.value.get_secret_value())
+    else:
+        _save_secret(req.key, req.value.get_secret_value())
+    return {"status": "ok"}
+
+
+@api.delete("/secrets/{key}")
+async def delete_secret(key: str) -> dict[str, str]:
+    if app_state.secrets_mgr is not None:
+        app_state.secrets_mgr.delete(key.upper())
+    else:
+        try:
+            _SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            secrets = _load_secrets()
+            secrets.pop(key.upper(), None)
+            _SECRETS_PATH.write_text(json.dumps(secrets, indent=2))
+            os.chmod(str(_SECRETS_PATH), 0o600)
+        except Exception:
+            logger.warning("Failed to delete secret {}", key)
+    return {"status": "ok"}
+
+
+@api.post("/secrets/rotate")
+async def rotate_secret(request: Request) -> dict[str, str]:
+    import secrets as _secrets
+    new_key = f"ck_{_secrets.token_urlsafe(32)}"
+    _save_secret("CEREBRO_API_KEY", new_key)
+    if app_state.secrets_mgr is not None:
+        app_state.secrets_mgr.set("CEREBRO_API_KEY", new_key)
+    auth_state.api_key = new_key
+    return {"status": "ok", "key_preview": new_key[:8] + "..."}
 
 
 @api.get("/models")
@@ -1873,11 +2502,165 @@ app.include_router(debug)
 wf = APIRouter(prefix="/api/workflows")
 
 
+class WorkflowStopBody(BaseModel):
+    name: str | None = None
+
+
+class WorkflowPatchBody(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    steps: list[dict[str, Any]] | None = None
+    applescript: str | None = None
+
+
+class WorkflowRunBody(BaseModel):
+    params: dict[str, str] = Field(default_factory=dict)
+    dry_run: bool = False
+
+
+class WorkflowInstallRecipeBody(BaseModel):
+    template_id: str
+    name: str | None = None
+
+
+class WorkflowFromConversationBody(BaseModel):
+    conversation_id: str
+    turn_index: int
+    name: str | None = None
+
+
+class WorkflowImportBody(BaseModel):
+    export: dict[str, Any]
+
+
+def _chat_provider_getter() -> Any:
+    if app_state.provider_registry is None:
+        return None
+    return app_state.provider_registry.get_chat()
+
+
 @wf.get("", response_model=list[dict])
 async def workflow_list():
     if app_state.workflow_store is None:
         return []
     return app_state.workflow_store.list_all()
+
+
+@wf.post("/record/start")
+async def workflow_record_start():
+    from core.automation.service import (
+        RecordingConflictError,
+        RecordingUnavailableError,
+        start_recording,
+    )
+
+    try:
+        return start_recording(app_state.recorder)
+    except RecordingUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=exc.error_key) from exc
+    except RecordingConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@wf.get("/record/status")
+async def workflow_record_status():
+    from core.automation.service import get_recording_status
+
+    return get_recording_status(app_state.recorder)
+
+
+@wf.post("/record/stop")
+async def workflow_record_stop(body: WorkflowStopBody | None = None):
+    from core.automation.generalizer import GeneralizationError
+    from core.automation.service import (
+        RecordingConflictError,
+        RecordingUnavailableError,
+        TooFewEventsError,
+        stop_and_create_workflow,
+    )
+
+    try:
+        return await stop_and_create_workflow(
+            app_state.recorder,
+            app_state.workflow_store,
+            _chat_provider_getter,
+            name=body.name if body else None,
+        )
+    except RecordingUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=exc.error_key) from exc
+    except RecordingConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except TooFewEventsError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error_key": "workflows.error.too_few_events", "count": exc.count},
+        ) from exc
+    except GeneralizationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@wf.post("/record/cancel")
+async def workflow_record_cancel():
+    from core.automation.service import RecordingConflictError, RecordingUnavailableError, cancel_recording
+
+    try:
+        return cancel_recording(app_state.recorder)
+    except RecordingUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=exc.error_key) from exc
+    except RecordingConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@wf.get("/recipes/templates")
+async def workflow_recipe_templates():
+    from core.automation.recipes import list_templates
+
+    return list_templates()
+
+
+@wf.post("/recipes")
+async def workflow_install_recipe(body: WorkflowInstallRecipeBody):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    from core.automation.recipes import install_template
+
+    wf = install_template(app_state.workflow_store, body.template_id, name=body.name)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Recipe template not found")
+    return wf
+
+
+@wf.post("/from-conversation")
+async def workflow_from_conversation(body: WorkflowFromConversationBody):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    from core.automation.from_conversation import create_recipe_from_conversation
+
+    try:
+        return create_recipe_from_conversation(
+            app_state.conv_store,
+            app_state.workflow_store,
+            body.conversation_id,
+            body.turn_index,
+            name=body.name,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (IndexError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@wf.post("/import")
+async def workflow_import(body: WorkflowImportBody):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    from core.automation.from_conversation import import_workflow_from_export
+
+    try:
+        return import_workflow_from_export(app_state.workflow_store, body.export)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @wf.get("/{wf_id}", response_model=dict | None)
@@ -1890,6 +2673,36 @@ async def workflow_get(wf_id: str):
     return w
 
 
+@wf.patch("/{wf_id}")
+async def workflow_patch(wf_id: str, body: WorkflowPatchBody):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    w = app_state.workflow_store.get(wf_id)
+    if w is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    ok = app_state.workflow_store.update(
+        wf_id,
+        name=body.name,
+        description=body.description,
+        tags=body.tags,
+        steps=body.steps,
+        applescript=body.applescript,
+    )
+    if (
+        not ok
+        and body.name is None
+        and body.description is None
+        and body.tags is None
+        and body.steps is None
+        and body.applescript is None
+    ):
+        raise HTTPException(status_code=400, detail="No fields to update")
+    updated = app_state.workflow_store.get(wf_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return updated
+
+
 @wf.delete("/{wf_id}")
 async def workflow_delete(wf_id: str):
     if app_state.workflow_store is None:
@@ -1900,15 +2713,37 @@ async def workflow_delete(wf_id: str):
     return {"deleted": True}
 
 
-@wf.post("/{wf_id}/run")
-async def workflow_run(wf_id: str):
+@wf.get("/{wf_id}/export")
+async def workflow_export(wf_id: str):
     if app_state.workflow_store is None:
         raise HTTPException(status_code=404, detail="Workflow store not available")
-    from core.automation.tools import make_run_workflow
+    from core.automation.from_conversation import workflow_to_export_dict
 
-    handler = make_run_workflow(app_state.workflow_store)
-    result = await handler(workflow_id=wf_id)
-    return {"result": result}
+    wf = app_state.workflow_store.get(wf_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return workflow_to_export_dict(wf)
+
+
+@wf.get("/{wf_id}/runs")
+async def workflow_list_runs(wf_id: str, limit: int = 20):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    wf = app_state.workflow_store.get(wf_id)
+    if wf is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return app_state.workflow_store.list_runs(wf_id, limit=limit)
+
+
+@wf.post("/{wf_id}/run")
+async def workflow_run(wf_id: str, body: WorkflowRunBody | None = None):
+    if app_state.workflow_store is None:
+        raise HTTPException(status_code=404, detail="Workflow store not available")
+    from core.automation.service import run_workflow
+
+    params = body.params if body else {}
+    dry_run = body.dry_run if body else False
+    return await run_workflow(app_state.workflow_store, wf_id, params, dry_run=dry_run)
 
 
 app.include_router(wf)
@@ -1950,7 +2785,20 @@ def _find_all_gguf() -> list[dict[str, Any]]:
     return models
 
 
-def _kill_process_on_port(port: int) -> bool:
+def _port_in_use(port: int) -> bool:
+    try:
+        result = subprocess.run(
+            ["lsof", "-t", "-i", f":{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0 and result.stdout.strip() != ""
+    except Exception:
+        return False
+
+
+def _kill_process_on_port(port: int, force: bool = False) -> bool:
     try:
         result = subprocess.run(
             ["lsof", "-t", "-i", f":{port}", "-sTCP:LISTEN"],
@@ -1959,8 +2807,9 @@ def _kill_process_on_port(port: int) -> bool:
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
+            sig = signal.SIGKILL if force else signal.SIGTERM
             for pid in result.stdout.strip().split("\n"):
-                os.kill(int(pid), signal.SIGTERM)
+                os.kill(int(pid), sig)
             return True
     except Exception:
         pass
@@ -1973,19 +2822,24 @@ def _find_mmproj(models_dir: Path) -> Path | None:
     return None
 
 
-def _update_args_mmproj(args_file: Path) -> None:
-    content = args_file.read_text()
+def _update_args_mmproj(args_file: Path, model_name: str = "") -> None:
+    from core.inference.providers.llamacpp_provider import _VISION_MODEL_RE
+
+    content = args_file.read_text().strip()
     # Remove any existing --mmproj line
-    content = re.sub(r"^--mmproj\s+.*$\n?", "", content, flags=re.MULTILINE)
-    mmproj_path = _find_mmproj(_LLAMA_CPP_MODELS_DIR)
-    if mmproj_path is not None:
-        root = _LLAMA_CPP_MODELS_DIR.parent.parent
-        rel = mmproj_path.relative_to(root)
-        content += f"--mmproj {rel}\n"
-    args_file.write_text(content)
+    content = re.sub(r"^--mmproj\s+.*$", "", content, flags=re.MULTILINE)
+    content = content.strip()
+    # Only add --mmproj if the model is vision-capable (avoids Metal crash on some versions)
+    if model_name and _VISION_MODEL_RE.search(model_name):
+        mmproj_path = _find_mmproj(_LLAMA_CPP_MODELS_DIR)
+        if mmproj_path is not None:
+            root = _LLAMA_CPP_MODELS_DIR.parent.parent
+            rel = mmproj_path.relative_to(root)
+            content += f"\n--mmproj {rel}"
+    args_file.write_text(content + "\n")
 
 
-async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.args") -> None:
+async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.args", profile: str = "normal") -> None:
     root = _LLAMA_CPP_MODELS_DIR.parent.parent
 
     model_path: Path | None = None
@@ -2001,26 +2855,39 @@ async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.
     rel_path = model_path.relative_to(root)
 
     template_path = root / args_file
-    output_path = root / "config" / "chat.args"
+    output_path = root / args_file  # Write to the same file, not always chat.args
     if template_path.is_file():
         content = template_path.read_text()
+        # Strip comments — llama-server $(cat) would choke on them
+        content = re.sub(r"#.*$", "", content, flags=re.MULTILINE)
+        content = re.sub(r"\n\s*\n", "\n", content).strip()
+        # Ensure each flag is on its own line
+        content = re.sub(r"(?<=[^\n])--", r"\n--", content).strip()
         content = re.sub(
             r"^--model\s+.*$",
             f"--model {rel_path}",
             content,
             flags=re.MULTILINE,
         )
-        output_path.write_text(content)
-        _update_args_mmproj(output_path)
+        output_path.write_text(content + "\n")
+        _update_args_mmproj(output_path, model_name)
 
     killed = _kill_process_on_port(8080)
     if killed:
-        await asyncio.sleep(1)
+        # Wait until port 8080 is actually free (old process may linger after SIGTERM)
+        for _ in range(15):
+            if not _port_in_use(8080):
+                break
+            await asyncio.sleep(1)
+        else:
+            logger.warning("Port 8080 still occupied after 15s — force killing")
+            _kill_process_on_port(8080, force=True)
 
     engine_script = root / "bin" / "start_engine.sh"
     if engine_script.is_file():
+        engine_profile = "chat-lowpower" if profile == "low-power" else "chat"
         subprocess.Popen(
-            ["bash", str(engine_script), "chat"],
+            ["bash", str(engine_script), engine_profile],
             cwd=root,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -2032,13 +2899,13 @@ async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.
             try:
                 r = await client.get(f"{_LLAMA_CPP_BASE}/health")
                 if r.status_code == 200:
-                    logger.info("llama-server is healthy after model switch to {}", model_name)
+                    logger.info("llama-server is healthy after model switch to {} (profile: {})", model_name, profile)
                     return
             except Exception:
                 pass
             await asyncio.sleep(2)
         logger.error(
-            "llama-server did not become healthy within 60s after switching to {}", model_name
+            "llama-server did not become healthy within 60s after switching to {} (profile: {})", model_name, profile
         )
 
 

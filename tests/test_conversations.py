@@ -22,9 +22,11 @@ def reset_state(tmp_path):
     app_state.runtime = None
     app_state.vector_store = None
     app_state.provider_registry = None
+    app_state.router = MagicMock()
     app_state.active_agent_id = "general-v1"
     app_state.metrics = MetricsCollector()
     app_state._config = {}
+    app_state._pending_tools = {}
     app_state.conv_store = ConversationStore(str(tmp_path))
     yield
     app_state.runtime = None
@@ -38,10 +40,12 @@ def client():
 
 @pytest.fixture
 def mock_runtime():
-    rt = AsyncMock()
-    rt.run.return_value = (
-        "Test answer.",
-        MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None),
+    rt = MagicMock()
+    rt.run = AsyncMock(
+        return_value=(
+            "Test answer.",
+            MagicMock(tool_trace=[], pending_tool_name=None, pending_tool_args=None),
+        )
     )
     app_state.runtime = rt
     return rt
@@ -209,3 +213,83 @@ async def test_get_conversation_messages_have_role_content_timestamp(client, moc
         assert "role" in msg
         assert "content" in msg
         assert "timestamp" in msg
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DELETE /api/conversations/{conv_id}
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation(client, mock_runtime):
+    async with client as c:
+        q_resp = await c.post("/api/query", json={"question": "delete me"})
+        conv_id = q_resp.json()["conversation_id"]
+        resp = await c.delete(f"/api/conversations/{conv_id}")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_removes_from_list(client, mock_runtime):
+    async with client as c:
+        q_resp = await c.post("/api/query", json={"question": "delete me too"})
+        conv_id = q_resp.json()["conversation_id"]
+        await c.delete(f"/api/conversations/{conv_id}")
+        list_resp = await c.get("/api/conversations")
+    assert list_resp.status_code == 200
+    ids = [c["conv_id"] for c in list_resp.json()]
+    assert conv_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_delete_unknown_conversation_returns_404(client):
+    async with client as c:
+        resp = await c.delete("/api/conversations/nonexistent-id")
+    assert resp.status_code == 404
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GET /api/conversations/search?q=...
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_search_conversations_empty_query_returns_all(client, mock_runtime):
+    async with client as c:
+        await c.post("/api/query", json={"question": "alpha"})
+        await c.post("/api/query", json={"question": "beta"})
+        resp = await c.get("/api/conversations/search?q=")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_conversations_finds_by_question(client, mock_runtime):
+    async with client as c:
+        await c.post("/api/query", json={"question": "how do I write Python?"})
+        await c.post("/api/query", json={"question": "what is Rust?"})
+        resp = await c.get("/api/conversations/search?q=python")
+    assert resp.status_code == 200
+    results = resp.json()
+    assert len(results) >= 1
+    assert "python" in results[0]["first_user_message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_search_conversations_finds_by_answer(client, mock_runtime):
+    async with client as c:
+        await c.post("/api/query", json={"question": "tell me about cats"})
+        resp = await c.get("/api/conversations/search?q=Test+answer")
+    assert resp.status_code == 200
+    results = resp.json()
+    assert len(results) >= 1
+
+
+@pytest.mark.asyncio
+async def test_search_conversations_no_match_returns_empty(client, mock_runtime):
+    async with client as c:
+        await c.post("/api/query", json={"question": "unique question"})
+        resp = await c.get("/api/conversations/search?q=zzzzzznotfound")
+    assert resp.status_code == 200
+    assert resp.json() == []

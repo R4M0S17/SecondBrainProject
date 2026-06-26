@@ -39,6 +39,7 @@ class ConversationRecord:
     last_active: str
     turns: list[ConversationTurn] = field(default_factory=list)
     session_summary: str = ""
+    pinned: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ def _record_to_dict(r: ConversationRecord) -> dict:
         "started_at": r.started_at,
         "last_active": r.last_active,
         "session_summary": r.session_summary,
+        "pinned": r.pinned,
         "turns": [
             {
                 "role": t.role,
@@ -72,6 +74,7 @@ def _record_from_dict(d: dict) -> ConversationRecord:
         started_at=d.get("started_at", ""),
         last_active=d.get("last_active", ""),
         session_summary=d.get("session_summary", ""),
+        pinned=d.get("pinned", False),
         turns=[
             ConversationTurn(
                 role=t["role"],
@@ -140,6 +143,14 @@ class ConversationStore:
             logger.warning("Corrupted conversation {}: {}", conv_id, exc)
             return None
 
+    def set_pinned(self, conv_id: str, pinned: bool) -> bool:
+        record = self.get(conv_id)
+        if record is None:
+            return False
+        record.pinned = pinned
+        self._write(record)
+        return True
+
     def update_session_summary(self, conv_id: str, summary: str) -> None:
         record = self.get(conv_id)
         if record is None:
@@ -155,6 +166,17 @@ class ConversationStore:
             except Exception:
                 logger.warning("Skipping unreadable conversation file: {}", p.name)
         return records
+
+    def delete(self, conv_id: str) -> bool:
+        path = self._path(conv_id)
+        if not path.exists():
+            return False
+        try:
+            path.unlink()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to delete conversation {}: {}", conv_id, exc)
+            return False
 
     def _write(self, record: ConversationRecord) -> None:
         path = self._path(record.conv_id)
