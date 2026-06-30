@@ -8,9 +8,11 @@ to the user.
 from __future__ import annotations
 
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -202,6 +204,56 @@ def _cg_callback(proxy: Any, event_type: int, event: Any, refcon: Any) -> Any:
     return event
 
 
+# --------------------------------------------------------------------------- #
+# Accessibility Permission Detection
+# --------------------------------------------------------------------------- #
+
+
+def check_accessibility_permission() -> bool:
+    """Check if current process has Accessibility permission on macOS.
+
+    Returns:
+        True if Accessibility permission is granted, False otherwise.
+    """
+    if not HAS_QUARTZ:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["tccutil", "dump"], capture_output=True, text=True, timeout=5, check=False
+        )
+
+        # Get current executable info
+        current_executable = sys.executable
+        executable_name = Path(current_executable).name
+
+        # Check if Accessibility appears and matches our executable
+        return "Accessibility" in result.stdout and (
+            executable_name in result.stdout
+            or current_executable in result.stdout
+            or "python" in result.stdout
+        )
+    except Exception as e:
+        logger.debug(f"Could not check accessibility permission: {e}")
+        return False
+
+
+def request_accessibility_permission() -> None:
+    """Open macOS System Preferences Accessibility panel."""
+    try:
+        subprocess.run(
+            [
+                "open",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ],
+            timeout=5,
+            check=False,
+        )
+        logger.info("Opened System Preferences Accessibility panel")
+    except Exception as e:
+        logger.error(f"Could not open System Preferences: {e}")
+
+
 class Recorder:
     """Captures macOS input events while recording is active.
 
@@ -221,6 +273,20 @@ class Recorder:
         self._thread: threading.Thread | None = None
         self._tap: Any = None
         self._lock = threading.Lock()
+        self._accessibility_check_done = False
+
+        # Proactively check accessibility permission on init
+        if HAS_QUARTZ and not check_accessibility_permission():
+            logger.error(
+                "❌ Accessibility permission not granted!\n"
+                "📍 To fix: System Settings → Privacy & Security → Accessibility\n"
+                "➕ Add Python to the list\n"
+                "🔄 Then restart the application"
+            )
+            request_accessibility_permission()
+            self._accessibility_check_done = False
+        else:
+            self._accessibility_check_done = True
 
     @property
     def is_recording(self) -> bool:
@@ -260,6 +326,14 @@ class Recorder:
             return
         if not HAS_QUARTZ:
             logger.warning("Desktop Recorder requires pyobjc (pip install pyobjc-framework-Quartz)")
+            return
+        if not check_accessibility_permission():
+            logger.warning(
+                "⚠️  Accessibility permission not granted. Cannot start recording.\n"
+                "Opening System Settings..."
+            )
+            request_accessibility_permission()
+            return
         self._events = []
         self._started_at = time.time()
         self._running = True

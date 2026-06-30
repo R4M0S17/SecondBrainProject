@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cerebro necesita acceso al micrófono para transcribir voz a texto localmente usando Whisper.</string>
+
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Cerebro necesita acceso a Accessibility para grabar tus acciones (clics, pulsaciones de teclas) y crear workflows automáticos. Esto es esencial para la función "Grabar rutina".</string>
+
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Cerebro necesita ejecutar comandos de AppleScript para automatizar tareas en tu Mac.</string>
+
+	<key>NSCalendarsUsageDescription</key>
+	<string>Cerebro necesita acceso a tu calendario para crear recordatorios y exportar eventos.</string>
+
+	<key>NSDocumentsUsageDescription</key>
+	<string>Cerebro necesita acceder a tus documentos para indexarlos y buscar en ellos.</string>
+
+	<key>NSDownloadsUsageDescription</key>
+	<string>Cerebro necesita acceso a tus descargas para procesar archivos.</string>
+</dict>
+</plist>
