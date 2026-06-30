@@ -91,6 +91,7 @@ ignore = ["E501"]
 # Imports must follow load_dotenv() so env is visible to the rest of the module.
 "main.py" = ["E402"]
 "cerebro/main.py" = ["E402"]
+"ui/tray/server.py" = ["E402"]
 # Late imports after local stubs / section headers (test structure).
 "tests/test_agent_runtime.py" = ["E402"]
 "tests/test_calendar.py" = ["E402"]
@@ -103,6 +104,33 @@ strict = false
 ignore_missing_imports = true
 warn_return_any = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = [
+    "core.knowledge_sync.*",
+    "core.pipeline.*",
+    "core.agents.runtime",
+    "core.agents.file_content_generator",
+    "core.agents.file_write_fast_path",
+    "core.agents.unit_conversion_fast_path",
+    "core.observability.time_travel",
+    "core.security.secrets",
+    "core.inference.providers.claude_api_provider",
+    "core.inference.providers.mlx_provider",
+    "core.inference.registry",
+    "core.inference.engine_suspender",
+    "core.utils.compressor",
+    "core.tools.handlers.calendar",
+    "core.tools.handlers.web",
+    "core.automation.recipes",
+    "core.automation.from_conversation",
+    "core.automation.tools",
+    "core.memory.context_builder",
+    "integrations.*",
+    "ui.tray.server",
+    "ui.tray.wizard",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

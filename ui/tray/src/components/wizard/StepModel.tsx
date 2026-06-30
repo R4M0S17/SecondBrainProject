@@ -117,12 +117,18 @@ export default function StepModel({ onReady }: StepModelProps) {
             <code className="text-primary-container bg-surface-container px-1 rounded">bin/models/</code>
             {t("wizard.then_click")}
           </p>
-          <div className="flex justify-center">
+          <div className="flex justify-center gap-3">
             <button
               onClick={check}
               className="px-4 py-1.5 text-[12px] bg-primary-container text-on-primary-container rounded hover:opacity-90 transition-opacity font-semibold"
             >
               {t("wizard.retry")}
+            </button>
+            <button
+              onClick={() => onReady(true)}
+              className="px-4 py-1.5 text-[12px] text-outline hover:text-[#e8eaf0] underline transition-colors"
+            >
+              {t("wizard.skip_models")}
             </button>
           </div>
         </>

@@ -40,7 +40,7 @@ export interface RecentActivity {
   description: string;
   timestamp: Date;
   icon: string;
-  tab?: "chat" | "sources" | "tools" | "code";
+  tab?: "home" | "chat" | "sources" | "code";
 }
 
 interface DashboardState {
@@ -50,7 +50,9 @@ interface DashboardState {
   error: string | null;
   quickNoteOpen: boolean;
   setQuickNoteOpen: (open: boolean) => void;
-  pushActivity: (activity: RecentActivity) => void;
+  searchDocsOpen: boolean;
+  setSearchDocsOpen: (open: boolean) => void;
+  pushActivity: (activity: Omit<RecentActivity, "id" | "timestamp"> | RecentActivity) => void;
   refresh: () => Promise<void>;
 }
 
@@ -65,6 +67,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   error: null,
   quickNoteOpen: false,
   setQuickNoteOpen: (open) => set({ quickNoteOpen: open }),
+  searchDocsOpen: false,
+  setSearchDocsOpen: (open) => set({ searchDocsOpen: open }),
   pushActivity: (activity) =>
     set((s) => ({
       recentActivity: [{ ...activity, id: genActivityId(), timestamp: new Date() }, ...s.recentActivity].slice(0, 20),

@@ -1,5 +1,6 @@
 import { ApiError } from "./errors";
 import { isTauriRuntime } from "../lib/tauri";
+import type { TranscribeResponse, TranscribeHealthResponse } from "./types";
 
 let _cerebroKey: string | null = null;
 
@@ -120,6 +121,8 @@ import type {
   MemoryEpisode,
   FolderAnalyzeRequest,
   FolderAnalyzeResponse,
+  DocumentSearchRequest,
+  DocumentSearchResponse,
 } from "./types";
 
 export const AGENT_ID_MAP: Record<AgentId, string> = {
@@ -347,6 +350,15 @@ export async function batchPinConversations(ids: string[], pinned: boolean): Pro
 
 export async function listDocuments(): Promise<DocumentInfo[]> {
   return request<DocumentInfo[]>("/api/documents");
+}
+
+export async function searchDocuments(
+  req: DocumentSearchRequest,
+): Promise<DocumentSearchResponse> {
+  return request<DocumentSearchResponse>("/api/documents/search", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }
 
 export async function deleteDocument(sourcePath: string): Promise<{ deleted: number; source_path: string }> {
@@ -665,3 +677,61 @@ export async function importSyncSources(payload: { version: number; sources: { i
     body: JSON.stringify(payload),
   });
 }
+
+export async function transcribeAudio(
+  audioBlob: Blob,
+  language = "auto",
+): Promise<TranscribeResponse> {
+  const formData = new FormData();
+  formData.append("file", audioBlob, "audio.wav");
+  formData.append("language", language);
+  const res = await crossFetch("http://127.0.0.1:7842/api/transcribe", {
+    method: "POST",
+    headers: { ..._authHeaders() },
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(res.status, err.detail ?? "Transcription error");
+  }
+  return res.json() as Promise<TranscribeResponse>;
+}
+
+export async function getTranscribeHealth(): Promise<TranscribeHealthResponse> {
+  return request<TranscribeHealthResponse>("/api/transcribe/health");
+}
+
+export async function startTranscribe(): Promise<{ status: string }> {
+  return request<{ status: string }>("/api/transcribe/start", { method: "POST" });
+}
+
+export async function stopTranscribe(): Promise<{ status: string }> {
+  return request<{ status: string }>("/api/transcribe/stop", { method: "POST" });
+}
+
+export async function getEmbeddingCacheStats(): Promise<import("./types").EmbeddingCacheStats> {
+  return request<import("./types").EmbeddingCacheStats>("/api/cache/embedding-stats");
+}
+
+export interface ModelDownloadResponse {
+  ok: boolean;
+  detail: string;
+  path?: string;
+  size_gb?: number;
+}
+
+export async function downloadModel(url: string, filename: string): Promise<ModelDownloadResponse> {
+  return request<ModelDownloadResponse>("/api/models/download", {
+    method: "POST",
+    body: JSON.stringify({ url, filename }),
+  });
+}
+
+export const AVAILABLE_MODELS: { filename: string; url: string; repo: string; sizeGb: string; note: string }[] = [
+  { filename: "Qwen3.5-2B-UD-Q4_K_XL.gguf", url: "https://huggingface.co/Qwen/Qwen3.5-2B-UD-Q4_K_XL-GGUF/resolve/main/Qwen3.5-2B-UD-Q4_K_XL.gguf", repo: "Qwen/Qwen3.5-2B-UD-Q4_K_XL-GGUF", sizeGb: "1.2 GB", note: "Multimodal · 262K ctx" },
+  { filename: "Qwen_Qwen3.5-2B-Q4_K_M.gguf", url: "https://huggingface.co/Qwen/Qwen3.5-2B-Q4_K_M-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf", repo: "Qwen/Qwen3.5-2B-Q4_K_M-GGUF", sizeGb: "1.3 GB", note: "Text-only · 262K ctx" },
+  { filename: "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M-GGUF/resolve/main/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf", repo: "Qwen/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M-GGUF", sizeGb: "0.9 GB", note: "Code-specialized" },
+  { filename: "Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf", url: "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507-Q4_K_M-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf", repo: "Qwen/Qwen3-4B-Instruct-2507-Q4_K_M-GGUF", sizeGb: "2.3 GB", note: "Strong reasoning" },
+  { filename: "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-Q4_K_M-GGUF/resolve/main/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf", repo: "Qwen/Qwen2.5-Coder-3B-Instruct-Q4_K_M-GGUF", sizeGb: "1.8 GB", note: "Larger code model" },
+  { filename: "llama-3.2-3b-instruct-q4_k_m.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", repo: "bartowski/Llama-3.2-3B-Instruct-GGUF", sizeGb: "1.9 GB", note: "Meta · efficient" },
+];

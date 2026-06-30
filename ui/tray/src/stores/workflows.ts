@@ -67,6 +67,46 @@ interface WorkflowState {
   clear: () => void;
 }
 
+// ─── Recording overlay helpers ────────────────────────────────────────────────
+
+let _overlayUnlisten: (() => void) | null = null;
+
+async function _showRecordingOverlay(get: () => WorkflowState) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { listen } = await import("@tauri-apps/api/event");
+    await invoke("show_recording_overlay");
+    _overlayUnlisten?.();
+    const unStop = await listen<void>("recording-overlay:stop", () => {
+      void get().stopRecording();
+    });
+    const unCancel = await listen<void>("recording-overlay:cancel", () => {
+      void get().cancelRecording();
+    });
+    _overlayUnlisten = () => { unStop(); unCancel(); };
+  } catch {
+    // dev browser fallback — the in-app overlay (MainLayout) handles it
+  }
+}
+
+async function _hideRecordingOverlay() {
+  _overlayUnlisten?.();
+  _overlayUnlisten = null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("hide_recording_overlay");
+  } catch { /* not in Tauri */ }
+}
+
+async function _focusMainWindow() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("focus_main_window");
+  } catch { /* not in Tauri */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function resolveWorkflowError(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 404 && e.detail === "Not Found") {
@@ -175,6 +215,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         runResult: response.result,
         lastRunSuccess: response.success,
       });
+      if (response.success) {
+        window.dispatchEvent(new CustomEvent("cerebro-notification", { detail: { tab: "workflows" } }));
+      }
       await get().loadAll();
       await get().loadRuns(id);
       if (get().selectedId === id) {
@@ -243,6 +286,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       await startWorkflowRecording();
       const status = await getWorkflowRecordingStatus();
       set({ isRecording: true, recordingStatus: status, viewTab: "routines" });
+      void _showRecordingOverlay(get);
     } catch (e) {
       set({ error: resolveWorkflowError(e), isRecording: false });
       throw e;
@@ -262,6 +306,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   stopRecording: async (name) => {
+    await _hideRecordingOverlay();
+    await _focusMainWindow();
     set({ isGeneralizing: true, error: null });
     try {
       const wf = await stopWorkflowRecording(name);
@@ -280,6 +326,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   cancelRecording: async () => {
+    await _hideRecordingOverlay();
     try {
       await cancelWorkflowRecording();
     } finally {

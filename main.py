@@ -86,6 +86,7 @@ from core.tools.registry import (
     register_math_tools,
     register_web_tools,
 )
+from core.transcription.whisper_manager import WhisperManager
 from core.utils.compressor import SemanticCompressor
 from ui.tray.server import app, app_state
 
@@ -149,11 +150,10 @@ try:
         if "locale" in _cfg and "CEREBRO_LOCALE" not in os.environ:
             os.environ["CEREBRO_LOCALE"] = str(_cfg["locale"])
         from core.feature_flags import (
-            MAIN_CHAT_MODEL,
             LOW_POWER_CHAT_MODEL,
+            MAIN_CHAT_MODEL,
             apply_profile_guard,
             config_needs_low_power_migration,
-            low_power_mode_enabled,
         )
 
         if config_needs_low_power_migration(_cfg):
@@ -265,7 +265,9 @@ def _ensure_engine_running(engine_script: Path, profile: str = "normal") -> None
         try:
             pid = _sp.run(
                 ["lsof", "-t", "-i", ":8080", "-sTCP:LISTEN"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if pid.returncode == 0 and pid.stdout.strip():
                 return  # Already running
@@ -281,7 +283,8 @@ def _ensure_engine_running(engine_script: Path, profile: str = "normal") -> None
         _sp.Popen(
             ["bash", str(engine_script), engine_profile],
             cwd=Path(__file__).parent,
-            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
             start_new_session=True,
         )
         _time.sleep(1)
@@ -382,7 +385,11 @@ def _ensure_chat_args() -> None:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            logger.info("Engine restarted with {} (profile: {}). Waiting for health…", LLAMACPP_MODEL, profile)
+            logger.info(
+                "Engine restarted with {} (profile: {}). Waiting for health…",
+                LLAMACPP_MODEL,
+                profile,
+            )
             _time.sleep(1)
     except Exception as exc:
         logger.warning("Failed to restart engine after chat.args update: {}", exc)
@@ -784,6 +791,7 @@ def _build_app_state() -> None:
     app_state.inference_engine = llm_engine
 
     from core.security.secrets import SecretsManager
+
     _state_dir_path = Path(os.getenv("CEREBRO_STATE", "~/.cerebro/state")).expanduser()
     app_state.secrets_mgr = SecretsManager(
         _state_dir_path,
@@ -803,6 +811,9 @@ def _build_app_state() -> None:
             profile=LLAMACPP_PROFILE,
             ram_monitor=app_state.ram_monitor,
         )
+
+    app_state.whisper = WhisperManager()
+    logger.info("WhisperManager inicializado (disponible: {})", app_state.whisper.is_available)
 
 
 if __name__ == "__main__":

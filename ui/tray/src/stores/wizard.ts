@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-type WizardMode = "local" | "claude";
+type WizardMode = "local" | "claude" | "none";
 
 interface WizardState {
   currentStep: 0 | 1 | 2 | 3;
@@ -22,7 +22,7 @@ export const useWizardStore = create<WizardState>((set, get) => ({
   advance: () => {
     const { currentStep, mode } = get();
     if (currentStep === 0) {
-      set({ currentStep: mode === "claude" ? 3 : 1 });
+      set({ currentStep: mode === "local" ? 1 : 3 });
       return;
     }
     const next = currentStep + 1;

@@ -15,8 +15,10 @@
 | Documento | Cuándo usar |
 |-----------|-------------|
 | [`engine-backend-split.md`](engine-backend-split.md) | **Separar backend (`:7842`) y motor LLM (`:8080`)** — plan de implementación |
+| [`dashboard-search-documents.md`](dashboard-search-documents.md) | **Buscar Archivos** — diálogo RAG + `POST /api/documents/search` (7 fases) |
 | [`file-search-multi-root.md`](file-search-multi-root.md) | Fase 1 — ampliar búsqueda a Desktop/Documents |
 | [`workflows-tab-implementation.md`](workflows-tab-implementation.md) | **Pestaña Flujos** — grabación UI, recetas, diseño cybernetic (4 fases) |
+| [`code-panel-overhaul.md`](code-panel-overhaul.md) | **Pestaña Code** — terminal real, scratch con agente, output persistente, polish visual (6 fases) |
 | [`i18n-implementation.md`](i18n-implementation.md) | Fase 2 — errores y wizard primero |
 | [`SECURITY_AUDIT_RESULTS.md`](SECURITY_AUDIT_RESULTS.md) | Fase 3 — hardening P0 |
 | [`SECURITY_HARDENING_PLAN.md`](SECURITY_HARDENING_PLAN.md) | Detalle de seguridad (referencia) |

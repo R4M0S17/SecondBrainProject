@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -24,6 +25,7 @@ class ToolCallRecord:
     result_summary: str
     latency_ms: float
     approved: bool
+    executed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass

@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useChatStore } from "../../stores/chat";
+import { useTabStore } from "../../stores/tab";
 
 export default function TerminalTab() {
+  const { t } = useTranslation();
+  const setPendingChatAction = useChatStore((s) => s.setPendingChatAction);
+  const setTab = useTabStore((s) => s.setTab);
   const [terminalReady, setTerminalReady] = useState(false);
   const [terminalError, setTerminalError] = useState<string | null>(null);
   const [shellAvailable, setShellAvailable] = useState<boolean | null>(null);
   const [fallbackOutput, setFallbackOutput] = useState("");
   const [cmdInput, setCmdInput] = useState("");
   const [copied, setCopied] = useState(false);
-  const [showCommands, setShowCommands] = useState(false);
-  const commandsRef = useRef<HTMLDivElement>(null);
+  const [lastCmdOutput, setLastCmdOutput] = useState<{ cmd: string; output: string } | null>(null);
+  const [termStatus, setTermStatus] = useState({ cwd: "~", exitCode: null as number | null, cmdCount: 0 });
   const terminalRef = useRef<HTMLDivElement>(null);
   const fitAddon = useRef<import("@xterm/addon-fit").FitAddon | null>(null);
 
@@ -98,6 +104,11 @@ export default function TerminalTab() {
       let lineBuf = "";
       let showPrompt = true;
       let cwd = "";
+
+      const history: string[] = [];
+      let historyIndex = -1;
+      let savedLine = "";
+
       try {
         const { Command } = await import("@tauri-apps/plugin-shell");
         const r = await Command.create("zsh", ["-c", "echo $HOME"]).execute();
@@ -105,15 +116,34 @@ export default function TerminalTab() {
       } catch {}
 
       const executeCmd = async (cmd: string) => {
+        let outputBuf = "";
+        if (cmd && (history.length === 0 || history[history.length - 1] !== cmd)) {
+          history.push(cmd);
+          if (history.length > 200) history.shift();
+        }
+        historyIndex = -1;
+        savedLine = "";
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
           const fullCmd = cwd ? `cd "${cwd}" && ${cmd}` : cmd;
           const result = await Command.create("zsh", ["-c", fullCmd]).execute();
-          if (result.stdout) term.write(result.stdout.replace(/\n/g, "\r\n"));
-          if (result.stderr) term.write(`\x1b[31m${result.stderr.replace(/\n/g, "\r\n")}\x1b[0m`);
+          if (result.stdout) {
+            outputBuf += result.stdout;
+            term.write(result.stdout.replace(/\n/g, "\r\n"));
+          }
+          if (result.stderr) {
+            outputBuf += result.stderr;
+            term.write(`\x1b[31m${result.stderr.replace(/\n/g, "\r\n")}\x1b[0m`);
+          }
           if (result.code !== 0 && result.code !== null) {
+            outputBuf += `[exit code: ${result.code}]`;
             term.write(`\r\n\x1b[33m[exit code: ${result.code}]\x1b[0m`);
           }
+          setTermStatus((s) => ({
+            cwd: cwd || "~",
+            exitCode: result.code,
+            cmdCount: s.cmdCount + 1,
+          }));
           if (cmd === "cd" || cmd.startsWith("cd ")) {
             const dir = cmd === "cd" ? "~" : cmd.slice(3).trim() || "~";
             try {
@@ -124,10 +154,16 @@ export default function TerminalTab() {
           }
         } catch {
           term.write(`\r\n\x1b[31m[error]\x1b[0m`);
+          setTermStatus((s) => ({
+            cwd: cwd || "~",
+            exitCode: -1,
+            cmdCount: s.cmdCount + 1,
+          }));
         }
         term.write(`\r\n\x1b[32m${cwd || "~"}\x1b[0m $ `);
         showPrompt = false;
         term.scrollToBottom();
+        setLastCmdOutput({ cmd, output: outputBuf });
       };
 
       term.onData((data) => {
@@ -136,6 +172,37 @@ export default function TerminalTab() {
           term.write(`\x1b[32m${cwd || "~"}\x1b[0m $ `);
           showPrompt = false;
         }
+
+        if (data === "\x1b[A") {
+          if (history.length === 0) return;
+          if (historyIndex === -1) {
+            savedLine = lineBuf;
+            historyIndex = history.length - 1;
+          } else if (historyIndex > 0) {
+            historyIndex--;
+          }
+          term.write("\b \b".repeat(lineBuf.length));
+          lineBuf = history[historyIndex];
+          term.write(lineBuf);
+          return;
+        }
+
+        if (data === "\x1b[B") {
+          if (historyIndex === -1) return;
+          if (historyIndex < history.length - 1) {
+            historyIndex++;
+            term.write("\b \b".repeat(lineBuf.length));
+            lineBuf = history[historyIndex];
+            term.write(lineBuf);
+          } else {
+            historyIndex = -1;
+            term.write("\b \b".repeat(lineBuf.length));
+            lineBuf = savedLine;
+            term.write(lineBuf);
+          }
+          return;
+        }
+
         if (data === "\r") {
           term.write("\r\n");
           const cmd = lineBuf.trim();
@@ -183,17 +250,6 @@ export default function TerminalTab() {
       if (xtermEl) xtermEl.removeEventListener("selectstart", onSelectStart);
     };
   }, []);
-
-  useEffect(() => {
-    if (!showCommands) return;
-    const handler = (e: MouseEvent) => {
-      if (commandsRef.current && !commandsRef.current.contains(e.target as Node)) {
-        setShowCommands(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showCommands]);
 
   const handleFallbackCmd = () => {
     const cmd = cmdInput.trim();
@@ -246,63 +302,60 @@ export default function TerminalTab() {
         `}</style>
         <div ref={terminalRef} className="flex-1 min-h-0" />
 
-        <div ref={commandsRef} className="absolute top-2 right-2 z-10">
-          <button
-            onClick={() => setShowCommands((v) => !v)}
-            className="bg-surface-container/80 backdrop-blur-sm border border-outline-variant/20 rounded-lg px-2.5 py-1.5 text-[10px] font-medium text-outline hover:text-on-surface transition-colors flex items-center gap-1"
-          >
-            <span className="material-symbols-outlined text-[12px]">menu</span>
-            Cmds
-          </button>
-          {showCommands && (
-            <div
-              className="absolute top-full right-0 mt-1 bg-surface-container/95 backdrop-blur-sm border border-outline-variant/20 rounded-xl shadow-xl p-3 min-w-[220px] z-50"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
-                <span><code className="font-mono text-primary-container">ls</code> <span className="text-outline/60">list files</span></span>
-                <span><code className="font-mono text-primary-container">cd &lt;d&gt;</code> <span className="text-outline/60">navigate</span></span>
-                <span><code className="font-mono text-primary-container">pwd</code> <span className="text-outline/60">current path</span></span>
-                <span><code className="font-mono text-primary-container">mkdir</code> <span className="text-outline/60">create folder</span></span>
-                <span><code className="font-mono text-primary-container">touch</code> <span className="text-outline/60">create file</span></span>
-                <span><code className="font-mono text-primary-container">cat</code> <span className="text-outline/60">view file</span></span>
-                <span><code className="font-mono text-primary-container">cp</code> <span className="text-outline/60">copy</span></span>
-                <span><code className="font-mono text-primary-container">mv</code> <span className="text-outline/60">move/rename</span></span>
-                <span><code className="font-mono text-primary-container">rm</code> <span className="text-outline/60">delete file</span></span>
-                <span><code className="font-mono text-primary-container">rm -r</code> <span className="text-outline/60">delete folder</span></span>
-                <span><code className="font-mono text-primary-container">chmod</code> <span className="text-outline/60">permissions</span></span>
-                <span><code className="font-mono text-primary-container">clear</code> <span className="text-outline/60">clear screen</span></span>
-                <span><code className="font-mono text-primary-container">man</code> <span className="text-outline/60">manual page</span></span>
-                <span><code className="font-mono text-primary-container">grep</code> <span className="text-outline/60">search text</span></span>
-                <span><code className="font-mono text-primary-container">find</code> <span className="text-outline/60">find files</span></span>
-                <span><code className="font-mono text-primary-container">echo</code> <span className="text-outline/60">print text</span></span>
-              </div>
+        {terminalReady && !terminalError && shellAvailable !== false && (
+          <div className="flex items-center justify-between px-3 py-1.5 bg-[#0a0a0f] border-t border-white/5 text-[10px] font-label-mono shrink-0">
+            <span className="text-green-400/70 truncate max-w-[60%]">
+              ⊡ {termStatus.cwd}
+            </span>
+            <div className="flex items-center gap-3 text-outline/40">
+              {termStatus.exitCode !== null && (
+                <span className={termStatus.exitCode === 0 ? "text-green-400/60" : "text-red-400/70"}>
+                  exit {termStatus.exitCode}
+                </span>
+              )}
+              <span>{termStatus.cmdCount} {t("code.terminal_cmds")}</span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {lastCmdOutput && (
+          <button
+            onClick={() => {
+              const msg = `Tengo este output de terminal:\n\`\`\`\n$ ${lastCmdOutput.cmd}\n${lastCmdOutput.output}\`\`\`\n\n¿Puedes analizarlo?`;
+              setPendingChatAction({ query: msg, autoSend: true });
+              setTab("chat");
+            }}
+            className="absolute bottom-3 right-3 flex items-center gap-1.5 px-3 py-2 bg-surface-container/90 backdrop-blur-sm border border-outline-variant/20 rounded-lg text-[11px] font-medium text-on-surface-variant hover:text-on-surface hover:border-primary-container/40 transition-all shadow-lg z-10"
+          >
+            <span className="material-symbols-outlined text-[14px] text-primary-container/70">
+              forum
+            </span>
+            {t("code.ask_agent")}
+          </button>
+        )}
 
         {copied && (
           <div className="absolute top-4 right-4 bg-primary-container/90 text-white px-3 py-1.5 rounded-lg text-[11px] font-medium shadow-lg animate-in fade-in slide-in-from-top-2 duration-200">
-            Copied
+            {t("code.copied")}
           </div>
         )}
         {!terminalReady && !terminalError && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#0e0e12] text-outline text-[13px]">
             <span className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-primary-container status-dot-pulse" />
-              Loading terminal…
+              {t("code.terminal_loading")}
             </span>
           </div>
         )}
         {terminalError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[#0e0e12] p-6 text-center">
             <span className="material-symbols-outlined text-[40px] text-error/60">error_outline</span>
-            <p className="text-[13px] text-on-surface-variant">Terminal failed to load</p>
+            <p className="text-[13px] text-on-surface-variant">{t("code.terminal_error_title")}</p>
             <p className="text-[11px] text-outline/60 font-mono bg-surface-container-low rounded-lg p-3 w-full max-w-md break-all">
               {terminalError}
             </p>
             <p className="text-[11px] text-outline/60">
-              Asegúrate de ejecutar en Tauri (<code className="font-mono text-primary-container">npm run tauri:dev</code>) y que los permisos estén configurados.
+              {t("code.terminal_error_hint")}
             </p>
           </div>
         )}
@@ -311,10 +364,10 @@ export default function TerminalTab() {
             <div className="text-center">
               <span className="material-symbols-outlined text-[48px] text-outline/20">terminal</span>
               <p className="text-[13px] text-on-surface-variant mt-3">
-                Terminal interactivo disponible solo en Tauri
+                {t("code.terminal_fallback_title")}
               </p>
               <p className="text-[11px] text-outline/60 mt-1">
-                In the meantime, you can run individual commands here:
+                {t("code.terminal_fallback_hint")}
               </p>
             </div>
             <div className="w-full max-w-lg bg-surface-container-low border border-outline-variant/15 rounded-xl p-5">
@@ -324,7 +377,7 @@ export default function TerminalTab() {
                 ) : (
                   <span className="text-on-surface-variant/30">
                     $ _<br />
-                    &nbsp;&nbsp;Los resultados aparecerán aquí
+                    &nbsp;&nbsp;{t("code.terminal_fallback_placeholder")}
                   </span>
                 )}
               </div>
@@ -333,7 +386,7 @@ export default function TerminalTab() {
                   value={cmdInput}
                   onChange={(e) => setCmdInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleFallbackCmd()}
-                  placeholder="$  type a command and press Enter…"
+                  placeholder={t("code.terminal_fallback_placeholder")}
                   className="flex-1 bg-[#0e0e12] border border-outline-variant/20 rounded-lg px-4 py-3 text-[13px] font-mono text-on-surface placeholder-on-surface-variant/25 outline-none focus:border-primary-container/50 focus:shadow-[0_0_0_1px_rgba(37,99,235,0.2)] transition-all"
                   autoFocus
                 />
@@ -342,7 +395,7 @@ export default function TerminalTab() {
                   className="flex items-center gap-1.5 px-5 py-3 bg-primary-container text-white text-[13px] font-medium rounded-lg hover:bg-primary-container/90 active:scale-[0.97] transition-all shadow-sm"
                 >
                   <span className="material-symbols-outlined text-[18px]">play_arrow</span>
-                  Run
+                  {t("code.run")}
                 </button>
               </div>
             </div>

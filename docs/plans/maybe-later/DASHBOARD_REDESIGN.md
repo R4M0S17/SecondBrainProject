@@ -184,6 +184,7 @@ Componente principal con 4 secciones verticales dentro de un scroll container:
 - QuickChatCard: CTA a chat
 - Stats row: 4 StatCards (Files, Memories, Events, Web)
 - Action cards: "Search Files" (se deshabilita si `indexed_files === 0`), "Analyze Folder", "Create Workflow"
+  - **Nota (Jun 2026):** "Search Files" ahora abre `SearchDocumentsDialog` en lugar de navegar a `sources`. Ver [`dashboard-search-documents.md`](../dashboard-search-documents.md).
 - Recent Activity: ActivityList con datos reales del store
 
 Incluye animación stagger fade-in (clases `stagger-1` a `stagger-5`).

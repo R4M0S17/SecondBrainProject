@@ -161,7 +161,7 @@ class CerebroKernel:
 
     async def _reason_node(self, state: _GraphState) -> dict:
         iterations = state["iterations"] + 1
-        messages: list[Message] = [Message(**m) for m in state["messages"]]
+        messages: list[Message] = [Message(**m) for m in state["messages"]]  # type: ignore[typeddict-item]
         raw = await self._provider.complete(messages)
         logger.debug("reason_node raw: {}", raw[:200])
 
@@ -221,8 +221,8 @@ class CerebroKernel:
         }
 
     async def _observe_node(self, state: _GraphState) -> dict:
-        result = state.get("_tool_result", "(sin resultado)")  # type: ignore[call-overload]
-        tool_name = state.get("next_tool", "herramienta")  # type: ignore[call-overload]
+        result = state.get("_tool_result", "(sin resultado)")
+        tool_name = state.get("next_tool", "herramienta")
         obs: dict = {"role": "user", "content": f"[Resultado de {tool_name}]: {result}"}
         return {
             "messages": list(state["messages"]) + [obs],

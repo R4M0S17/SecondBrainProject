@@ -1,5 +1,7 @@
 import { create } from "zustand";
-import type { ResponseMetadata, AgentId } from "../api/types";
+import type { ResponseMetadata, AgentId, ToolCallRecord } from "../api/types";
+import { useToolOutputStore } from "./toolOutput";
+import type { StoredToolCall } from "./toolOutput";
 
 export interface Message {
   id: string;
@@ -38,6 +40,8 @@ interface ChatState {
   activeAgent: AgentId;
   /** Durable session key — same as API ``conversation_id`` for this chat surface. */
   conversationId: string | null;
+  /** User-visible conversation title (editable). */
+  conversationTitle: string;
   pendingConfirmation: PendingConfirmation | null;
   searchingSources: SearchingSources | null;
   searchingWeb: boolean;
@@ -58,10 +62,18 @@ interface ChatState {
   setSearchingWeb: (s: boolean) => void;
   setPendingChatAction: (action: PendingChatAction | null) => void;
   consumePendingChatAction: () => PendingChatAction | null;
+  renameConversation: (title: string) => void;
 }
 
 function genId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function defaultTitle(messages: Message[]): string {
+  const firstUser = messages.find((m) => m.role === "user");
+  if (!firstUser) return "";
+  const text = firstUser.content.trim();
+  return text.length > 60 ? text.slice(0, 60) + "…" : text;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -70,6 +82,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   abortController: null,
   activeAgent: "auto",
   conversationId: null,
+  conversationTitle: "",
   pendingConfirmation: null,
   searchingSources: null,
   searchingWeb: false,
@@ -77,21 +90,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   addMessage: (msg) => {
     const id = genId();
-    set((state) => ({
-      messages: [
-        ...state.messages,
-        { ...msg, id, timestamp: Date.now(), expandedPanel: null },
-      ],
-    }));
+    set((state) => {
+      const newMsg = { ...msg, id, timestamp: Date.now(), expandedPanel: null };
+      const messages = [...state.messages, newMsg];
+      const title = state.conversationTitle || (msg.role === "user" ? defaultTitle(messages) : "");
+      return { messages, conversationTitle: title };
+    });
     return id;
   },
 
   updateMessage: (id, patch) => {
-    set((state) => ({
-      messages: state.messages.map((m) =>
+    set((state) => {
+      const messages = state.messages.map((m) =>
         m.id === id ? { ...m, ...patch } : m
-      ),
-    }));
+      );
+      if (patch.metadata?.tools_called?.length) {
+        const convId = state.conversationId ?? "unknown";
+        const msgIdx = messages.findIndex((m) => m.id === id);
+        const stored: StoredToolCall[] = patch.metadata.tools_called.map(
+          (tc: ToolCallRecord, tci: number) => ({
+            ...tc,
+            id: `${convId}-${msgIdx}-${tci}`,
+            conversationId: convId,
+            storedAt: new Date().toISOString(),
+          })
+        );
+        useToolOutputStore.getState().addCalls(stored);
+      }
+      return { messages };
+    });
   },
 
   appendToken: (id, token) => {
@@ -138,5 +165,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return action;
   },
 
-  clearMessages: () => set({ messages: [], conversationId: null, searchingSources: null, searchingWeb: false, pendingChatAction: null }),
+  renameConversation: (title) => set({ conversationTitle: title }),
+
+  clearMessages: () => set({ messages: [], conversationId: null, conversationTitle: "", searchingSources: null, searchingWeb: false, pendingChatAction: null }),
 }));

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, KeyboardEvent, ChangeEvent } from "react";
+import { useRef, useState, useEffect, useCallback, KeyboardEvent, ChangeEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useChatStore } from "../../stores/chat";
 import { useSettingsStore } from "../../stores/settings";
@@ -8,6 +8,7 @@ import { useTabStore } from "../../stores/tab";
 import { ApiError } from "../../api/errors";
 import { queryAgent, queryAgentStream, confirmTool, AGENT_ID_MAP, uploadFiles, startIndex, getConfig } from "../../api/client";
 import CommandAutocomplete, { buildCommands } from "./CommandAutocomplete";
+import MicButton from "./MicButton";
 import type { FileAttachment } from "../../api/types";
 import { AGENTS } from "../../api/types";
 import { isTextLikeFile, isImageLikeFile, buildLocalAttachment } from "../../utils/fileProcessing";
@@ -486,8 +487,9 @@ export default function InputArea() {
     textareaRef.current?.focus();
   };
 
-  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const [dragOver, setDragOver] = useState(false);
+
+  const addFiles = useCallback((files: File[]) => {
     const supportedTypes = [
       "image/jpeg",
       "image/png",
@@ -508,11 +510,41 @@ export default function InputArea() {
     }));
 
     setUploadedFiles((prev) => [...prev, ...newFiles]);
+  }, []);
 
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    addFiles(files);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) addFiles(files);
+  }, [addFiles]);
+
+  const handleTranscript = useCallback((transcript: string) => {
+    setText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+  }, []);
+
+  const whisperAvailable = status?.whisper?.available ?? false;
 
   const clearAllFiles = () => {
     uploadedFiles.forEach((uf) => {
@@ -531,10 +563,22 @@ export default function InputArea() {
     }
   }, [activeTab]);
 
-  const latency = status?.p95_latency_ms ?? 0;
-
   return (
-    <div className="relative w-full shrink-0">
+    <div
+      className="relative w-full shrink-0"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragOver && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary-container bg-surface-container/80 backdrop-blur-sm pointer-events-none">
+          <div className="flex flex-col items-center gap-2 text-primary-container">
+            <span className="material-symbols-outlined text-[32px]">cloud_upload</span>
+            <span className="text-sm font-medium">{t("input.drop_files")}</span>
+          </div>
+        </div>
+      )}
+
       <div className="input-glow flex items-center bg-surface-container-low border border-outline-variant/50 rounded-xl p-2 transition-all duration-300">
         {/* Command autocomplete */}
         {showAutocomplete && (
@@ -581,10 +625,11 @@ export default function InputArea() {
         />
 
         <div className="flex items-center gap-2 pr-2 text-on-surface-variant">
-          {/* Mic button */}
-          <button className="p-2 hover:text-primary transition-colors" aria-label={t("input.voice_input")} title={t("input.voice_input")}>
-            <span className="material-symbols-outlined text-[20px]">mic</span>
-          </button>
+          <MicButton
+            onTranscript={handleTranscript}
+            disabled={isLoading}
+            whisperAvailable={whisperAvailable}
+          />
 
           {isLoading ? (
             <button
@@ -608,13 +653,6 @@ export default function InputArea() {
         </div>
       </div>
 
-      {/* Status footer */}
-      <div className="text-center mt-3 text-xs text-outline/50 font-label-mono">
-        {t("input.engine_status", {
-          status: engineOk ? t("commands.engine_active") : t("commands.engine_offline"),
-          latency,
-        })}
-      </div>
     </div>
   );
 }

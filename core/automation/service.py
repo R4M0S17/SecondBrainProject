@@ -9,8 +9,8 @@ from typing import Any
 from loguru import logger
 
 from core.automation.generalizer import GeneralizationError, generalize_events
-from core.automation.recorder import ActionEvent, HAS_QUARTZ
 from core.automation.recipes import run_recipe
+from core.automation.recorder import HAS_QUARTZ, ActionEvent
 
 MIN_RECORDING_EVENTS = 3
 
@@ -85,7 +85,15 @@ def start_recording(recorder: Any) -> dict[str, Any]:
     _require_recorder(recorder)
     if recorder.is_recording:
         raise RecordingConflictError("Recording already in progress")
-    recorder.start()
+    try:
+        recorder.start()
+    except RuntimeError as exc:
+        key = str(exc)
+        if key == "accessibility_required":
+            raise RecordingUnavailableError("workflows.error.accessibility_required") from exc
+        raise RecordingUnavailableError("workflows.error.recorder_unavailable") from exc
+    if not recorder.is_recording:
+        raise RecordingUnavailableError("workflows.error.accessibility_required")
     return {"status": "recording", "started_at": recorder.started_at}
 
 
@@ -161,7 +169,7 @@ async def stop_and_create_workflow(
     wf = workflow_store.get(wid)
     if wf is None:
         raise RuntimeError("Failed to load saved workflow")
-    return wf
+    return wf  # type: ignore[no-any-return]
 
 
 def _build_osascript_argv(parameters: list[dict[str, Any]], params: dict[str, str]) -> list[str]:
@@ -203,7 +211,11 @@ def execute_desktop_workflow(
         return False, "", err
 
     output = result.stdout.strip()
-    message = f"Workflow ejecutado correctamente.\n{output}" if output else "Workflow ejecutado correctamente."
+    message = (
+        f"Workflow ejecutado correctamente.\n{output}"
+        if output
+        else "Workflow ejecutado correctamente."
+    )
     return True, message, None
 
 

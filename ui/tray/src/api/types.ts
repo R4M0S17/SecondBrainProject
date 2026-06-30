@@ -15,6 +15,7 @@ export interface ToolCallRecord {
   result_summary: string;
   latency_ms: number;
   approved: boolean;
+  timestamp?: string;
 }
 
 export interface MemoryRef {
@@ -182,6 +183,7 @@ export interface StatusResponse {
   swap_in_progress?: boolean;
   model_swaps_session?: number;
   macos_permissions?: Record<string, string> | null;
+  whisper?: TranscribeHealthResponse | null;
 }
 
 export interface HardwareSnapshot {
@@ -262,12 +264,47 @@ export interface AppConfig {
   mlx_enabled?: boolean;
   /** Whether an ANTHROPIC_API_KEY has been configured. */
   claude_has_key?: boolean;
+  /** API keys (stored in backend config, extra="allow") */
+  anthropic_api_key?: string;
+  tavily_api_key?: string;
+  cerebro_api_key?: string;
   /** Inference profile: 'normal' for 2B model, 'low-power' for 0.5B model. */
   profile?: "normal" | "low-power";
   /** False while Nano v2 is in development — Low Power toggle disabled in UI. */
   low_power_available?: boolean;
   /** UI language/locale: 'en' or 'es'. */
   locale?: string;
+  /** Inference parameters */
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  repeat_penalty?: number;
+  context_length?: number;
+  llamacpp_url?: string;
+  embed_url?: string;
+  /** Memory & RAG parameters */
+  short_term_max_messages?: number;
+  context_budget_pct?: number;
+  consolidation_target_pct?: number;
+  session_resume_max_turns?: number;
+  rag_top_k?: number;
+  semantic_compression?: boolean;
+  embedding_cache_ttl_days?: number;
+  embedding_cache_max_size?: number;
+  embeddings_backend?: string;
+  /** Web search parameters */
+  web_backend?: string;
+  web_max_results?: number;
+  web_max_chars?: number;
+  web_timeout?: number;
+  /** Fleet & RAM parameters */
+  ram_primary_gb?: number;
+  ram_fallback_gb?: number;
+  ram_min_available_gb?: number;
+  swap_timeout?: number;
+  llamacpp_simple?: boolean;
+  /** Verbose logging toggle */
+  log_verbose?: boolean;
   /** Knowledge sync configuration. */
   knowledge_sync?: {
     enabled: boolean;
@@ -303,6 +340,33 @@ export interface DocumentInfo {
   source_path: string;
   file_modified: number;
   filename: string;
+}
+
+export interface DocumentSearchRequest {
+  query: string;
+  mode: "chunks" | "answer";
+  top_k?: number;
+  source_prefix?: string | null;
+}
+
+export interface DocumentChunkHit {
+  id: string;
+  source_path: string;
+  filename: string;
+  chunk_index: number;
+  content: string;
+  score: number;
+  snippet: string;
+}
+
+export interface DocumentSearchResponse {
+  query: string;
+  mode: string;
+  hits: DocumentChunkHit[];
+  answer: string | null;
+  sources: string[];
+  latency_ms: number;
+  warnings: string[];
 }
 
 export type AgentId = "auto" | "general" | "thesis" | "code" | "calendar";
@@ -549,6 +613,33 @@ export interface FolderAnalyzeResponse {
   indexed_sample: string[];
   summary: string | null;
   warnings: string[];
+}
+
+export interface TranscribeResponse {
+  text: string;
+  language: string;
+  duration_ms: number;
+}
+
+export interface TranscribeHealthResponse {
+  available: boolean;
+  running: boolean;
+  reachable: boolean;
+  model: string | null;
+  port: number;
+}
+
+export interface EmbeddingCacheStats {
+  hits: number;
+  misses: number;
+  hit_rate_percent: number;
+  size: number;
+  max_size: number;
+  evictions: number;
+  avg_get_latency_ms: number;
+  avg_put_latency_ms: number;
+  ttl_seconds: number | null;
+  persistence_store: string;
 }
 
 export const CLAUDE_MODELS: ClaudeModel[] = [

@@ -1,8 +1,11 @@
+import { useTranslation } from "react-i18next";
+
 interface QuickChatCardProps {
   onClick: () => void;
 }
 
 export default function QuickChatCard({ onClick }: QuickChatCardProps) {
+  const { t } = useTranslation();
   return (
     <button
       onClick={onClick}
@@ -19,10 +22,10 @@ export default function QuickChatCard({ onClick }: QuickChatCardProps) {
       </span>
       <div className="flex-1">
         <p className="text-[17px] font-bold text-on-surface group-hover:text-primary-container transition-colors">
-          Quick Chat
+          {t("dashboard.quick_chat")}
         </p>
         <p className="text-[13px] text-on-surface-variant/60 mt-0.5">
-          Ask anything about your notes, files, or projects
+          {t("dashboard.quick_chat_desc")}
         </p>
       </div>
       <span className="material-symbols-outlined text-[20px] text-on-surface-variant/30

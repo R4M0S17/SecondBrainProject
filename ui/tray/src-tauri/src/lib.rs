@@ -1,5 +1,6 @@
 mod launcher;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     image::Image,
     Manager,
@@ -86,6 +87,50 @@ async fn stop_cerebro_services(app: tauri::AppHandle) -> Result<(), String> {
     .map_err(|e| format!("Stop script panicked: {e}"))?
 }
 
+#[tauri::command]
+async fn show_recording_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("recording-overlay") {
+        win.show().map_err(|e| e.to_string())?;
+        win.set_always_on_top(true).map_err(|e| e.to_string())?;
+
+        #[cfg(target_os = "macos")]
+        {
+            use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
+            use cocoa::base::id;
+            if let Ok(ns_win_ptr) = win.ns_window() {
+                let ns_win = ns_win_ptr as id;
+                unsafe {
+                    let behavior = NSWindow::collectionBehavior(ns_win);
+                    NSWindow::setCollectionBehavior_(
+                        ns_win,
+                        behavior
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn hide_recording_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("recording-overlay") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn focus_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.show().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -99,8 +144,31 @@ pub fn run() {
             start_cerebro_backend,
             start_cerebro_engine,
             restart_cerebro_services,
-            stop_cerebro_services
+            stop_cerebro_services,
+            show_recording_overlay,
+            hide_recording_overlay,
+            focus_main_window
         ])
+        .on_window_event({
+            let is_closing = std::sync::Arc::new(AtomicBool::new(false));
+            move |window, event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if is_closing.swap(true, Ordering::Relaxed) {
+                        return;
+                    }
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    let win = window.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            let _ = launcher::run_desktop_stop(&app);
+                        })
+                        .await;
+                        let _ = win.close();
+                    });
+                }
+            }
+        })
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
@@ -122,6 +190,20 @@ pub fn run() {
                         ns_win,
                         behavior | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                     );
+                }
+
+                // Apply "visible on all Spaces" to the overlay window
+                if let Some(overlay) = app.get_webview_window("recording-overlay") {
+                    let ov_win = overlay.ns_window().unwrap() as id;
+                    unsafe {
+                        let behavior = NSWindow::collectionBehavior(ov_win);
+                        NSWindow::setCollectionBehavior_(
+                            ov_win,
+                            behavior
+                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
+                        );
+                    }
                 }
             }
 

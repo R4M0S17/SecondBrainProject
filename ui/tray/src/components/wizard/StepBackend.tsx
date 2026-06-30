@@ -9,7 +9,7 @@ export default function StepBackend({ onReady }: StepBackendProps) {
   const { t } = useTranslation();
   const { mode, setMode } = useWizardStore();
 
-  const pick = (m: "local" | "claude") => {
+  const pick = (m: "local" | "claude" | "none") => {
     setMode(m);
     onReady(true);
   };
@@ -52,6 +52,23 @@ export default function StepBackend({ onReady }: StepBackendProps) {
         <p className="text-[12px] text-outline pl-4">
           {t("wizard.cloud_desc")}{" "}
           <code className="text-[#a78bfa] bg-[#1a1030] px-1 rounded">ANTHROPIC_API_KEY</code>.
+        </p>
+      </button>
+
+      <button
+        onClick={() => pick("none")}
+        className={`w-full p-4 rounded-lg border text-left transition-colors ${
+          mode === "none"
+            ? "border-outline bg-[#1a1a1a]"
+            : "border-outline-variant bg-background hover:border-outline"
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <div className={`w-2 h-2 rounded-full ${mode === "none" ? "bg-outline" : "bg-outline"}`} />
+          <span className="text-[14px] font-semibold text-on-surface">{t("wizard.none_title")}</span>
+        </div>
+        <p className="text-[12px] text-outline pl-4">
+          {t("wizard.none_desc")}
         </p>
       </button>
     </div>

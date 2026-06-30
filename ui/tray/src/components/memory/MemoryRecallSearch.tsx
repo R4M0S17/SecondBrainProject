@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { MemoryRecallResult } from "../../api/types";
 
@@ -9,31 +9,61 @@ interface MemoryRecallSearchProps {
 
 export default function MemoryRecallSearch({ onSearch, usingMock = false }: MemoryRecallSearchProps) {
   const { t } = useTranslation();
-  const [query, setQuery] = useState("");
+  const [inputValue, setInputValue] = useState("");
   const [results, setResults] = useState<MemoryRecallResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const abortRef = useRef<AbortController>();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const q = query.trim();
-    if (!q) {
+  const runSearch = async (q: string) => {
+    if (!q.trim()) {
       setResults(null);
       setSearchError(null);
       return;
     }
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+
     setSearching(true);
     setSearchError(null);
     try {
       const hits = await onSearch(q);
       setResults(hits);
     } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
       setResults([]);
       setSearchError(err instanceof Error ? err.message : t("memory.recall_error"));
     } finally {
       setSearching(false);
     }
   };
+
+  const handleInputChange = (value: string) => {
+    setInputValue(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!value.trim()) {
+      setResults(null);
+      setSearchError(null);
+      return;
+    }
+    debounceRef.current = setTimeout(() => {
+      void runSearch(value);
+    }, 350);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    void runSearch(inputValue);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
+    };
+  }, []);
 
   return (
     <section>
@@ -46,8 +76,8 @@ export default function MemoryRecallSearch({ onSearch, usingMock = false }: Memo
       <form onSubmit={(e) => void handleSubmit(e)} className="flex gap-2">
         <input
           type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          value={inputValue}
+          onChange={(e) => handleInputChange(e.target.value)}
           placeholder={t("memory.recall_placeholder")}
           className="flex-1 min-w-0 bg-surface-container-low border border-outline-variant/20 rounded-lg px-3 py-2 text-[12px] text-on-surface placeholder:text-outline/50 focus:outline-none focus:border-primary-container/50"
         />

@@ -12,6 +12,7 @@ import DashboardSkeleton from "./DashboardSkeleton";
 import DashboardError from "./DashboardError";
 import QuickNoteDialog from "../chat/QuickNoteDialog";
 import AnalyzeFolderDialog from "./AnalyzeFolderDialog";
+import SearchDocumentsDialog from "./SearchDocumentsDialog";
 
 interface DashboardHomeProps {
   onDocumentsOpen?: () => void;
@@ -28,6 +29,8 @@ export default function DashboardHome({ onDocumentsOpen, onMemoryBrowserOpen }: 
   const [analyzeFolderOpen, setAnalyzeFolderOpen] = useState(false);
   const quickNoteOpen = useDashboardStore((s) => s.quickNoteOpen);
   const setQuickNoteOpen = useDashboardStore((s) => s.setQuickNoteOpen);
+  const searchDocsOpen = useDashboardStore((s) => s.searchDocsOpen);
+  const setSearchDocsOpen = useDashboardStore((s) => s.setSearchDocsOpen);
 
   useEffect(() => {
     void refresh();
@@ -49,7 +52,7 @@ export default function DashboardHome({ onDocumentsOpen, onMemoryBrowserOpen }: 
         ? t("dashboard.memories_hint", { hits: status.memory_hits })
         : undefined,
       color: "text-violet-400",
-      onClick: onMemoryBrowserOpen,
+      onClick: () => { onMemoryBrowserOpen?.(); setTab("memory"); },
     },
     { icon: "calendar_month", label: t("dashboard.events"), value: 0, color: "text-amber-400" },
     { icon: "public", label: t("dashboard.web"), value: t("dashboard.connected"), color: "text-success-green" },
@@ -63,12 +66,12 @@ export default function DashboardHome({ onDocumentsOpen, onMemoryBrowserOpen }: 
     disabledReason?: string;
     kind: "tab" | "dialog";
     tab?: LeftTab;
-    dialog?: "quickNote" | "analyzeFolder";
+    dialog?: "quickNote" | "analyzeFolder" | "searchDocuments";
     beforeNavigate?: () => void;
   };
 
   const actions: DashboardAction[] = [
-    { icon: "search", label: t("dashboard.search_files"), desc: t("dashboard.search_files_desc"), kind: "tab", tab: "sources", disabled: noFiles, disabledReason: t("dashboard.search_files_disabled_reason") },
+    { icon: "search", label: t("dashboard.search_files"), desc: t("dashboard.search_files_desc"), kind: "dialog", dialog: "searchDocuments", disabled: noFiles, disabledReason: t("dashboard.search_files_disabled_reason") },
     { icon: "folder_open", label: t("dashboard.analyze_folder"), desc: t("dashboard.analyze_folder_desc"), kind: "dialog", dialog: "analyzeFolder" },
     { icon: "account_tree", label: t("dashboard.create_workflow"), desc: t("dashboard.create_workflow_desc"), kind: "tab", tab: "workflows", beforeNavigate: () => setWorkflowCreateMode("record") },
     { icon: "edit_note", label: t("dashboard.quick_note"), desc: t("dashboard.quick_note_desc"), kind: "dialog", dialog: "quickNote" },
@@ -110,6 +113,7 @@ export default function DashboardHome({ onDocumentsOpen, onMemoryBrowserOpen }: 
                 if (a.kind === "dialog") {
                   if (a.dialog === "quickNote") setQuickNoteOpen(true);
                   else if (a.dialog === "analyzeFolder") setAnalyzeFolderOpen(true);
+                  else if (a.dialog === "searchDocuments") setSearchDocsOpen(true);
                   return;
                 }
                 a.beforeNavigate?.();
@@ -131,6 +135,7 @@ export default function DashboardHome({ onDocumentsOpen, onMemoryBrowserOpen }: 
 
       <QuickNoteDialog open={quickNoteOpen} onClose={() => setQuickNoteOpen(false)} />
       <AnalyzeFolderDialog isOpen={analyzeFolderOpen} onClose={() => setAnalyzeFolderOpen(false)} />
+      <SearchDocumentsDialog isOpen={searchDocsOpen} onClose={() => setSearchDocsOpen(false)} onDocumentsOpen={onDocumentsOpen} />
     </div>
   );
 }

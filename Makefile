@@ -53,6 +53,36 @@ engine-code:
 engine-deep:
 	./bin/start_engine.sh deep
 
+# ── Whisper.cpp (STT) ──────────────────────────────────────────────────────────
+
+WHISPER_SRC := bin/whisper-src
+WHISPER_MODEL := bin/whisper/ggml-base.bin
+
+whisper-build:
+	git clone https://github.com/ggml-org/whisper.cpp $(WHISPER_SRC)
+	cd $(WHISPER_SRC) && cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON -DWHISPER_BUILD_SERVER=ON
+	cd $(WHISPER_SRC) && cmake --build build --config Release -j$$(sysctl -n hw.logicalcpu)
+
+whisper-model:
+	mkdir -p bin/whisper
+	cd $(WHISPER_SRC) && bash models/download-ggml-model.sh base
+	cp $(WHISPER_SRC)/models/ggml-base.bin $(WHISPER_MODEL)
+
+whisper-server:
+	$(WHISPER_SRC)/build/bin/whisper-server \
+		-m $(WHISPER_MODEL) \
+		--host 127.0.0.1 \
+		--port 8765 \
+		-l es \
+		-t 4 \
+		--convert
+
+whisper-cli:
+	$(WHISPER_SRC)/build/bin/whisper-cli \
+		-m $(WHISPER_MODEL) \
+		-f $(WHISPER_SRC)/samples/jfk.wav \
+		-l en
+
 lint:
 	$(VENV)/bin/black --check .
 	$(VENV)/bin/ruff check .

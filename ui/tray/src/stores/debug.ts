@@ -13,11 +13,13 @@ interface DebugState {
   selectedStep: DebugStepDetail | null;
   isLoading: boolean;
   error: string | null;
+  debugPanelOpen: boolean;
 
   loadRuns: () => Promise<void>;
   selectRun: (id: string) => Promise<void>;
   selectStep: (stepId: string) => Promise<void>;
   clear: () => void;
+  setDebugPanelOpen: (v: boolean) => void;
 }
 
 export const useDebugStore = create<DebugState>((set) => ({
@@ -27,6 +29,7 @@ export const useDebugStore = create<DebugState>((set) => ({
   selectedStep: null,
   isLoading: false,
   error: null,
+  debugPanelOpen: false,
 
   loadRuns: async () => {
     set({ isLoading: true, error: null });
@@ -72,4 +75,6 @@ export const useDebugStore = create<DebugState>((set) => ({
       selectedStep: null,
       error: null,
     }),
+
+  setDebugPanelOpen: (v) => set({ debugPanelOpen: v }),
 }));

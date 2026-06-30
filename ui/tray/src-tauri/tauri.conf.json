@@ -8,6 +8,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,6 +49,22 @@
         "visible": true,
         "center": true,
         "visibleOnAllWorkspaces": false
+      },
+      {
+        "label": "recording-overlay",
+        "title": "Cerebro Recording",
+        "width": 240,
+        "height": 80,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": false,
+        "focus": false,
+        "x": 20,
+        "y": 40,
+        "visibleOnAllWorkspaces": true,
+        "skipTaskbar": true
       }
     ],
     "security": {

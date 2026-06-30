@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/cerebro_desktop_common.sh"
 
 main() {
+  cerebro_desktop_stop_port 8765 "whisper-server"
   cerebro_desktop_stop_port 7842 "Cerebro backend"
   cerebro_desktop_log "Backend stop complete."
 }

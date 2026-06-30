@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MemoryEpisode } from "../../api/types";
 
@@ -8,6 +9,7 @@ interface MemoryEpisodeCardProps {
   onEdit: () => void;
   onDelete: () => void;
   onTogglePin: () => void;
+  highlighted?: boolean;
 }
 
 function formatEpisodeDate(ts: number, locale: string): string {
@@ -35,18 +37,37 @@ export default function MemoryEpisodeCard({
   onEdit,
   onDelete,
   onTogglePin,
+  highlighted = false,
 }: MemoryEpisodeCardProps) {
   const { t, i18n } = useTranslation();
+  const [copied, setCopied] = useState(false);
   const sourceMeta = SOURCE_META[episode.source];
   const preview = episode.content.length > 140 && !expanded
     ? `${episode.content.slice(0, 140)}…`
     : episode.content;
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(episode.content);
+    } catch {
+      /* clipboard API not available (Tauri may need @tauri-apps/plugin-clipboard-manager) */
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
     <article
-      className={`bg-surface-container-low/60 border rounded-xl p-3 transition-colors ${
+      className={`bg-surface-container-low/60 border rounded-xl p-3 transition-all ${
         episode.pinned ? "border-violet-400/30" : "border-outline-variant/10"
+      } ${
+        highlighted ? "ring-2 ring-violet-400/50 ring-offset-1 ring-offset-surface-container" : ""
       }`}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && expanded && onToggleExpand) {
+          onToggleExpand();
+        }
+      }}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
@@ -82,6 +103,17 @@ export default function MemoryEpisodeCard({
           >
             <span className="material-symbols-outlined text-[16px]">
               {episode.pinned ? "keep" : "keep_off"}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleCopy()}
+            className="p-1 rounded hover:bg-surface-container-highest text-on-surface-variant transition-colors"
+            aria-label={t("memory.copy_episode")}
+            title={copied ? t("memory.copied") : t("memory.copy_episode")}
+          >
+            <span className="material-symbols-outlined text-[16px]">
+              {copied ? "check" : "content_copy"}
             </span>
           </button>
           <button

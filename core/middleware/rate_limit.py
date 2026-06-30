@@ -9,14 +9,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, default_rpm: int = 60):
+    def __init__(self, app, default_rpm: int = 60, enabled_prefixes: list[str] | None = None):
         super().__init__(app)
         self.default_rpm = default_rpm
+        self.enabled_prefixes = enabled_prefixes
         self.route_overrides: dict[str, int] = {}
         self.clients: dict[str, list[float]] = defaultdict(list)
 
     async def dispatch(self, request: Request, call_next):
         if not request.url.path.startswith("/api/"):
+            return await call_next(request)
+        if self.enabled_prefixes is not None and not any(
+            request.url.path.startswith(p) for p in self.enabled_prefixes
+        ):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"

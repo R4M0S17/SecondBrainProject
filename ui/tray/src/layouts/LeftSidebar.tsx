@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useTabStore, type LeftTab } from "../stores/tab";
+import { useNotificationStore } from "../stores/notifications";
 
 const tabs: { id: LeftTab; icon: string; labelKey: string }[] = [
   { id: "home", icon: "home", labelKey: "sidebar.home" },
@@ -7,24 +9,41 @@ const tabs: { id: LeftTab; icon: string; labelKey: string }[] = [
   { id: "memory", icon: "psychology", labelKey: "sidebar.memory" },
   { id: "workflows", icon: "account_tree", labelKey: "sidebar.workflows" },
   { id: "sources", icon: "rss_feed", labelKey: "sidebar.sources" },
-  { id: "tools", icon: "build", labelKey: "sidebar.tools" },
-  { id: "code", icon: "code", labelKey: "sidebar.code" },
+  { id: "code", icon: "terminal", labelKey: "sidebar.code" },
 ];
 
 export default function LeftSidebar() {
   const { t } = useTranslation();
   const activeTab = useTabStore((s) => s.activeTab);
   const setTab = useTabStore((s) => s.setTab);
+  const badges = useNotificationStore((s) => s.badges);
+  const clearBadge = useNotificationStore((s) => s.clear);
+  const increment = useNotificationStore((s) => s.increment);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { tab: LeftTab };
+      if (detail?.tab) increment(detail.tab);
+    };
+    window.addEventListener("cerebro-notification", handler);
+    return () => window.removeEventListener("cerebro-notification", handler);
+  }, [increment]);
+
+  const handleTabClick = (id: LeftTab) => {
+    clearBadge(id);
+    setTab(id);
+  };
 
   return (
     <aside className="flex flex-col items-center w-12 bg-surface-container-low/60 backdrop-blur-sm border-r border-outline-variant/20 shrink-0 pt-10 pb-3 gap-1 z-30">
       {tabs.map(({ id, icon, labelKey }, i) => {
         const isActive = activeTab === id;
         const label = t(labelKey);
+        const badgeCount = badges[id];
         return (
           <button
             key={id}
-            onClick={() => setTab(id)}
+            onClick={() => handleTabClick(id)}
             className={`
               sidebar-btn group/item relative flex items-center justify-center h-10 w-10 rounded-xl
               transition-all duration-200 ease-out shrink-0 cursor-pointer
@@ -56,6 +75,11 @@ export default function LeftSidebar() {
             >
               {icon}
             </span>
+            {badgeCount != null && badgeCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-error text-[9px] font-bold text-white leading-none px-[3px]">
+                {badgeCount > 9 ? "9+" : badgeCount}
+              </span>
+            )}
             <div
               className={`
                 absolute left-full ml-3 px-2.5 py-1.5 rounded-md

@@ -14,7 +14,7 @@ import type {
   MemorySessionContext,
 } from "../api/types";
 
-export type MemoryFilter = "all" | "pinned" | "session" | "academic" | "code";
+export type MemoryFilter = string;
 
 function formatLoadError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -52,7 +52,9 @@ interface MemoryState {
   error: string | null;
   errorCode: "stale_backend" | "unavailable" | "offline" | null;
   usingMock: boolean;
-  refresh: () => Promise<void>;
+  lastRefreshedAt: number | null;
+  highlightedId: string | null;
+  refresh: (force?: boolean) => Promise<void>;
   addEpisode: (content: string, tags?: string[]) => Promise<void>;
   updateEpisode: (id: string, content: string, tags: string[]) => Promise<void>;
   deleteEpisode: (id: string) => Promise<void>;
@@ -60,6 +62,7 @@ interface MemoryState {
   searchRecall: (query: string) => Promise<MemoryRecallResult[]>;
   episodeCount: () => number;
   clearError: () => void;
+  setHighlightedId: (id: string | null) => void;
 }
 
 export const useMemoryStore = create<MemoryState>((set, get) => ({
@@ -70,12 +73,26 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
   error: null,
   errorCode: null,
   usingMock: false,
+  lastRefreshedAt: null,
+  highlightedId: null,
 
   episodeCount: () => get().stats.episodes_stored,
 
   clearError: () => set({ error: null, errorCode: null }),
 
-  refresh: async () => {
+  setHighlightedId: (id) => {
+    set({ highlightedId: id });
+    if (id !== null) {
+      setTimeout(() => set({ highlightedId: null }), 3000);
+    }
+  },
+
+  refresh: async (force = false) => {
+    const STALENESS_MS = 30_000;
+    const last = get().lastRefreshedAt;
+    if (!force && last !== null && Date.now() - last < STALENESS_MS) {
+      return;
+    }
     set({ loading: true, error: null, errorCode: null });
     try {
       const [episodesRes, session] = await Promise.all([
@@ -88,6 +105,7 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
         session,
         loading: false,
         usingMock: false,
+        lastRefreshedAt: Date.now(),
       });
     } catch (e) {
       const code = formatLoadError(e);
@@ -106,7 +124,8 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
     set({ error: null });
     try {
       await createMemoryEpisode(trimmed, tags);
-      await get().refresh();
+      await get().refresh(true);
+      window.dispatchEvent(new CustomEvent("cerebro-notification", { detail: { tab: "memory" } }));
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to add memory" });
       throw e;
@@ -117,7 +136,7 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
     set({ error: null });
     try {
       await patchMemoryEpisode(id, { content, tags });
-      await get().refresh();
+      await get().refresh(true);
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to update memory" });
       throw e;
@@ -128,7 +147,7 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
     set({ error: null });
     try {
       await deleteMemoryEpisode(id);
-      await get().refresh();
+      await get().refresh(true);
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to delete memory" });
       throw e;
@@ -141,7 +160,7 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
     set({ error: null });
     try {
       await patchMemoryEpisode(id, { pinned: !episode.pinned });
-      await get().refresh();
+      await get().refresh(true);
     } catch (e) {
       set({ error: e instanceof Error ? e.message : "Failed to update memory" });
       throw e;

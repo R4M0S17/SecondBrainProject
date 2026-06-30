@@ -14,7 +14,7 @@ const LOCAL_LABELS = [
   "wizard.step_model",
   "wizard.step_folders",
 ];
-const CLAUDE_LABELS = ["wizard.step_backend", "wizard.step_folders"];
+const SHORT_LABELS = ["wizard.step_backend", "wizard.step_folders"];
 
 export default function WizardShell() {
   const { t } = useTranslation();
@@ -45,10 +45,10 @@ export default function WizardShell() {
     }
   };
 
-  const isClaudeMode = mode === "claude";
-  const total = isClaudeMode ? 2 : 4;
-  const visualStep = isClaudeMode && currentStep === 3 ? 1 : currentStep;
-  const labelKeys = isClaudeMode ? CLAUDE_LABELS : LOCAL_LABELS;
+  const shortMode = mode === "claude" || mode === "none";
+  const total = shortMode ? 2 : 4;
+  const visualStep = shortMode && currentStep === 3 ? 1 : currentStep;
+  const labelKeys = shortMode ? SHORT_LABELS : LOCAL_LABELS;
   const stepLabel = t(labelKeys[visualStep] ?? "");
 
   return (

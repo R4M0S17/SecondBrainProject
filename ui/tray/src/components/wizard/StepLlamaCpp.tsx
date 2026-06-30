@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getWizardStatus, updateConfig, wizardCheckLlamaCpp } from "../../api/client";
+import { getWizardStatus, startEngine, updateConfig, wizardCheckLlamaCpp } from "../../api/client";
 
 interface StepLlamaCppProps {
   onReady: (ready: boolean) => void;
@@ -14,6 +14,8 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
   const [liteSaving, setLiteSaving] = useState(false);
   const [liteApplied, setLiteApplied] = useState(false);
   const [liteError, setLiteError] = useState<string | null>(null);
+  const [engineStarting, setEngineStarting] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,9 +165,43 @@ export default function StepLlamaCpp({ onReady }: StepLlamaCppProps) {
       </div>
 
       {!skippedReason && !running && running !== null && (
-        <p className="text-[12px] text-outline text-center">
-          {t("wizard.llama_instructions")}
-        </p>
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={async () => {
+              setEngineStarting(true);
+              setEngineError(null);
+              try {
+                await startEngine();
+              } catch (e: unknown) {
+                setEngineError(e instanceof Error ? e.message : "Failed to start engine");
+              } finally {
+                setEngineStarting(false);
+              }
+            }}
+            disabled={engineStarting}
+            className={`w-full py-2.5 rounded-lg font-semibold text-[13px] transition-all ${
+              engineStarting
+                ? "bg-surface-container text-outline cursor-wait"
+                : "bg-[#6366f1] text-white hover:opacity-90 active:scale-[0.99]"
+            }`}
+          >
+            {engineStarting ? t("wizard.engine_starting") : t("wizard.start_engine")}
+          </button>
+          {engineError && (
+            <p className="text-[12px] text-error text-center">{engineError}</p>
+          )}
+          <p className="text-[12px] text-outline text-center">
+            {t("wizard.llama_instructions")}
+          </p>
+          <button
+            type="button"
+            onClick={() => onReady(true)}
+            className="w-full text-[12px] text-outline hover:text-[#e8eaf0] underline transition-colors"
+          >
+            {t("wizard.skip_engine")}
+          </button>
+        </div>
       )}
     </div>
   );

@@ -13,8 +13,8 @@ describe("useTabStore", () => {
   it("sets active tab", () => {
     useTabStore.getState().setTab("code");
     expect(useTabStore.getState().activeTab).toBe("code");
-    useTabStore.getState().setTab("tools");
-    expect(useTabStore.getState().activeTab).toBe("tools");
+    useTabStore.getState().setTab("memory");
+    expect(useTabStore.getState().activeTab).toBe("memory");
   });
 
   it("stores scratch content", () => {

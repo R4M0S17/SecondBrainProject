@@ -8,11 +8,9 @@ to the user.
 from __future__ import annotations
 
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -212,27 +210,15 @@ def _cg_callback(proxy: Any, event_type: int, event: Any, refcon: Any) -> Any:
 def check_accessibility_permission() -> bool:
     """Check if current process has Accessibility permission on macOS.
 
-    Returns:
-        True if Accessibility permission is granted, False otherwise.
+    Uses the official AXIsProcessTrusted() API — works on all macOS versions.
     """
     if not HAS_QUARTZ:
         return False
 
     try:
-        result = subprocess.run(
-            ["tccutil", "dump"], capture_output=True, text=True, timeout=5, check=False
-        )
+        from ApplicationServices import AXIsProcessTrusted
 
-        # Get current executable info
-        current_executable = sys.executable
-        executable_name = Path(current_executable).name
-
-        # Check if Accessibility appears and matches our executable
-        return "Accessibility" in result.stdout and (
-            executable_name in result.stdout
-            or current_executable in result.stdout
-            or "python" in result.stdout
-        )
+        return bool(AXIsProcessTrusted())
     except Exception as e:
         logger.debug(f"Could not check accessibility permission: {e}")
         return False
@@ -273,20 +259,12 @@ class Recorder:
         self._thread: threading.Thread | None = None
         self._tap: Any = None
         self._lock = threading.Lock()
-        self._accessibility_check_done = False
 
-        # Proactively check accessibility permission on init
-        if HAS_QUARTZ and not check_accessibility_permission():
-            logger.error(
-                "❌ Accessibility permission not granted!\n"
-                "📍 To fix: System Settings → Privacy & Security → Accessibility\n"
-                "➕ Add Python to the list\n"
-                "🔄 Then restart the application"
-            )
-            request_accessibility_permission()
-            self._accessibility_check_done = False
+        if HAS_QUARTZ:
+            trusted = check_accessibility_permission()
+            logger.info(f"Accessibility permission on init: {trusted}")
         else:
-            self._accessibility_check_done = True
+            logger.warning("pyobjc not installed — Recorder unavailable")
 
     @property
     def is_recording(self) -> bool:
@@ -325,15 +303,10 @@ class Recorder:
         if self._running:
             return
         if not HAS_QUARTZ:
-            logger.warning("Desktop Recorder requires pyobjc (pip install pyobjc-framework-Quartz)")
-            return
+            raise RuntimeError("recorder_unavailable")
         if not check_accessibility_permission():
-            logger.warning(
-                "⚠️  Accessibility permission not granted. Cannot start recording.\n"
-                "Opening System Settings..."
-            )
             request_accessibility_permission()
-            return
+            raise RuntimeError("accessibility_required")
         self._events = []
         self._started_at = time.time()
         self._running = True

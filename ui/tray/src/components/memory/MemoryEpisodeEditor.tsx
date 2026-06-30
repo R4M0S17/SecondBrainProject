@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { MemoryEpisode } from "../../api/types";
+import { useMemoryStore } from "../../stores/memory";
 
 interface MemoryEpisodeEditorProps {
   episode: MemoryEpisode;
@@ -10,10 +11,31 @@ interface MemoryEpisodeEditorProps {
 
 export default function MemoryEpisodeEditor({ episode, onSave, onClose }: MemoryEpisodeEditorProps) {
   const { t } = useTranslation();
+  const { episodes } = useMemoryStore();
   const [content, setContent] = useState(episode.content);
   const [tagsText, setTagsText] = useState(episode.tags.join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const existingTags = useMemo(() => {
+    const all = new Set<string>();
+    for (const ep of episodes) {
+      for (const tag of ep.tags) {
+        all.add(tag);
+      }
+    }
+    return Array.from(all).sort();
+  }, [episodes]);
+
+  const currentTagInput = tagsText.split(",").pop()?.trim() ?? "";
+  const suggestions = currentTagInput.length > 0
+    ? existingTags.filter(
+        (t) =>
+          t.toLowerCase().includes(currentTagInput.toLowerCase()) &&
+          !tagsText.split(",").map((s) => s.trim()).includes(t)
+      )
+    : [];
 
   const handleSave = async () => {
     const trimmed = content.trim();
@@ -25,7 +47,6 @@ export default function MemoryEpisodeEditor({ episode, onSave, onClose }: Memory
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    if (episode.pinned) tags.push("pinned");
     setSaving(true);
     setError(null);
     try {
@@ -68,13 +89,54 @@ export default function MemoryEpisodeEditor({ episode, onSave, onClose }: Memory
             <label className="text-[11px] font-medium text-on-surface-variant uppercase tracking-wider">
               {t("memory.edit_tags_label")}
             </label>
-            <input
-              type="text"
-              value={tagsText}
-              onChange={(e) => setTagsText(e.target.value)}
-              placeholder={t("memory.edit_tags_placeholder")}
-              className="mt-1.5 w-full bg-surface-container-low border border-outline-variant/20 rounded-lg px-3 py-2 text-[12px] text-on-surface focus:outline-none focus:border-primary-container/50"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={tagsText}
+                onChange={(e) => { setTagsText(e.target.value); setShowSuggestions(true); }}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                onFocus={() => setShowSuggestions(true)}
+                placeholder={t("memory.edit_tags_placeholder")}
+                className="mt-1.5 w-full bg-surface-container-low border border-outline-variant/20 rounded-lg px-3 py-2 text-[12px] text-on-surface focus:outline-none focus:border-primary-container/50"
+              />
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-surface-container border border-outline-variant/20 rounded-lg shadow-lg overflow-hidden">
+                  {suggestions.slice(0, 5).map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-[12px] text-on-surface hover:bg-surface-container-highest transition-colors font-label-mono"
+                      onMouseDown={() => {
+                        const parts = tagsText.split(",");
+                        parts[parts.length - 1] = ` ${tag}`;
+                        setTagsText(parts.join(",").trimStart() + ", ");
+                        setShowSuggestions(false);
+                      }}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {existingTags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {existingTags.slice(0, 8).map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      if (!tagsText.split(",").map((s) => s.trim()).includes(tag)) {
+                        setTagsText((prev) => prev ? `${prev.trimEnd().replace(/,\s*$/, "")}, ${tag}` : tag);
+                      }
+                    }}
+                    className="px-2 py-0.5 rounded-md bg-surface-container text-on-surface-variant text-[10px] font-label-mono hover:bg-surface-container-highest transition-colors border border-outline-variant/10"
+                  >
+                    + {tag}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {error && <p className="text-[11px] text-error">{error}</p>}
         </div>

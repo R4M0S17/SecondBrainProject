@@ -36,6 +36,8 @@ export default function StatusBar() {
   const ramTotal = status?.ram_total_gb ?? (status?.ram_used_gb ?? 0) + (status?.ram_available_gb ?? 0);
   const cpuAvg = status?.cpu_percent ?? 0;
   const uptime = "—";
+  const latency = status?.p95_latency_ms ?? 0;
+  const model = status?.current_model_id ?? status?.model;
 
   return (
     <footer aria-label="System status" className="fixed bottom-0 left-0 w-full flex justify-between items-center px-4 md:px-6 py-1 z-50 bg-surface-container-lowest/50 backdrop-blur-sm border-t border-outline-variant/10 text-on-surface-variant/70 text-[11px] font-label-mono shrink-0">
@@ -48,11 +50,14 @@ export default function StatusBar() {
           llamaServer={llamaServer}
           backendReady={backendReady}
           engineState={engineState}
+          latencyMs={latency}
+          model={model ?? undefined}
         />
       </div>
       <div className="flex gap-4">
         <span>{t("status.ram", { used: ramUsed.toFixed(1), total: ramTotal.toFixed(1) })}</span>
         {cpuAvg > 0 && <span>{t("status.cpu", { percent: Math.round(cpuAvg) })}</span>}
+        {latency > 0 && <span>{t("status.latency")} {latency}ms</span>}
         <span>{t("status.uptime")} {uptime}</span>
       </div>
     </footer>

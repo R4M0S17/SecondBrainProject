@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMemoryStore } from "../../stores/memory";
 
@@ -6,6 +7,8 @@ const INTERNAL_KEYS = new Set(["last_web_search_query", "last_web_search_result"
 export default function SessionTab() {
   const { t, i18n } = useTranslation();
   const { session, addEpisode } = useMemoryStore();
+  const [confirmSaveAll, setConfirmSaveAll] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
 
   const lastSearchQuery = session.working_memory["last_web_search_query"] ?? null;
 
@@ -29,6 +32,7 @@ export default function SessionTab() {
   };
 
   const handleSaveAll = async () => {
+    setSavingAll(true);
     for (const [key, value] of autoNotes) {
       try {
         await addEpisode(`${key}: ${value}`, ["auto-note", "session"]);
@@ -36,6 +40,8 @@ export default function SessionTab() {
         /* skip failed */
       }
     }
+    setSavingAll(false);
+    setConfirmSaveAll(false);
   };
 
   const hasContent = !!(
@@ -99,14 +105,35 @@ export default function SessionTab() {
               <p className="text-[10px] uppercase tracking-wider text-on-surface-variant/50">
                 {t("memory.working_memory")}
               </p>
-              <button
-                type="button"
-                onClick={() => void handleSaveAll()}
-                className="text-[11px] text-primary-container hover:underline flex items-center gap-1"
-              >
-                <span className="material-symbols-outlined text-[14px]">bookmark_add</span>
-                {t("memory.save_to_facts")}
-              </button>
+              {!confirmSaveAll ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmSaveAll(true)}
+                  className="text-[11px] text-primary-container hover:underline flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-[14px]">bookmark_add</span>
+                  {t("memory.save_to_facts")}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-on-surface-variant">{t("memory.save_all_confirm", { count: autoNotes.length })}</span>
+                  <button
+                    type="button"
+                    disabled={savingAll}
+                    onClick={() => void handleSaveAll()}
+                    className="text-[11px] text-primary-container font-medium hover:underline disabled:opacity-50"
+                  >
+                    {savingAll ? t("status.loading") : t("memory.confirm_yes")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmSaveAll(false)}
+                    className="text-[11px] text-on-surface-variant hover:underline"
+                  >
+                    {t("note.cancel")}
+                  </button>
+                </div>
+              )}
             </div>
             <dl className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
               {autoNotes.map(([key, value]) => (

@@ -384,8 +384,25 @@ StatusBar (minimal footer)
 
 ---
 
+---
+
+## Dashboard — Buscar Archivos (búsqueda RAG)
+
+- **`POST /api/documents/search`** con dos modos: `chunks` (solo fragmentos, sin motor) y `answer` (RAG completo con síntesis)
+- **`core/tools/document_search.py`** — módulo puro de búsqueda vectorial, sin dependencias FastAPI/LLM
+- **`SearchDocumentsDialog`** — diálogo modal en Home con input query, toggle modo, filtro por carpeta vigilada, resultados con snippets + score
+- **Degradación elegante**: si motor apagado, modo `answer` devuelve 200 con `answer=null` + warning `engine_off`
+- **`_engine_is_ok()`** helper reutiliza `provider_registry.get_chat().is_available()`
+- **Deep dive en chat** via `utils/documentSearchPrompt.ts` — prompt enriquecido con fragmentos y fuentes
+- **Activity tracking** en dashboard tras cada búsqueda
+- **Discoverability**: `DocumentsPanel` con filtro por filename + botón "Búsqueda semántica"; `ToolsPanel` Quick Action "Search Files" cableado; atajo `Cmd+Shift+F` global
+- La action card **Buscar Archivos** ya no navega al tab Sources — abre el diálogo directamente
+- 27 keys i18n en `es.json` + `en.json` (namespace `search_docs.*`)
+- Tests: `tests/test_document_search.py` (16 tests, unit + API)
+- `make test-stable` → 173 pass, 0 regresiones
+
 ## Build Status
 
 - TypeScript: `npx tsc --noEmit` → **0 errors**
 - Production: `npm run build` → **106 modules, 0 errors**
-- Backend tests: `make test-stable` → 152/153 pass (1 pre-existing calendar test failure, unrelated)
+- Backend tests: `make test-stable` → 173 pass

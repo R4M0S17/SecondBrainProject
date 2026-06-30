@@ -12,6 +12,17 @@ const FALLBACK_LLAMA_CPP_MODELS: LlamaCppModel[] = [
   { name: "llama-3.2-3b-instruct-q4_k_m.gguf", size_gb: 1.9, provider: "llama_cpp" },
 ];
 
+export type ExpertSection =
+  | "tools"
+  | "models"
+  | "inference"
+  | "memory-rag"
+  | "providers"
+  | "paths"
+  | "web-search"
+  | "fleet"
+  | "observability";
+
 interface SettingsState {
   config: AppConfig | null;
   isDirty: boolean;
@@ -36,6 +47,13 @@ interface SettingsState {
   close: () => void;
   startIndexing: (paths: string[]) => Promise<void>;
   clearIndexJob: () => void;
+  expertOpen: boolean;
+  activeExpertSection: ExpertSection;
+  openExpert: (section?: ExpertSection) => void;
+  closeExpert: () => void;
+  setExpertSection: (s: ExpertSection) => void;
+  expertSaving: boolean;
+  setExpertSaving: (v: boolean) => void;
 }
 
 const DEFAULT_MODEL = "Qwen3.5-2B-UD-Q4_K_XL.gguf";
@@ -187,6 +205,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   open: () => set({ isOpen: true }),
   close: () => set({ isOpen: false }),
+
+  expertOpen: false,
+  activeExpertSection: "tools",
+  openExpert: (section) => {
+    const last = localStorage.getItem("cerebro_expert_section") as ExpertSection | null;
+    const target = section ?? last ?? "tools";
+    localStorage.setItem("cerebro_expert_section", target);
+    set({ expertOpen: true, activeExpertSection: target });
+  },
+  closeExpert: () => set({ expertOpen: false }),
+  expertSaving: false,
+  setExpertSaving: (v) => set({ expertSaving: v }),
+  setExpertSection: (s) => {
+    localStorage.setItem("cerebro_expert_section", s);
+    set({ activeExpertSection: s });
+  },
 
   startIndexing: async (paths) => {
     if (paths.length === 0) return;

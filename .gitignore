@@ -25,6 +25,10 @@ models/
 # llama.cpp prompt-cache sidecar (runtime)
 bin/cache/
 
+# whisper.cpp source + model (build manually via Makefile)
+bin/whisper/
+bin/whisper-src/
+
 # IDE
 .vscode/
 .idea/

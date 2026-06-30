@@ -28,22 +28,13 @@ from typing import Any, Literal
 
 import httpx
 import psutil
-
-# Tuned pool limits: prevents socket exhaustion under concurrent requests.
-# max_connections=20 gives headroom for bursts; max_keepalive=10 keeps warm
-# sockets ready; keepalive_expiry=30s matches llama-server's keep-alive window.
-_HTTP_POOL_LIMITS = httpx.Limits(
-    max_connections=20,
-    max_keepalive_connections=10,
-    keepalive_expiry=30.0,
-)
-
 from fastapi import (
     APIRouter,
     Body,
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     Request,
     Security,
@@ -59,8 +50,11 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from core.agents.conversation_store import ConversationStore
 from core.agents.specialized import GENERAL_AGENT_ID, SpecializedAgentRouter
-from core.middleware.rate_limit import RateLimitMiddleware
-from core.security.secrets import AuthState, SecretsManager
+from core.feature_flags import (
+    apply_profile_guard,
+    config_needs_low_power_migration,
+    low_power_mode_enabled,
+)
 from core.inference.inference_warnings import (
     clear_inference_warnings,
     consume_inference_warnings,
@@ -68,16 +62,23 @@ from core.inference.inference_warnings import (
 )
 from core.inference.ram_preflight import RAM_WARNING_CRITICAL, collect_ram_warnings
 from core.ingestion.pipeline import IngestionPipeline
+from core.middleware.rate_limit import RateLimitMiddleware
 from core.observability.ram_monitor import RamMonitor
 from core.observability.response_meta import MetricsCollector, ResponseMetadata, ToolCallRecord
+from core.security.secrets import AuthState, SecretsManager
+from core.tools.document_search import search_document_chunks
+from core.tools.folder_analysis import PathNotAuthorizedError, analyze_folder
 from core.tools.handlers.upload import process_uploaded_file
-from core.tools.folder_analysis import analyze_folder, PathNotAuthorizedError
-from core.feature_flags import (
-    apply_profile_guard,
-    config_needs_low_power_migration,
-    low_power_mode_enabled,
-)
 from ui.tray.wizard import recommend_lite_profile
+
+# Tuned pool limits: prevents socket exhaustion under concurrent requests.
+# max_connections=20 gives headroom for bursts; max_keepalive=10 keeps warm
+# sockets ready; keepalive_expiry=30s matches llama-server's keep-alive window.
+_HTTP_POOL_LIMITS = httpx.Limits(
+    max_connections=20,
+    max_keepalive_connections=10,
+    keepalive_expiry=30.0,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Pydantic models for request / response serialisation
@@ -96,6 +97,7 @@ class ToolCallRecordModel(BaseModel):
     result_summary: str
     latency_ms: float
     approved: bool
+    timestamp: str | None = None
 
 
 class MemoryRefModel(BaseModel):
@@ -221,6 +223,26 @@ class FolderAnalyzeResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class DocumentSearchRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=2000)
+    mode: Literal["chunks", "answer"] = "chunks"
+    top_k: int = Field(default=8, ge=1, le=20)
+    source_prefix: str | None = Field(
+        default=None,
+        description="Filtrar chunks cuyo source_path empiece por este prefijo",
+    )
+
+
+class DocumentSearchResponse(BaseModel):
+    query: str
+    mode: str
+    hits: list[dict[str, Any]] = Field(default_factory=list)
+    answer: str | None = None
+    sources: list[str] = Field(default_factory=list)
+    latency_ms: float = 0.0
+    warnings: list[str] = Field(default_factory=list)
+
+
 class MemoryEpisodeModel(BaseModel):
     id: str
     content: str
@@ -327,6 +349,7 @@ class StatusResponse(BaseModel):
     selection_rationale: str | None = None
     context_window: int = 0
     macos_permissions: dict[str, str] | None = None
+    whisper: dict[str, Any] | None = None
 
 
 class WizardStatusResponse(BaseModel):
@@ -420,6 +443,7 @@ class AppState:
         self.state_store: Any = None  # AgentStateStore | None
         # Maps conversation_id → llama-server slot_id for KV cache reuse.
         self._active_slots: dict[str, int] = {}
+        self.whisper: Any = None
         self._load_wizard_state()
 
     def _load_config(self) -> dict[str, Any]:
@@ -502,6 +526,7 @@ auth_state = AuthState(api_key=os.getenv("CEREBRO_API_KEY", "") or None)
 
 _LOCAL_PEERS = ("127.0.0.1", "::1", "localhost")
 
+
 async def _verify_api_key(
     request: Request,
     key: str | None = Security(_API_KEY_HEADER),
@@ -514,7 +539,9 @@ async def _verify_api_key(
         return
     if not key or not hmac.compare_digest(key, current_key):
         logger.warning(f"Auth failure from {peer}")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key"
+        )
 
 
 async def _start_component_in_background(name: str, starter) -> None:
@@ -588,6 +615,13 @@ async def lifespan(app: FastAPI):
     if app_state.time_travel_recorder is not None:
         app_state.time_travel_recorder.start()
 
+    if app_state.whisper is not None and app_state.whisper.is_available:
+        startup_tasks.append(
+            asyncio.create_task(
+                _start_component_in_background("WhisperManager", app_state.whisper.ensure_running)
+            )
+        )
+
     yield  # ── server is live ──────────────────────────────────────────────────
 
     # Graceful shutdown: cancel background tasks first, then close the HTTP pool.
@@ -613,6 +647,11 @@ async def lifespan(app: FastAPI):
             pass
     if app_state.workflow_store is not None:
         app_state.workflow_store.close()
+    if app_state.whisper is not None:
+        try:
+            app_state.whisper.shutdown()
+        except Exception:
+            pass
 
     await http_client.aclose()
     logger.info("Shared httpx.AsyncClient closed cleanly")
@@ -631,10 +670,12 @@ ALLOWED_ORIGINS = [
 ]
 
 if os.environ.get("CEREBRO_DEV"):
-    ALLOWED_ORIGINS.extend([
-        "http://localhost:1420",
-        "http://127.0.0.1:1420",
-    ])
+    ALLOWED_ORIGINS.extend(
+        [
+            "http://localhost:1420",
+            "http://127.0.0.1:1420",
+        ]
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -643,7 +684,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "X-Cerebro-Key"],
 )
-app.add_middleware(RateLimitMiddleware, default_rpm=60)
+app.add_middleware(
+    RateLimitMiddleware,
+    default_rpm=60,
+    enabled_prefixes=["/api/query", "/api/tool-confirm"],
+)
 
 api = APIRouter(prefix="/api")
 
@@ -819,9 +864,11 @@ async def analyze_folder_endpoint(req: FolderAnalyzeRequest) -> FolderAnalyzeRes
         )
     except ValueError as e:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=400, detail=str(e))
     except PathNotAuthorizedError as e:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=403, detail=str(e))
 
     largest_files = [
@@ -919,6 +966,7 @@ def _meta_to_model(meta: ResponseMetadata) -> ResponseMetadataModel:
                 result_summary=t.result_summary,
                 latency_ms=t.latency_ms,
                 approved=t.approved,
+                timestamp=t.executed_at.isoformat() if hasattr(t, "executed_at") else None,
             )
             for t in meta.tools_called
         ],
@@ -1492,6 +1540,88 @@ async def delete_document_endpoint(source_path: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _engine_is_ok() -> bool:
+    if app_state.provider_registry is None:
+        return False
+    try:
+        chat = app_state.provider_registry.get_chat()
+        return chat.is_available()
+    except Exception:
+        return False
+
+
+@api.post("/documents/search", response_model=DocumentSearchResponse)
+async def search_documents_endpoint(req: DocumentSearchRequest) -> DocumentSearchResponse:
+    start = time.monotonic()
+    warnings: list[str] = []
+
+    if app_state.vector_store is None:
+        raise HTTPException(status_code=503, detail="Vector store not available")
+    if app_state.embedding_provider is None:
+        raise HTTPException(status_code=503, detail="Embedding provider not available")
+
+    embed_fn = app_state.embedding_provider.embed
+    if embed_fn is None:
+        raise HTTPException(status_code=503, detail="Embedding provider has no embed method")
+
+    try:
+        hits = await search_document_chunks(
+            query=req.query,
+            vector_store=app_state.vector_store,
+            embed_fn=embed_fn,
+            top_k=req.top_k,
+            source_prefix=req.source_prefix,
+        )
+    except Exception as exc:
+        logger.warning("Document search failed: {}", exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    answer: str | None = None
+    sources: list[str] = list({h.source_path for h in hits})
+
+    if req.mode == "answer":
+        if app_state.rag_engine is None:
+            warnings.append("rag_unavailable")
+        elif not _engine_is_ok():
+            warnings.append("engine_off")
+        else:
+            try:
+                rag = await app_state.rag_engine.query(req.query, top_k=req.top_k)
+                answer = rag.answer
+                sources = rag.sources
+            except Exception as exc:
+                logger.warning("RAG query for document search failed: {}", exc)
+                warnings.append("rag_query_failed")
+
+    if req.source_prefix and sources:
+        sources = [s for s in sources if s.startswith(req.source_prefix)]
+        if not sources and not answer:
+            warnings.append("no_hits_in_folder")
+
+    latency_ms = (time.monotonic() - start) * 1000
+
+    return DocumentSearchResponse(
+        query=req.query,
+        mode=req.mode,
+        hits=[
+            {
+                "id": h.id,
+                "source_path": h.source_path,
+                "filename": h.filename,
+                "chunk_index": h.chunk_index,
+                "content": h.content,
+                "score": h.score,
+                "snippet": h.snippet,
+            }
+            for h in hits
+        ],
+        answer=answer,
+        sources=sources,
+        latency_ms=round(latency_ms, 1),
+        warnings=warnings,
+    )
+
+
 # ── Agent memory (long-term episodic store) ─────────────────────────────────
 
 
@@ -1523,11 +1653,7 @@ def _estimate_tokens(text: str) -> int:
 def _last_consolidation_ts(chunks: list[Any]) -> float | None:
     from core.memory.long_term import infer_episode_ui_source
 
-    candidates = [
-        c.created_at
-        for c in chunks
-        if infer_episode_ui_source(c) == "consolidation"
-    ]
+    candidates = [c.created_at for c in chunks if infer_episode_ui_source(c) == "consolidation"]
     return max(candidates) if candidates else None
 
 
@@ -1868,6 +1994,7 @@ async def status_endpoint() -> StatusResponse:
         selection_rationale=selection_rationale,
         context_window=context_window,
         macos_permissions=dict(app_state.macos_permissions),
+        whisper=(await app_state.whisper.health_check() if app_state.whisper is not None else None),
     )
 
 
@@ -2154,7 +2281,8 @@ class ConfigUpdateRequest(BaseModel):
     def validate_profile(cls, v):
         if v:
             import re as _re
-            if not _re.match(r'^[a-zA-Z0-9_-]+$', v):
+
+            if not _re.match(r"^[a-zA-Z0-9_-]+$", v):
                 raise ValueError("Profile must be alphanumeric (plus hyphens/underscores)")
         return v
 
@@ -2220,7 +2348,11 @@ async def patch_config(settings: ConfigUpdateRequest = Body(...)) -> dict[str, A
         # Hot-switch the running llama-server to the selected model
         if target == "llamacpp" and app_state.model_manager is None and model_name != prev_model:
             try:
-                await _switch_llamacpp_model(model_name, profile_args_file or "config/chat.args", app_state._config.get("profile", "normal"))
+                await _switch_llamacpp_model(
+                    model_name,
+                    profile_args_file or "config/chat.args",
+                    app_state._config.get("profile", "normal"),
+                )
             except Exception:
                 logger.exception("Failed to hot-switch model")
 
@@ -2339,6 +2471,7 @@ async def delete_secret(key: str) -> dict[str, str]:
 @api.post("/secrets/rotate")
 async def rotate_secret(request: Request) -> dict[str, str]:
     import secrets as _secrets
+
     new_key = f"ck_{_secrets.token_urlsafe(32)}"
     _save_secret("CEREBRO_API_KEY", new_key)
     if app_state.secrets_mgr is not None:
@@ -2397,6 +2530,45 @@ async def list_llama_cpp_models() -> dict[str, Any]:
             active_model = mm_status["role"]
 
     return {"models": models, "active_model": active_model}
+
+
+# ── Model Download ─────────────────────────────────────────────────
+
+
+class ModelDownloadRequest(BaseModel):
+    url: str
+    filename: str
+
+
+@api.post("/models/download")
+async def download_model(req: ModelDownloadRequest) -> dict[str, Any]:
+    """Download a GGUF model file from a URL into the models directory."""
+    dest = _LLAMA_CPP_MODELS_DIR / req.filename
+    if dest.exists():
+        return {
+            "ok": False,
+            "detail": "Model already exists",
+            "path": str(dest),
+            "size_gb": round(dest.stat().st_size / 1_073_741_824, 1),
+        }
+    if dest.suffix.lower() not in (".gguf",):
+        return {"ok": False, "detail": "Only .gguf files are supported"}
+    _LLAMA_CPP_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(7200.0, connect=30.0)) as client:
+            async with client.stream("GET", req.url) as resp:
+                resp.raise_for_status()
+                downloaded = 0
+                with open(dest, "wb") as f:
+                    async for chunk in resp.aiter_bytes():
+                        f.write(chunk)
+                        downloaded += len(chunk)
+        size_gb = round(dest.stat().st_size / 1_073_741_824, 1)
+        return {"ok": True, "detail": "Download complete", "path": str(dest), "size_gb": size_gb}
+    except Exception as e:
+        if dest.exists():
+            dest.unlink(missing_ok=True)
+        return {"ok": False, "detail": str(e)}
 
 
 # ── Tool Registry Browser ───────────────────────────────────────────
@@ -2464,6 +2636,89 @@ class DebugStepModel(BaseModel):
     tool_result_preview: str | None = None
     needs_confirmation: bool = False
     timestamp: float
+
+
+# ── Transcription endpoints ────────────────────────────────────────────────────
+
+
+@api.post("/transcribe")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: str = Form("auto"),
+):
+    MAX_BYTES = 10 * 1024 * 1024
+
+    if file.content_type not in (
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+        "application/octet-stream",
+    ):
+        raise HTTPException(status_code=415, detail="Se requiere audio/wav")
+
+    wav_bytes = await file.read()
+
+    if len(wav_bytes) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Audio demasiado largo (máx 10 MB)")
+
+    if len(wav_bytes) < 44:
+        raise HTTPException(status_code=400, detail="Archivo WAV inválido")
+
+    if app_state.whisper is None:
+        raise HTTPException(status_code=503, detail="Whisper no configurado")
+
+    try:
+        result = await app_state.whisper.transcribe(wav_bytes, language=language)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=502, detail=f"whisper-server error: {e.response.status_code}"
+        )
+
+    text = result.get("text", "").strip()
+    detected_language = result.get("language", language)
+
+    duration_ms = 0
+    if "segments" in result and result["segments"]:
+        last_seg = result["segments"][-1]
+        duration_ms = int(last_seg.get("t1", 0) * 10)
+
+    return {
+        "text": text,
+        "language": detected_language,
+        "duration_ms": duration_ms,
+    }
+
+
+@api.get("/transcribe/health")
+async def transcribe_health():
+    if app_state.whisper is None:
+        return {
+            "available": False,
+            "running": False,
+            "reachable": False,
+            "model": None,
+            "port": 8765,
+        }
+    return await app_state.whisper.health_check()
+
+
+@api.post("/transcribe/start")
+async def transcribe_start():
+    if app_state.whisper is None:
+        raise HTTPException(status_code=503, detail="Whisper no configurado")
+    success = await app_state.whisper.ensure_running()
+    if not success:
+        raise HTTPException(status_code=503, detail="No se pudo iniciar whisper-server")
+    return {"status": "running"}
+
+
+@api.post("/transcribe/stop")
+async def transcribe_stop():
+    if app_state.whisper is not None:
+        app_state.whisper.shutdown()
+    return {"status": "stopped"}
 
 
 debug = APIRouter(prefix="/api/debug")
@@ -2602,7 +2857,11 @@ async def workflow_record_stop(body: WorkflowStopBody | None = None):
 
 @wf.post("/record/cancel")
 async def workflow_record_cancel():
-    from core.automation.service import RecordingConflictError, RecordingUnavailableError, cancel_recording
+    from core.automation.service import (
+        RecordingConflictError,
+        RecordingUnavailableError,
+        cancel_recording,
+    )
 
     try:
         return cancel_recording(app_state.recorder)
@@ -2839,7 +3098,9 @@ def _update_args_mmproj(args_file: Path, model_name: str = "") -> None:
     args_file.write_text(content + "\n")
 
 
-async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.args", profile: str = "normal") -> None:
+async def _switch_llamacpp_model(
+    model_name: str, args_file: str = "config/chat.args", profile: str = "normal"
+) -> None:
     root = _LLAMA_CPP_MODELS_DIR.parent.parent
 
     model_path: Path | None = None
@@ -2899,13 +3160,19 @@ async def _switch_llamacpp_model(model_name: str, args_file: str = "config/chat.
             try:
                 r = await client.get(f"{_LLAMA_CPP_BASE}/health")
                 if r.status_code == 200:
-                    logger.info("llama-server is healthy after model switch to {} (profile: {})", model_name, profile)
+                    logger.info(
+                        "llama-server is healthy after model switch to {} (profile: {})",
+                        model_name,
+                        profile,
+                    )
                     return
             except Exception:
                 pass
             await asyncio.sleep(2)
         logger.error(
-            "llama-server did not become healthy within 60s after switching to {} (profile: {})", model_name, profile
+            "llama-server did not become healthy within 60s after switching to {} (profile: {})",
+            model_name,
+            profile,
         )
 
 
