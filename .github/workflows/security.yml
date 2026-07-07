@@ -51,39 +51,39 @@ jobs:
             > /tmp/current_scan.json
 
           python3 - /tmp/current_scan.json .secrets.baseline << 'PYEOF'
-import json, sys
+          import json, sys
 
-scan_file, baseline_file = sys.argv[1], sys.argv[2]
+          scan_file, baseline_file = sys.argv[1], sys.argv[2]
 
-with open(scan_file) as f:
-    current = json.load(f)
-with open(baseline_file) as f:
-    baseline = json.load(f)
+          with open(scan_file) as f:
+              current = json.load(f)
+          with open(baseline_file) as f:
+              baseline = json.load(f)
 
-# Build set of already-reviewed findings (marked false positive)
-reviewed = {
-    (fname, s["line_number"], s["type"])
-    for fname, findings in baseline.get("results", {}).items()
-    for s in findings
-    if s.get("is_secret") is False
-}
+          # Build set of already-reviewed findings (marked false positive)
+          reviewed = {
+              (fname, s["line_number"], s["type"])
+              for fname, findings in baseline.get("results", {}).items()
+              for s in findings
+              if s.get("is_secret") is False
+          }
 
-# Any finding not in the reviewed set is new / unaudited
-new_findings = [
-    f"  {s['type']} @ {fname}:{s['line_number']}"
-    for fname, findings in current.get("results", {}).items()
-    for s in findings
-    if (fname, s["line_number"], s["type"]) not in reviewed
-]
+          # Any finding not in the reviewed set is new / unaudited
+          new_findings = [
+              f"  {s['type']} @ {fname}:{s['line_number']}"
+              for fname, findings in current.get("results", {}).items()
+              for s in findings
+              if (fname, s["line_number"], s["type"]) not in reviewed
+          ]
 
-if new_findings:
-    print("New unaudited findings — add to .secrets.baseline or mark false positive:")
-    print("\n".join(new_findings))
-    sys.exit(1)
+          if new_findings:
+              print("New unaudited findings — add to .secrets.baseline or mark false positive:")
+              print("\n".join(new_findings))
+              sys.exit(1)
 
-total = sum(len(v) for v in current.get("results", {}).values())
-print(f"OK — {total} known findings in baseline, none new.")
-PYEOF
+          total = sum(len(v) for v in current.get("results", {}).values())
+          print(f"OK — {total} known findings in baseline, none new.")
+          PYEOF
 
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v3
