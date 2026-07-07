@@ -60,13 +60,14 @@ secuencia de acciones de usuario capturadas y generar un script AppleScript
 reutilizable que reproduzca esas acciones en las apps target.
 
 REGLAS:
-1. IGNORA completamente acciones en apps: Cerebro, python3, python3.14, Electron.
+1. IGNORA completamente acciones en apps: Cerebro, Cerebro Recording, python3, python3.14, Electron, Window Server, Dock, SystemUIServer, loginwindow, NotificationCenter, ControlCenter, Spotlight, Siri, Wallpaper.
 2. Enfócate en las acciones en el resto de apps (Finder, Safari, Notes, etc.).
 3. Usa System Events para clicks y keystrokes reales.
 4. El script DEBE ser ejecutable con `osascript`.
 5. Para clicks: tell application "System Events" to click at {x, y}
 6. Para teclas: tell application "System Events" to keystroke "texto"
 7. Activa la app target antes de sus acciones: tell application "X" to activate
+8. Si un clic no tiene app asociada (app_name es "unknown" o está vacío), NO intentes activar ninguna app, solo genera el clic con las coordenadas.
 
 Responde SOLO con JSON válido, sin texto antes ni después, sin markdown:
 {"name":"nombre","description":"descripción","applescript":"script completo aquí","parameters":[],"steps":[],"tags":[]}
@@ -85,6 +86,8 @@ def _events_to_text(events: list[ActionEvent]) -> str:
                 detail = f"key '{ev.key_char or ev.key_code}'"
             case "left_click" | "right_click":
                 detail = f"click at ({ev.mouse_x}, {ev.mouse_y})"
+            case "double_click":
+                detail = f"double-click at ({ev.mouse_x}, {ev.mouse_y})"
             case "modifier":
                 detail = "modifier changed"
             case _:
@@ -142,7 +145,24 @@ def _fallback_applescript(events: list[ActionEvent]) -> str:
     helper = _ensure_click_helper()
     python = _PYTHON
 
-    EXCLUDED_APPS = {"Cerebro", "cerebro", "Electron", "python3", "python3.14"}
+    EXCLUDED_APPS = {
+        "Cerebro",
+        "cerebro",
+        "Cerebro Recording",
+        "Electron",
+        "python3",
+        "python3.14",
+        "Window Server",
+        "Dock",
+        "SystemUIServer",
+        "loginwindow",
+        "Finder",
+        "NotificationCenter",
+        "ControlCenter",
+        "Spotlight",
+        "Siri",
+        "Wallpaper",
+    }
     MODIFIER_KEYS = {
         "Command",
         "Shift",
@@ -176,7 +196,10 @@ def _fallback_applescript(events: list[ActionEvent]) -> str:
                 escaped = char.replace("\\", "\\\\").replace('"', '\\"')
                 action_blocks.append(f'tell application "System Events" to keystroke "{escaped}"')
 
-        elif ev.action_type in ("left_click", "right_click") and ev.mouse_x is not None:
+        elif (
+            ev.action_type in ("left_click", "right_click", "double_click")
+            and ev.mouse_x is not None
+        ):
             x, y = int(ev.mouse_x), int(ev.mouse_y)  # type: ignore[arg-type]
             right_arg = " right" if ev.action_type == "right_click" else ""
             # Clean path — no spaces or special chars that need escaping

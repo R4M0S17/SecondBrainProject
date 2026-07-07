@@ -1,6 +1,6 @@
 # Cerebro (SecondBrain) — Agent guide
 
-Local-first agentic personal OS. **Python backend (FastAPI) + React/Tauri frontend** on port 7842. 8GB M1 Mac.
+Local-first personal assistant. **Python backend (FastAPI) + React/Tauri frontend** on port 7842. 8GB M1 Mac.
 
 ## Commands (always from repo root, via `.venv`)
 

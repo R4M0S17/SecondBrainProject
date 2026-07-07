@@ -2,14 +2,14 @@
 > Plan vigente: [`CURRENT_FOCUS.md`](../CURRENT_FOCUS.md) · Índice: [`maybe-later/README.md`](README.md)
 
 
-# Cerebro → Cognitive Operating Layer · Implementation Future Plan
+# Cerebro · Implementation Future Plan (archived)
 
 > Phase 0 of the future plan starts only after [`docs/plans/stabilization/fix-cerebro.md`](docs/plans/stabilization/fix-cerebro.md) Phase 8 is merged.
 
 > **Audience:** Claude Code (CLI agent)or any ai agent executing this plan autonomously.
 > **Authoring role:** Principal Software Architect — local-first AI OS, extreme resource optimization.
 > **Source documents:** [`docs/README.md`](docs/README.md) (current state) and [`docs/plans/vision/ideas-future.md`](docs/plans/vision/ideas-future.md) (target vision).
-> **Goal:** Migrate Cerebro from "local agentic assistant" to a **Cognitive Operating Layer**: persistent cognitive graph, multi-layer memory, event-driven proactive intelligence, ambient computing, AI-native workspace and a skill/capability marketplace — without breaking the 8 GB RAM budget on MacBook Pro M1.
+> **Goal:** Explore beyond the current assistant paradigm — persistent cognitive graph, multi-layer memory, event-driven proactive intelligence, ambient computing, AI-native workspace — without breaking the 8 GB RAM budget on MacBook Pro M1.
 
 ---
 
@@ -945,7 +945,7 @@ git commit -am "phase-8: skill marketplace (local loader + reference skill)"
 ### Step 9.1 — Rename the public concepts
 
 * **Files touched:** `README.md`, `docs/README.md`, `CLAUDE.md`, `ui/tray/src/layouts/Header.tsx`, `ui/tray/index.html`, FastAPI `app = FastAPI(title=...)`.
-* **Action:** "personal assistant" → "cognitive operating layer". Tagline: *"A local-first cognitive operating layer for one human."* Keep "Cerebro" as the product name.
+* **Old idea:** "personal assistant" → "cognitive operating layer". (Archived — the current positioning is simpler.)
 * **Verification:**
 
 ```bash

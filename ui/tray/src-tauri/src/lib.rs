@@ -3,10 +3,23 @@ mod launcher;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     image::Image,
+    Emitter,
     Manager,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+#[cfg(target_os = "macos")]
+use objc::runtime::YES;
+#[cfg(target_os = "macos")]
+use objc::{msg_send, sel, sel_impl};
+#[cfg(target_os = "macos")]
+use objc::runtime::{Class, Object};
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn object_setClass(obj: *mut Object, class: *const Class) -> *const Class;
+}
 
 #[tauri::command]
 fn get_cerebro_key() -> Option<String> {
@@ -90,6 +103,14 @@ async fn stop_cerebro_services(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn show_recording_overlay(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("recording-overlay") {
+        // Position at top-right of primary monitor before showing
+        if let Ok(Some(monitor)) = win.primary_monitor() {
+            let scale = monitor.scale_factor();
+            let logical_w = monitor.size().width as f64 / scale;
+            // 220px width + 20px margin from right edge
+            let _ = win.set_position(tauri::LogicalPosition::new(logical_w - 240.0_f64, 40.0_f64));
+        }
+
         win.show().map_err(|e| e.to_string())?;
         win.set_always_on_top(true).map_err(|e| e.to_string())?;
 
@@ -107,9 +128,21 @@ async fn show_recording_overlay(app: tauri::AppHandle) -> Result<(), String> {
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
                     );
+
+                    // Native rounded corners — clips the transparent NSWindow so no white
+                    // corners bleed through behind the CSS border-radius on the HTML body.
+                    let content_view: id = msg_send![ns_win, contentView];
+                    let _: () = msg_send![content_view, setWantsLayer: YES];
+                    let layer: id = msg_send![content_view, layer];
+                    let _: () = msg_send![layer, setCornerRadius: 16.0];
                 }
             }
         }
+
+        // Tell the overlay component to reset its local timer — the window is
+        // persistent (created hidden at app startup) so the component's Date.now()
+        // refs are stale from boot time.
+        let _ = app.emit("recording-overlay:shown", ());
     }
     Ok(())
 }
@@ -119,6 +152,32 @@ async fn hide_recording_overlay(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("recording-overlay") {
         win.hide().map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+// Called directly by the overlay window's Stop button — hides the overlay from
+// Rust, emits the event to the main window's JS listener, then focuses main.
+#[tauri::command]
+async fn overlay_stop_recording(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("recording-overlay") {
+        let _ = win.hide();
+    }
+    // Emit from Rust so it reliably reaches main window's JS listen() handler
+    app.emit("recording-overlay:stop", ()).map_err(|e| e.to_string())?;
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.show();
+        let _ = main_win.set_focus();
+    }
+    Ok(())
+}
+
+// Called directly by the overlay window's Cancel button.
+#[tauri::command]
+async fn overlay_cancel_recording(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("recording-overlay") {
+        let _ = win.hide();
+    }
+    app.emit("recording-overlay:cancel", ()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -147,6 +206,8 @@ pub fn run() {
             stop_cerebro_services,
             show_recording_overlay,
             hide_recording_overlay,
+            overlay_stop_recording,
+            overlay_cancel_recording,
             focus_main_window
         ])
         .on_window_event({
@@ -196,6 +257,22 @@ pub fn run() {
                 if let Some(overlay) = app.get_webview_window("recording-overlay") {
                     let ov_win = overlay.ns_window().unwrap() as id;
                     unsafe {
+                        // Convert NSWindow → NSPanel so we can use NonactivatingPanel.
+                        // NSPanel is a subclass of NSWindow — safe to change at runtime.
+                        let panel_class = Class::get("NSPanel").unwrap();
+                        object_setClass(ov_win, panel_class);
+
+                        // NSWindowStyleMaskNonactivatingPanel (1 << 7) — panel accepts
+                        // clicks on its controls without becoming key/active.  This means
+                        // the user can tap Stop in a single click, and the click won't be
+                        // seen by the CGEventTap as a "real" foreground event.
+                        let current_mask: usize = msg_send![ov_win, styleMask];
+                        let new_mask = current_mask | 128_usize; // NonactivatingPanel
+                        let _: () = msg_send![ov_win, setStyleMask: new_mask];
+
+                        // Panel accepts clicks without requiring key status
+                        let _: () = msg_send![ov_win, setBecomesKeyOnlyIfNeeded: YES];
+
                         let behavior = NSWindow::collectionBehavior(ov_win);
                         NSWindow::setCollectionBehavior_(
                             ov_win,
@@ -203,6 +280,13 @@ pub fn run() {
                                 | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                                 | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary,
                         );
+
+                        // Native rounded corners — matches the CSS border-radius so the
+                        // transparent window has proper NSWindow-level corner clipping.
+                        let content_view: id = msg_send![ov_win, contentView];
+                        let _: () = msg_send![content_view, setWantsLayer: YES];
+                        let layer: id = msg_send![content_view, layer];
+                        let _: () = msg_send![layer, setCornerRadius: 16.0];
                     }
                 }
             }

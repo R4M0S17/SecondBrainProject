@@ -185,6 +185,130 @@ def _active_window_title() -> str | None:
         return None
 
 
+def _is_click_on_cerebro_window(x: float, y: float) -> bool:
+    """Check if screen coordinates fall within any Cerebro window.
+
+    Uses CGWindowListCopyWindowInfo for reliable hit-testing regardless of
+    which app is frontmost.  This prevents clicks on the recording overlay
+    from being captured even when the overlay is not the key window.
+    """
+    if not HAS_QUARTZ:
+        return False
+    try:
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            kCGNullWindowID,
+            kCGWindowListOptionAll,
+        )
+
+        # Use kCGWindowListOptionAll to include windows that may have just been hidden
+        # (like the recording overlay when stop is clicked)
+        windows = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID)
+        if not windows:
+            return False
+        for win_info in windows:
+            owner = str(win_info.get("kCGWindowOwnerName", "")).lower()
+            window_name = str(win_info.get("kCGWindowName", "")).lower()
+            # Check if this is any Cerebro window (main or recording overlay)
+            # Use case-insensitive comparison to handle variations
+            if "cerebro" in owner or "cerebro" in window_name:
+                bounds = win_info.get("kCGWindowBounds", {})
+                wx = bounds.get("X", 0)
+                wy = bounds.get("Y", 0)
+                ww = bounds.get("Width", 0)
+                wh = bounds.get("Height", 0)
+                if wx <= x <= wx + ww and wy <= y <= wy + wh:
+                    logger.debug(
+                        f"Filtered click on Cerebro window at ({x}, {y}) - owner: {owner}, name: {window_name}"
+                    )
+                    return True
+        return False
+    except Exception as e:
+        logger.debug(f"Error checking Cerebro window: {e}")
+        return False
+
+
+def _app_at_coordinates(x: float, y: float) -> str | None:
+    """Get the app name at the given screen coordinates.
+
+    Uses CGWindowListCopyWindowInfo to find which app owns the window at (x, y).
+    This is more reliable than _active_app_name() for determining the target app
+    of a click, especially when the click triggers an app activation.
+    Only returns names of user applications that can be activated via AppleScript.
+    """
+    if not HAS_QUARTZ:
+        return None
+
+    # System processes that are not activatable apps
+    SYSTEM_PROCESSES = frozenset(
+        {
+            "Window Server",
+            "Dock",
+            "SystemUIServer",
+            "loginwindow",
+            "Finder",  # Finder is handled specially - clicks on Dock icons open apps
+            "NotificationCenter",
+            "ControlCenter",
+            "Spotlight",
+            "Siri",
+            "Wallpaper",  # macOS wallpaper/desktop
+        }
+    )
+
+    try:
+        from AppKit import NSRunningApplication
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            kCGNullWindowID,
+            kCGWindowListOptionOnScreenOnly,
+        )
+
+        windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
+        if not windows:
+            return None
+        for win_info in reversed(windows):
+            owner = win_info.get("kCGWindowOwnerName", "")
+            owner_pid = win_info.get("kCGWindowOwnerPID", 0)
+            # Skip system processes that can't be activated via AppleScript
+            if owner in SYSTEM_PROCESSES:
+                continue
+            # Verify this is a real user application by checking if it has a bundle identifier
+            # This filters out system processes that aren't in our hardcoded list
+            try:
+                running_app = NSRunningApplication.runningApplicationWithProcessIdentifier_(
+                    owner_pid
+                )
+                if running_app is None:
+                    continue
+                bundle_id = running_app.bundleIdentifier()
+                # System processes typically don't have bundle identifiers or have special ones
+                if not bundle_id or bundle_id.startswith("com.apple."):
+                    # Allow some Apple apps that are user-facing
+                    if bundle_id not in (
+                        "com.apple.finder",
+                        "com.apple.safari",
+                        "com.apple.notes",
+                        "com.apple.textedit",
+                        "com.apple.calculator",
+                        "com.apple.Preview",
+                        "com.apple.mail",
+                    ):
+                        continue
+            except Exception:
+                # If we can't verify, skip this window
+                continue
+            bounds = win_info.get("kCGWindowBounds", {})
+            wx = bounds.get("X", 0)
+            wy = bounds.get("Y", 0)
+            ww = bounds.get("Width", 0)
+            wh = bounds.get("Height", 0)
+            if wx <= x <= wx + ww and wy <= y <= wy + wh:
+                return owner if owner else None
+        return None
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # Recorder
 # --------------------------------------------------------------------------- #
@@ -240,6 +364,11 @@ def request_accessibility_permission() -> None:
         logger.error(f"Could not open System Preferences: {e}")
 
 
+EXCLUDED_APPS = frozenset(
+    {"Cerebro", "cerebro", "Cerebro Recording", "Electron", "python3", "python3.14"}
+)
+
+
 class Recorder:
     """Captures macOS input events while recording is active.
 
@@ -259,6 +388,9 @@ class Recorder:
         self._thread: threading.Thread | None = None
         self._tap: Any = None
         self._lock = threading.Lock()
+        self._last_click: ActionEvent | None = None  # for double-click merge
+        self._ready: threading.Event | None = None  # Señal para esperar tap listo
+        self._run_loop_ref: Any = None  # Referencia al CFRunLoop del thread
 
         if HAS_QUARTZ:
             trusted = check_accessibility_permission()
@@ -310,8 +442,13 @@ class Recorder:
         self._events = []
         self._started_at = time.time()
         self._running = True
+        self._ready = threading.Event()
+        self._run_loop_ref = None
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
+        # Esperar a que el CGEventTap esté configurado y listo para capturar
+        if not self._ready.wait(timeout=2.0):
+            logger.warning("CGEventTap took too long to initialize")
         logger.info("Desktop Recorder started")
 
     def stop(self) -> list[ActionEvent]:
@@ -322,17 +459,18 @@ class Recorder:
                 Quartz.CGEventTapEnable(self._tap, False)
             except Exception:
                 pass
-        # Stop the run loop from the main thread
-        if self._thread is not None and self._thread.is_alive():
+        # Detener el run loop del thread del recorder (no del main thread)
+        if self._run_loop_ref is not None and HAS_QUARTZ:
             try:
-                # CFRunLoopStop is not thread-safe, but works well enough
-                # to unblock the thread within ~100ms
-                Quartz.CFRunLoopStop(Quartz.CFRunLoopGetMain())
+                Quartz.CFRunLoopStop(self._run_loop_ref)
             except Exception:
                 pass
-            self._thread.join(timeout=2.0)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
         logger.info("Desktop Recorder stopped — {} events", len(self._events))
         self._started_at = None
+        self._ready = None
+        self._run_loop_ref = None
         return list(self._events)
 
     def cancel(self) -> None:
@@ -343,21 +481,22 @@ class Recorder:
                 Quartz.CGEventTapEnable(self._tap, False)
             except Exception:
                 pass
-        if self._thread is not None and self._thread.is_alive():
+        if self._run_loop_ref is not None and HAS_QUARTZ:
             try:
-                Quartz.CFRunLoopStop(Quartz.CFRunLoopGetMain())
+                Quartz.CFRunLoopStop(self._run_loop_ref)
             except Exception:
                 pass
-            self._thread.join(timeout=2.0)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
         self._events = []
         self._started_at = None
+        self._ready = None
+        self._run_loop_ref = None
         logger.info("Desktop Recorder cancelled")
 
     def _handle_event(self, event_type: int, event: Any) -> None:
         """Process a single CGEvent and append to the event list."""
         now = time.time()
-        app_name = _active_app_name()
-        window_title = _active_window_title()
         etype_name = _EVENT_TYPE_NAMES.get(event_type, f"unknown_{event_type}")
 
         modifiers = 0
@@ -372,6 +511,8 @@ class Recorder:
         key_char = None
         mouse_x = None
         mouse_y = None
+        app_name: str | None = None
+        window_title: str | None = None
 
         if event_type in (10, 11):  # key down/up
             if HAS_QUARTZ:
@@ -381,6 +522,12 @@ class Recorder:
                     key_char = _KEYCODE_MAP.get(key_code)
                 except Exception:
                     pass
+            # For keyboard events, use the frontmost app
+            app_name = _active_app_name()
+            window_title = _active_window_title()
+            # Filter keyboard events from our own UI
+            if app_name and app_name in EXCLUDED_APPS:
+                return
         elif event_type in (1, 2, 3, 4):  # mouse clicks
             if HAS_QUARTZ:
                 try:
@@ -389,6 +536,23 @@ class Recorder:
                     mouse_y = round(loc.y, 1)
                 except Exception:
                     pass
+            # For mouse clicks, use coordinate-based filtering and app detection.
+            # This is more reliable than _active_app_name() because:
+            # 1. It correctly identifies clicks on the overlay (filter them out)
+            # 2. It correctly identifies clicks on other apps (Dock, etc.) even if
+            #    the frontmost app hasn't changed yet (e.g., clicking Finder in Dock
+            #    while Cerebro is still frontmost)
+            if mouse_x is not None and mouse_y is not None:
+                if _is_click_on_cerebro_window(mouse_x, mouse_y):
+                    return
+                # Determine the app at the click coordinates
+                app_name = _app_at_coordinates(mouse_x, mouse_y)
+            else:
+                # Fallback if we couldn't get coordinates
+                app_name = _active_app_name()
+                window_title = _active_window_title()
+                if app_name and app_name in EXCLUDED_APPS:
+                    return
 
         ev = ActionEvent(
             timestamp=now,
@@ -401,7 +565,30 @@ class Recorder:
             window_title=window_title,
             modifiers=modifiers,
         )
+
         with self._lock:
+            # ── Double-click merge ──────────────────────────────────────────
+            # If two left clicks at the same position arrive within 300ms,
+            # merge them into a single "double_click" event.
+            if (
+                etype_name == "left_click"
+                and self._last_click is not None
+                and self._last_click.action_type == "left_click"
+                and self._last_click.mouse_x == mouse_x
+                and self._last_click.mouse_y == mouse_y
+                and now - self._last_click.timestamp < 0.3
+            ):
+                # Replace the previous click with a double click, skip current
+                self._last_click.action_type = "double_click"
+                self._last_click.timestamp = now
+                self._last_click = None
+                return
+
+            if etype_name in ("left_click", "right_click", "double_click"):
+                self._last_click = ev
+            else:
+                self._last_click = None
+
             self._events.append(ev)
 
     def _run_loop(self) -> None:
@@ -433,17 +620,26 @@ class Recorder:
                     "CGEventTapCreate returned NULL — "
                     "check Accessibility permissions in System Settings"
                 )
+                if self._ready:
+                    self._ready.set()
                 return
 
             self._tap = tap
             source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
             loop = Quartz.CFRunLoopGetCurrent()
+            self._run_loop_ref = loop  # Guardar referencia para detener correctamente
             Quartz.CFRunLoopAddSource(loop, source, Quartz.kCFRunLoopDefaultMode)
             Quartz.CGEventTapEnable(tap, True)
+
+            # Señalizar que el tap está configurado y listo para capturar
+            if self._ready:
+                self._ready.set()
 
             # Run until stopped
             Quartz.CFRunLoopRun()
         except Exception as exc:
             logger.exception("Recorder run loop crashed: {}", exc)
+            if self._ready:
+                self._ready.set()
         finally:
             _recorder_instance = None

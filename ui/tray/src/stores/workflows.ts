@@ -37,6 +37,7 @@ interface WorkflowState {
   recordingStatus: RecordingStatus | null;
   isRecording: boolean;
   isGeneralizing: boolean;
+  hasNativeOverlay: boolean;
   openCreateMode: CreateMode;
 
   setSearchQuery: (query: string) => void;
@@ -71,7 +72,7 @@ interface WorkflowState {
 
 let _overlayUnlisten: (() => void) | null = null;
 
-async function _showRecordingOverlay(get: () => WorkflowState) {
+async function _showRecordingOverlay(get: () => WorkflowState): Promise<boolean> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const { listen } = await import("@tauri-apps/api/event");
@@ -84,8 +85,10 @@ async function _showRecordingOverlay(get: () => WorkflowState) {
       void get().cancelRecording();
     });
     _overlayUnlisten = () => { unStop(); unCancel(); };
+    return true;
   } catch {
     // dev browser fallback — the in-app overlay (MainLayout) handles it
+    return false;
   }
 }
 
@@ -116,7 +119,11 @@ function resolveWorkflowError(e: unknown): string {
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (msg.includes("Request failed") || msg.includes("ECONNREFUSED")) {
-    return "workflows.error.backend_offline";
+    // Include more details about the connection error
+    const detail = msg.includes("timeout") ? "timeout" : 
+                   msg.includes("ECONNREFUSED") ? "connection_refused" : 
+                   "request_failed";
+    return `workflows.error.backend_offline (${detail})`;
   }
   return msg || "workflows.error.generic";
 }
@@ -138,6 +145,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   recordingStatus: null,
   isRecording: false,
   isGeneralizing: false,
+  hasNativeOverlay: false,
   openCreateMode: null,
 
   setSearchQuery: (query) => set({ searchQuery: query }),
@@ -282,15 +290,36 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   startRecording: async () => {
     set({ error: null });
-    try {
-      await startWorkflowRecording();
-      const status = await getWorkflowRecordingStatus();
-      set({ isRecording: true, recordingStatus: status, viewTab: "routines" });
-      void _showRecordingOverlay(get);
-    } catch (e) {
-      set({ error: resolveWorkflowError(e), isRecording: false });
-      throw e;
+    const maxRetries = 3;
+    let lastError: unknown;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        await startWorkflowRecording();
+        const status = await getWorkflowRecordingStatus();
+        set({ isRecording: true, recordingStatus: status, viewTab: "routines" });
+        const nativeShown = await _showRecordingOverlay(get);
+        set({ hasNativeOverlay: nativeShown });
+        return; // Success, exit the retry loop
+      } catch (e) {
+        lastError = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        const isConnectionError = msg.includes("Request failed") || msg.includes("ECONNREFUSED");
+        
+        // Only retry on connection errors, not on other errors
+        if (!isConnectionError || attempt === maxRetries - 1) {
+          set({ error: resolveWorkflowError(e), isRecording: false });
+          throw e;
+        }
+        
+        // Wait before retrying (exponential backoff: 500ms, 1000ms, 2000ms)
+        await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt)));
+      }
     }
+    
+    // This should never be reached, but just in case
+    set({ error: resolveWorkflowError(lastError), isRecording: false });
+    throw lastError;
   },
 
   pollRecordingStatus: async () => {
@@ -306,6 +335,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   stopRecording: async (name) => {
+    set({ hasNativeOverlay: false });
     await _hideRecordingOverlay();
     await _focusMainWindow();
     set({ isGeneralizing: true, error: null });
@@ -326,6 +356,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   cancelRecording: async () => {
+    set({ hasNativeOverlay: false });
     await _hideRecordingOverlay();
     try {
       await cancelWorkflowRecording();
@@ -352,6 +383,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       recordingStatus: null,
       isRecording: false,
       isGeneralizing: false,
+      hasNativeOverlay: false,
       openCreateMode: null,
     }),
 }));

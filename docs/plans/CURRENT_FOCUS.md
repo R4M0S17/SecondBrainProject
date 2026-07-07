@@ -16,7 +16,7 @@ Análisis basado en arquitectura, tests, commits, y estado real del código (no 
 
 | Área | Por qué importa |
 |------|-----------------|
-| **Arquitectura con criterio** | No es un wrapper de ChatGPT. Hay capas reales: inferencia (llama.cpp/MLX/Claude), memoria (corto/largo/vector), agentes especializados, RAG, política de herramientas, confirmación humana, LangGraph con límites duros. Más maduro que el 90% de proyectos "local AI assistant" en GitHub. |
+| **Arquitectura con criterio** | No es un wrapper de ChatGPT. Hay capas reales: inferencia (llama.cpp/MLX/Claude), memoria, agentes, RAG, política de herramientas, confirmación humana. Más maduro que el 90% de proyectos "local AI assistant" en GitHub. |
 | **Fast paths** | El router determinista (math → file write → calendario → búsqueda → LLM) es la mejor decisión técnica. Resuelve en milisegundos lo que un 2B haría mal o lento. Tests de regresión (`make test-stable`) y docs congeladas del orden del pipeline. |
 | **Cultura de testing** | ~78 archivos de test, cientos de casos, mocking a nivel `AppState`. La intención y la cobertura están ahí. |
 | **Honestidad con el hardware** | M1 8 GB como constraint real: RAM preflight, perfiles lite, Low Power marcado como no shipped. |
@@ -27,9 +27,9 @@ Análisis basado en arquitectura, tests, commits, y estado real del código (no 
 
 | Problema | Impacto |
 |----------|---------|
-| **Scope creep** | Cognitive OS, fleet, low power, knowledge sync, automation, time-travel debugger, dashboard redesign, i18n completo, LoRA, SmolLM2… son 3–4 productos en uno. |
+| **Scope creep** | fleet, low power, knowledge sync, automation, time-travel debugger, dashboard redesign, i18n completo, LoRA, SmolLM2… son 3–4 productos en uno. |
 | **God files** | `runtime.py` (~1.9k líneas), `server.py` (~2.3k), `main.py` (~800). Cada cambio aumenta riesgo de regresión. |
-| **Brecha visión ↔ ejecución** | El README vendía "Cognitive Operating Layer". El código entrega un asistente local con buenos fast paths y calendario. |
+| **Brecha visión ↔ ejecución** | El README vendía una visión ambiciosa. El código entrega un asistente local con buenos fast paths y calendario — que ya es valioso. |
 | **macOS-only de facto** | El 80% del valor diferencial no porta sin reescribir media capa. |
 | **Modelo pequeño = cuello de botella** | Qwen3.5-2B en 8 GB es usable pero frágil en tool calling. El loop agentico es la parte más débil frente a los fast paths. |
 | **Documentación > producto** | Miles de líneas en `docs/plans/` antes de consolidar. Ayuda al arquitecto, no al usuario diario. |
@@ -52,7 +52,7 @@ Análisis basado en arquitectura, tests, commits, y estado real del código (no 
 
 | Realista hoy | No realista a corto plazo (6–12 meses solo) |
 |--------------|---------------------------------------------|
-| Asistente local con chat + streaming + historial | Cognitive OS completo |
+| Asistente local con chat + streaming + historial | Asistente omnisciente |
 | Fast paths (calendario, archivos, math) | Competir con Obsidian en knowledge graph |
 | RAG sobre documentos indexados | Fleet multi-modelo fluido en 8 GB |
 | Tool loop con confirmación | Automation tipo Rewind/Apple Intelligence |
@@ -65,7 +65,7 @@ Análisis basado en arquitectura, tests, commits, y estado real del código (no 
 
 ### Qué es Cerebro *ahora*
 
-No es un Cognitive OS ni un clon de Obsidian. Es:
+No es un asistente omnipotente ni un clon de Obsidian. Es:
 
 - Chat local con streaming + historial
 - **Fast paths** deterministas (math, calendario, archivos, recordatorios)
@@ -91,7 +91,7 @@ No competir en "chat inteligente". Competir en **"hace cosas en tu Mac sin manda
 - Fleet orchestrator
 - Cognitive graph / Obsidian clone
 - Low Power mode (hasta shipped)
-- "26 herramientas" (suena a bloat; mostrar 5 que funcionan perfecto)
+- "muchas herramientas" (suena a bloat; mostrar 5 que funcionan perfecto)
 
 ---
 
@@ -114,7 +114,7 @@ No competir en "chat inteligente". Competir en **"hace cosas en tu Mac sin manda
 |-------|---------|
 | Fast paths + orden del pipeline | Moat técnico; ventaja de latencia y confiabilidad |
 | Local-first + confirmación de tools | Diferenciador de confianza vs cloud |
-| LangGraph con límites duros | Correcto para agentes en hardware limitado |
+| Pipeline agente con límites duros | Correcto para hardware limitado |
 | Stack llama.cpp + FastAPI + Tauri | Adecuado para Mac 8 GB |
 | Tests con mocks a `AppState` | Patrón correcto y mantenible |
 | Integración calendario macOS | Killer feature potencial; pocos lo hacen bien |
@@ -165,7 +165,7 @@ Separar backend (`:7842`) y motor LLM (`:8080`) para ahorrar RAM en M1 8 GB.
 |-----------|-----------|
 | **`CURRENT_FOCUS.md`** (este archivo) | Evaluación + estrategia + plan de ejecución |
 | [`implementation-roadmap.md`](implementation-roadmap.md) | Índice y estado del proyecto |
-| [`maybe-later/`](maybe-later/) | 28 planes archivados: cognitive OS, fleet, low power, knowledge sync, optimización, dashboard redesign, fix plans históricos |
+| [`maybe-later/`](maybe-later/) | 28 planes archivados: fleet, low power, knowledge sync, optimización, dashboard redesign, fix plans históricos |
 | Specs incrementales activas | `file-search-multi-root.md`, `i18n-implementation.md` (parcial), `SECURITY_AUDIT_RESULTS.md` |
 
 **Criterio para sacar algo de `maybe-later/`:**
@@ -270,7 +270,7 @@ Solo retomar cuando v0.2 esté shipped:
 | L2 | Low Power Nano Mode v2 | `maybe-later/LOW_POWER_V2_NANO_MODE.md` |
 | L3 | Fleet orchestrator | `maybe-later/LOCAL_MODEL_FLEET_ORCHESTRATOR.md` |
 | L4 | Knowledge sync ampliado | `maybe-later/knowledge_sync_agent.md` |
-| L5 | Cognitive OS / graph | `maybe-later/future-cognitive-os.md` |
+| L5 | Visión futura | `maybe-later/future-cognitive-os.md` |
 | L6 | Windows port | `maybe-later/` |
 | L7 | Dashboard redesign | `maybe-later/DASHBOARD_REDESIGN.md` |
 | L8 | SmolLM2 classifier / 0.8B worker | `maybe-later/Qwen3.5-0.8B-integration-ideas.md` |

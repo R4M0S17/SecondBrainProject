@@ -1,30 +1,45 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useWorkflowStore } from "../../stores/workflows";
 
-// ─── Standalone overlay window (Tauri secondary window) ──────────────────────
-// When rendered inside the recording-overlay window, it talks back to the
-// main window via Tauri events instead of calling the store directly.
+// ─── Iconos SVG para botones ─────────────────────────────────────────────────
 
-async function isTauriOverlayWindow(): Promise<boolean> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    return getCurrentWindow().label === "recording-overlay";
-  } catch {
-    return false;
-  }
+function PlayIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
 }
 
-async function emitStop() {
-  try {
-    const { emit } = await import("@tauri-apps/api/event");
-    await emit("recording-overlay:stop");
-  } catch { /* dev browser — store handles it via in-app overlay */ }
+function PauseIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+    </svg>
+  );
 }
 
-// ─── In-app overlay (rendered inside MainLayout for dev mode + Tauri) ────────
+function StopIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M6 6h12v12H6z" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+    </svg>
+  );
+}
+
+// ─── In-app overlay (dev mode / browser fallback) ────────────────────────────
 
 export default function RecordingOverlay() {
   const isRecording = useWorkflowStore((s) => s.isRecording);
+  const hasNativeOverlay = useWorkflowStore((s) => s.hasNativeOverlay);
   const stopRecording = useWorkflowStore((s) => s.stopRecording);
   const cancelRecording = useWorkflowStore((s) => s.cancelRecording);
 
@@ -33,7 +48,6 @@ export default function RecordingOverlay() {
   const startedAtRef = useRef<number>(Date.now());
   const accumulatedRef = useRef<number>(0);
 
-  // Reset on new recording session
   useEffect(() => {
     if (isRecording) {
       setPaused(false);
@@ -43,7 +57,6 @@ export default function RecordingOverlay() {
     }
   }, [isRecording]);
 
-  // Timer
   useEffect(() => {
     if (!isRecording || paused) return;
     const id = setInterval(() => {
@@ -70,83 +83,71 @@ export default function RecordingOverlay() {
     }
   }, [paused]);
 
-  const handleStop = useCallback(() => {
-    void stopRecording();
-  }, [stopRecording]);
+  const handleStop = useCallback(() => { void stopRecording(); }, [stopRecording]);
+  const handleCancel = useCallback(() => { void cancelRecording(); }, [cancelRecording]);
 
-  const handleCancel = useCallback(() => {
-    void cancelRecording();
-  }, [cancelRecording]);
-
-  if (!isRecording) return null;
+  // Hidden when the native Tauri overlay window is active to avoid duplicates
+  if (!isRecording || hasNativeOverlay) return null;
 
   return (
     <div
-      className="
-        fixed top-4 right-4 z-[9999]
-        flex items-center gap-2 px-3 py-2
-        bg-[#1c1c1e]/95 backdrop-blur-xl
-        rounded-2xl border border-white/10
-        shadow-[0_4px_24px_rgba(0,0,0,0.5)]
-        select-none
-      "
+      className="fixed top-4 right-4 z-[9999] flex items-center gap-2 px-3 py-2
+        bg-gradient-to-br from-[#1a1a1f]/95 to-[#0f0f13]/95
+        backdrop-blur-xl rounded-2xl
+        border border-white/[0.08]
+        shadow-[0_8px_40px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.05)]
+        overflow-hidden select-none"
       style={{ minWidth: 200 }}
     >
-      {/* Dot */}
-      <div className="relative flex-shrink-0 w-2.5 h-2.5">
-        <div className={`w-2.5 h-2.5 rounded-full ${paused ? "bg-yellow-400" : "bg-red-500"}`} />
-        {!paused && (
-          <div className="absolute inset-0 rounded-full bg-red-500 animate-ping opacity-70" />
-        )}
-      </div>
-
-      {/* Label + timer */}
-      <div className="flex flex-col leading-none flex-1">
-        <span className="text-white/50 text-[10px] uppercase tracking-wider">
-          {paused ? "Pausado" : "Grabando"}
-        </span>
-        <span className="text-white text-[13px] font-mono font-medium mt-0.5">
-          {formatTime(elapsed)}
-        </span>
-      </div>
-
-      {/* Pause */}
-      <button
-        onClick={handlePause}
-        title={paused ? "Reanudar" : "Pausar"}
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-[13px] bg-white/10 hover:bg-white/20 text-white transition-colors"
-      >
-        {paused ? "▶" : "⏸"}
-      </button>
-
-      {/* Stop & save */}
-      <button
-        onClick={handleStop}
-        title="Detener y guardar"
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-[12px] font-bold bg-red-500/80 hover:bg-red-500 text-white transition-colors"
-      >
-        ■
-      </button>
-
-      {/* Cancel */}
-      <button
-        onClick={handleCancel}
-        title="Cancelar y descartar"
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-[13px] bg-white/8 hover:bg-white/15 text-white/50 hover:text-white transition-colors"
-      >
-        ✕
-      </button>
+      <RecDot paused={paused} />
+      <RecLabel paused={paused} elapsed={elapsed} fmt={formatTime} />
+      <OverlayButton onClick={handlePause} title={paused ? "Reanudar" : "Pausar"} variant="default">
+        {paused ? <PlayIcon /> : <PauseIcon />}
+      </OverlayButton>
+      <OverlayButton onClick={handleStop} title="Detener y guardar" variant="stop">
+        <StopIcon />
+      </OverlayButton>
+      <OverlayButton onClick={handleCancel} title="Cancelar y descartar" variant="cancel">
+        <CloseIcon />
+      </OverlayButton>
     </div>
   );
 }
 
-// ─── Standalone version for the recording-overlay Tauri window ───────────────
+// ─── Standalone overlay — rendered inside the Tauri "recording-overlay" window ─
+// Buttons call Rust commands directly (invoke) to avoid cross-window JS event
+// routing issues in Tauri v2. Dragging uses startDragging() API (more reliable
+// than -webkit-app-region: drag on transparent borderless windows on macOS).
 
 export function StandaloneRecordingOverlay() {
   const [paused, setPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const startedAtRef = useRef<number>(Date.now());
   const accumulatedRef = useRef<number>(0);
+
+  // Pre-cache the Tauri window reference so mousedown drag is synchronous
+  const winRef = useRef<{ startDragging: () => Promise<void> } | null>(null);
+  useEffect(() => {
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => { winRef.current = getCurrentWindow(); })
+      .catch(() => {});
+  }, []);
+
+  // Reset the timer when the overlay is shown — the window is persistent (hidden
+  // at app launch) so Date.now() refs are stale from boot, not recording start.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("recording-overlay:shown", () => {
+        startedAtRef.current = Date.now();
+        accumulatedRef.current = 0;
+        setElapsed(0);
+        setPaused(false);
+      }))
+      .then((fn) => { unlisten = fn; })
+      .catch(() => {});
+    return () => { unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     if (paused) return;
@@ -164,93 +165,119 @@ export function StandaloneRecordingOverlay() {
     return `${m}:${sec}`;
   };
 
-  const handlePause = useCallback(async () => {
+  // Drag: only when NOT clicking a button
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as Element).closest("button")) return;
+    winRef.current?.startDragging().catch(() => {});
+  }, []);
+
+  const handlePause = useCallback(() => {
     if (!paused) {
       accumulatedRef.current += Math.floor((Date.now() - startedAtRef.current) / 1000);
       setPaused(true);
-      try {
-        const { emit } = await import("@tauri-apps/api/event");
-        await emit("recording-overlay:pause");
-      } catch { /* ignore */ }
     } else {
       startedAtRef.current = Date.now();
       setPaused(false);
-      try {
-        const { emit } = await import("@tauri-apps/api/event");
-        await emit("recording-overlay:resume");
-      } catch { /* ignore */ }
     }
   }, [paused]);
 
+  // Stop/cancel invoke Rust commands that: hide overlay, emit event to main
+  // window's JS listener via app.emit() (Rust-level, crosses windows reliably).
   const handleStop = useCallback(async () => {
-    await emitStop();
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("overlay_stop_recording");
+    } catch { /* not in Tauri */ }
   }, []);
 
   const handleCancel = useCallback(async () => {
     try {
-      const { emit } = await import("@tauri-apps/api/event");
-      await emit("recording-overlay:cancel");
-    } catch { /* ignore */ }
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("overlay_cancel_recording");
+    } catch { /* not in Tauri */ }
   }, []);
 
   return (
     <div
-      className="
-        w-full h-full flex items-center gap-2 px-3
-        bg-[#1c1c1e]/95 backdrop-blur-xl
-        rounded-2xl border border-white/10
-        shadow-[0_4px_24px_rgba(0,0,0,0.6)]
-        select-none
-      "
-      style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+      onMouseDown={handleMouseDown}
+      className="w-full h-full flex items-center gap-2 px-3 py-2
+        bg-gradient-to-br from-[#1a1a1f]/95 to-[#0f0f13]/95
+        backdrop-blur-xl rounded-2xl
+        border border-white/[0.08]
+        shadow-[0_8px_40px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.05)]
+        overflow-hidden select-none cursor-move"
     >
-      {/* Dot */}
-      <div className="relative flex-shrink-0 w-2.5 h-2.5">
-        <div className={`w-2.5 h-2.5 rounded-full ${paused ? "bg-yellow-400" : "bg-red-500"}`} />
-        {!paused && (
-          <div className="absolute inset-0 rounded-full bg-red-500 animate-ping opacity-70" />
-        )}
-      </div>
-
-      {/* Timer */}
-      <div className="flex flex-col leading-none flex-1">
-        <span className="text-white/50 text-[10px] uppercase tracking-wider">
-          {paused ? "Pausado" : "Grabando"}
-        </span>
-        <span className="text-white text-[13px] font-mono font-medium mt-0.5">
-          {formatTime(elapsed)}
-        </span>
-      </div>
-
-      {/* Pause */}
-      <button
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        onClick={handlePause}
-        title={paused ? "Reanudar" : "Pausar"}
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-[13px] bg-white/10 hover:bg-white/20 text-white transition-colors"
-      >
-        {paused ? "▶" : "⏸"}
-      </button>
-
-      {/* Stop */}
-      <button
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        onClick={handleStop}
-        title="Detener y guardar"
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-[12px] font-bold bg-red-500/80 hover:bg-red-500 text-white transition-colors"
-      >
-        ■
-      </button>
-
-      {/* Cancel */}
-      <button
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        onClick={handleCancel}
-        title="Cancelar y descartar"
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-[13px] bg-white/8 hover:bg-white/15 text-white/50 hover:text-white transition-colors"
-      >
-        ✕
-      </button>
+      <RecDot paused={paused} />
+      <RecLabel paused={paused} elapsed={elapsed} fmt={formatTime} />
+      <OverlayButton onClick={handlePause} title={paused ? "Reanudar" : "Pausar"} variant="default">
+        {paused ? <PlayIcon /> : <PauseIcon />}
+      </OverlayButton>
+      <OverlayButton onClick={handleStop} title="Detener y guardar" variant="stop">
+        <StopIcon />
+      </OverlayButton>
+      <OverlayButton onClick={handleCancel} title="Cancelar y descartar" variant="cancel">
+        <CloseIcon />
+      </OverlayButton>
     </div>
+  );
+}
+
+// ─── Shared primitives ────────────────────────────────────────────────────────
+
+function RecDot({ paused }: { paused: boolean }) {
+  return (
+    <div className="relative flex-shrink-0 w-3 h-3">
+      <div
+        className={`w-3 h-3 rounded-full transition-colors duration-300 ${
+          paused ? "bg-yellow-400" : "bg-red-500"
+        }`}
+      />
+      {!paused && (
+        <div className="absolute inset-0 rounded-full bg-red-500 animate-ping opacity-75" />
+      )}
+    </div>
+  );
+}
+
+function RecLabel({ paused, elapsed, fmt }: { paused: boolean; elapsed: number; fmt: (s: number) => string }) {
+  return (
+    <div className="flex flex-col leading-none flex-1 min-w-0">
+      <span className="text-white/40 text-[10px] uppercase tracking-wider font-medium">
+        {paused ? "Pausado" : "Grabando"}
+      </span>
+      <span className="text-white text-[15px] font-mono font-semibold mt-0.5 tabular-nums">
+        {fmt(elapsed)}
+      </span>
+    </div>
+  );
+}
+
+function OverlayButton({
+  onClick,
+  title,
+  variant = "default",
+  children,
+}: {
+  onClick: (() => void) | (() => Promise<void>);
+  title: string;
+  variant?: "default" | "stop" | "cancel";
+  children: React.ReactNode;
+}) {
+  const baseClasses = "w-7 h-7 flex-shrink-0 rounded-lg flex items-center justify-center transition-all duration-200 cursor-pointer active:scale-90";
+
+  const variantClasses = {
+    default: "bg-white/[0.08] hover:bg-white/[0.15] text-white/70 hover:text-white hover:shadow-lg",
+    stop: "bg-red-500/20 hover:bg-red-500/30 text-red-400 hover:text-red-300 hover:shadow-red-500/20 hover:shadow-lg",
+    cancel: "bg-white/[0.05] hover:bg-white/[0.1] text-white/40 hover:text-white/70 hover:shadow-lg",
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`${baseClasses} ${variantClasses[variant]}`}
+    >
+      {children}
+    </button>
   );
 }

@@ -1,6 +1,6 @@
 # Cerebro (SecondBrain) — Program Architecture Reference
 
-This document is a technical map of the **Cerebro** codebase at the repository root (`/Users/mb/Desktop/Javier/SecondBrain`). The product is a **local-first agentic personal OS**: a Python **FastAPI** backend on port **7842**, a **React 18 + TypeScript + Zustand** frontend inside a **Tauri 2** desktop shell, and **llama.cpp** (`llama-server`) for on-device chat and embeddings.
+This document is a technical map of the **Cerebro** codebase at the repository root (`/Users/mb/Desktop/Javier/SecondBrain`). The product is a **local-first personal assistant**: a Python **FastAPI** backend on port **7842**, a **React 18 + TypeScript + Zustand** frontend inside a **Tauri 2** desktop shell, and **llama.cpp** (`llama-server`) for on-device chat and embeddings.
 
 > **Note on `cerebro/` subdirectory:** The repo also contains a largely mirrored tree under `cerebro/` (same `core/`, `ui/tray/`, `main.py`, tests). **Runtime and documentation here refer to the root layout** (`main.py`, `core/`, `ui/tray/`). Treat `cerebro/` as a packaged or historical duplicate unless your workflow explicitly `cd cerebro`.
 

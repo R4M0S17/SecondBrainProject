@@ -32,7 +32,8 @@ export default function WorkflowCard({
           <div className="min-w-0 flex-1 pr-8">
             <div className="truncate text-[13px] font-medium text-on-surface">{workflow.name}</div>
             <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 text-[11px] text-outline">
-              <span>{t("workflows.list_runs", { count: workflow.run_count })}</span>
+              <span>{formatRelativeTime(new Date(workflow.created_at * 1000))}</span>
+              <span>· {t("workflows.list_runs", { count: workflow.run_count })}</span>
               {workflow.last_run != null && (
                 <span>
                   · {formatRelativeTime(new Date(workflow.last_run * 1000))}

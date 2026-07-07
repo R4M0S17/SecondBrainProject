@@ -3,22 +3,25 @@ import { useTranslation } from "react-i18next";
 import { useWizardStore } from "../../stores/wizard";
 import { wizardSetFolders, wizardComplete } from "../../api/client";
 import WizardDots from "./WizardDots";
+import StepWelcome from "./StepWelcome";
 import StepBackend from "./StepBackend";
 import StepLlamaCpp from "./StepLlamaCpp";
 import StepModel from "./StepModel";
 import StepFolders from "./StepFolders";
 
-const LOCAL_LABELS = [
+const WELCOME_LABELS = ["wizard.step_welcome", "wizard.step_folders"];
+const ADVANCED_LOCAL_LABELS = [
+  "wizard.step_welcome",
   "wizard.step_backend",
   "wizard.step_llamacpp",
   "wizard.step_model",
   "wizard.step_folders",
 ];
-const SHORT_LABELS = ["wizard.step_backend", "wizard.step_folders"];
+const ADVANCED_SHORT_LABELS = ["wizard.step_welcome", "wizard.step_backend", "wizard.step_folders"];
 
 export default function WizardShell() {
   const { t } = useTranslation();
-  const { currentStep, mode, advance } = useWizardStore();
+  const { currentStep, mode, advance, isQuickMode } = useWizardStore();
   const [stepReady, setStepReady] = useState(false);
   const [isAdvancing, setIsAdvancing] = useState(false);
   const [folders, setFolders] = useState<string[]>([]);
@@ -45,10 +48,38 @@ export default function WizardShell() {
     }
   };
 
-  const shortMode = mode === "claude" || mode === "none";
-  const total = shortMode ? 2 : 4;
-  const visualStep = shortMode && currentStep === 3 ? 1 : currentStep;
-  const labelKeys = shortMode ? SHORT_LABELS : LOCAL_LABELS;
+  // Determine label keys and total steps based on mode
+  const getLabelKeys = () => {
+    if (currentStep === -1 || isQuickMode) {
+      return WELCOME_LABELS;
+    }
+    const shortMode = mode === "claude" || mode === "none";
+    return shortMode ? ADVANCED_SHORT_LABELS : ADVANCED_LOCAL_LABELS;
+  };
+
+  const getTotalSteps = () => {
+    if (currentStep === -1) return 2; // welcome + folders
+    if (isQuickMode) return 2; // welcome + folders
+    const shortMode = mode === "claude" || mode === "none";
+    return shortMode ? 3 : 5;
+  };
+
+  const getVisualStep = () => {
+    const total = getTotalSteps();
+
+    if (currentStep === -1) return 0; // welcome is first
+    if (isQuickMode) {
+      return currentStep === 3 ? 1 : 0; // only show folders
+    }
+
+    // Advanced mode
+    if (currentStep === 3) return total - 1; // folders is last
+    return currentStep + 1; // backend=1, llamacpp=2, model=3
+  };
+
+  const labelKeys = getLabelKeys();
+  const total = getTotalSteps();
+  const visualStep = getVisualStep();
   const stepLabel = t(labelKeys[visualStep] ?? "");
 
   return (
@@ -84,6 +115,7 @@ export default function WizardShell() {
         <WizardDots step={visualStep} total={total} label={stepLabel} />
 
         {/* Step content */}
+        {currentStep === -1 && <StepWelcome onReady={setStepReady} />}
         {currentStep === 0 && <StepBackend onReady={setStepReady} />}
         {currentStep === 1 && mode === "local" && <StepLlamaCpp onReady={setStepReady} />}
         {currentStep === 2 && mode === "local" && <StepModel onReady={setStepReady} />}

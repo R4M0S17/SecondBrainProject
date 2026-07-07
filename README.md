@@ -4,7 +4,7 @@
   <img alt="Cerebro" src="docs/assets/cerebro-logo.svg" width="400">
 </picture>
 
-**Cerebro** (SecondBrain) is a **local-first, agentic personal operating system** for your machine. It combines a private LLM, persistent vector memory, intelligent agents, and a desktop UI into a single application — no cloud dependency required.
+**Cerebro** (SecondBrain) organizes your day, your files, and your tasks on your Mac — with privacy and without complexity.
 
 Ask questions, search your files, manage your calendar, and automate tasks. Cerebro reasons over *your* data using local models, keeps everything on-device, and only reaches for cloud APIs when you explicitly enable them.
 
@@ -43,7 +43,7 @@ Most AI assistants are either **cloud-only** — your data leaves your machine �
 |---------|-----------------|----------------|
 | ✅ Fully local (optional cloud) | ❌ Data leaves your machine | ✅ Fully local |
 | ✅ Persistent vector memory | ❌ No long-term memory | ❌ Session-only |
-| ✅ Agentic tool loop | ❌ No tool execution | ❌ No tools |
+| ✅ Takes actions for you | ❌ No tool execution | ❌ No tools |
 | ✅ Desktop UI + API | ✅ Polished UI | ❌ CLI only |
 | ✅ Calendar, files, reminders | ❌ Limited integrations | ❌ None |
 | ✅ Deterministic fast paths | ❌ LLM for everything | ❌ LLM for everything |
@@ -52,7 +52,7 @@ Most AI assistants are either **cloud-only** — your data leaves your machine �
 
 ## Key Features
 
-### Local Agentic Runtimes
+### Specialized Assistants
 Four specialized agents — **General**, **Academic**, **Code**, and **Calendar** — each with tailored system prompts, tool sets, and memory retrieval strategies. Powered by a **LangGraph**-style execution graph that alternates between LLM reasoning and deterministic tool calls.
 
 ### Persistent Vector Memory
@@ -89,7 +89,7 @@ Index PDFs, DOCX, Markdown, Python, and plain text files. The **SemanticCompress
 Polished chat interface with real-time token streaming, conversation history, settings panel, system status, model selector, and first-launch wizard.
 
 ### REST API
-Every feature is accessible via HTTP on port 7842 — build your own clients, automations, or integrations on top of Cerebro's agent runtime.
+Every feature is accessible via HTTP on port 7842 — build your own clients, automations, or integrations on top of Cerebro.
 
 ---
 
@@ -412,7 +412,7 @@ CI runs on every PR.
 
 - ✅ Local LLM inference (llama.cpp, MLX, optional Claude API)
 - ✅ RAG + LanceDB indexing + file watcher
-- ✅ LangGraph agent runtime + tool confirmation
+- ✅ Smart agent system + tool confirmation
 - ✅ 10+ deterministic fast paths (math, calendar, files, weather, etc.)
 - ✅ macOS calendar + reminders integration
 - ✅ Desktop UI (Tauri + React) + REST API
@@ -426,7 +426,7 @@ CI runs on every PR.
 
 ### Later (archived — not active)
 
-Cognitive graph, fleet orchestrator, Low Power Nano, knowledge sync expansion, Windows port, dashboard redesign — see [`docs/plans/maybe-later/`](docs/plans/maybe-later/).
+Expanded knowledge sync, Windows port, dashboard redesign — see [`docs/plans/maybe-later/`](docs/plans/maybe-later/).
 
 ---
 

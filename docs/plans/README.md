@@ -6,7 +6,7 @@
 |-----------|--------|
 | **[`CURRENT_FOCUS.md`](CURRENT_FOCUS.md)** | **Documento maestro** — evaluación honesta, qué cambiar/no cambiar, posicionamiento, plan v0.2 |
 | [`implementation-roadmap.md`](implementation-roadmap.md) | Índice + estado; apunta a CURRENT_FOCUS |
-| [`maybe-later/`](maybe-later/) | Visión, fleet, cognitive OS, low power, etc. — **no prioridad** |
+| [`maybe-later/`](maybe-later/) | Ideas archivadas — **no prioridad** |
 
 ---
 
@@ -31,8 +31,8 @@
 
 [`maybe-later/README.md`](maybe-later/README.md) explica qué hay y por qué no es backlog activo:
 
-- Cognitive OS, ideas futuras
-- Fleet orchestrator, Low Power Nano
+- Ideas futuras (fleet, etc.)
+- Low Power Nano
 - Knowledge sync (plan grande)
 - Optimización backend, Docker, Windows port
 - Dashboard redesign, fix plans históricos

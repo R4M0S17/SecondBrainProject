@@ -22,6 +22,8 @@ def event_to_preview(ev: ActionEvent) -> dict[str, Any]:
             detail = f"key '{ev.key_char or ev.key_code}'"
         case "left_click" | "right_click":
             detail = f"click at ({ev.mouse_x}, {ev.mouse_y})"
+        case "double_click":
+            detail = f"double-click at ({ev.mouse_x}, {ev.mouse_y})"
         case "modifier":
             detail = "modifier changed"
         case _:

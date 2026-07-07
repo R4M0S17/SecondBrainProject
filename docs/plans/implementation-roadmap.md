@@ -10,12 +10,12 @@
 | Área | Estado |
 |------|--------|
 | Fast paths (math, calendario, archivos) | ✅ Estable — `make test-stable` |
-| LangGraph agent loop | ⚠️ Funcional; tool calling frágil en 2B |
+| Agent loop | ⚠️ Funcional; tool calling frágil en 2B |
 | RAG + indexación | ✅ Implementado |
 | UI Tauri + chat | ✅ Funcional |
 | Fleet / multi-modelo | 🔒 Congelado → [`maybe-later/`](maybe-later/) |
 | Low Power 0.5B | 🔒 En desarrollo, no shipped |
-| Cognitive OS / graph | 🔒 Visión → [`maybe-later/future-cognitive-os.md`](maybe-later/future-cognitive-os.md) |
+| Visión futura | 🔒 [`maybe-later/future-cognitive-os.md`](maybe-later/future-cognitive-os.md) |
 | Tests completos | ⚠️ ~51 fallos (refactor en curso) |
 
 ---

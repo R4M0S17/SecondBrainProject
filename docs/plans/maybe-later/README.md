@@ -8,7 +8,7 @@ Estos documentos **no son prioridad activa**. Se conservan como referencia de vi
 
 | Categoría | Documentos | Motivo |
 |-----------|------------|--------|
-| **Visión a largo plazo** | `future-cognitive-os.md`, `ideas-future.md` | Cognitive OS, graph, marketplace — 2–3 años, no v0.2 |
+| **Visión a largo plazo** | `future-cognitive-os.md`, `ideas-future.md` | Ideas ambiciosas — 2–3 años, no v0.2 |
 | **Multi-modelo / fleet** | `LOCAL_MODEL_FLEET_ORCHESTRATOR.md`, `FLEET_ORCHESTRATOR_*` | Complejidad alta en 8 GB; el modo simple basta por ahora |
 | **Low Power / Nano** | `LOW_POWER_MODE_0.5B.md`, `LOW_POWER_V2_NANO_MODE.md` | Diseño correcto pero no shipped; enfocar 2B estable primero |
 | **Knowledge sync** | `knowledge_sync_agent.md`, `knowledge_sync_v2_improvements.md` | Parcialmente implementado; no ampliar hasta core workflows verdes |
